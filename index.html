@@ -52,6 +52,7 @@
   <button data-p="home"><i>🏠</i>ホーム</button>
   <button data-p="write"><i>✏️</i>日報</button>
   <button data-p="list"><i>📋</i>一覧</button>
+  <button data-p="admin" id="navadmin" style="display:none"><i>👥</i>管理</button>
   <button data-p="settings"><i>⚙️</i>設定</button>
 </nav>
 
@@ -150,6 +151,7 @@ async function loadMe(uid){
   await new Promise(r=>setTimeout(r,400));
  }
  if(!u){renderLogin("ユーザー情報を取得できませんでした。管理者にお問い合わせください。");await sb.auth.signOut();return}
+ if(!u.is_active){renderLogin("このアカウントは無効化されています。本部までお問い合わせください。");await sb.auth.signOut();return}
  stores=st||[];
  const {data:us}=await sb.from("user_stores").select("store_id").eq("user_id",uid);
  const myIds=(us||[]).map(x=>x.store_id);
@@ -187,11 +189,13 @@ async function doLogin(){
 async function render(){
  document.getElementById("nav").style.display="flex";
  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.p===page||(page==="weekly"&&b.dataset.p==="write")));
+ document.getElementById("navadmin").style.display=isAdmin()?"":"none";
  let body="";
  if(page==="home")body=await homeView();
  else if(page==="write")body=await writeView("daily");
  else if(page==="weekly")body=await writeView("weekly");
  else if(page==="list")body=detail?await detailView():await listView();
+ else if(page==="admin")body=await adminView();
  else if(page==="settings")body=settingsView();
  $("app").innerHTML=`<header><b>日報・週報システム</b><span style="font-size:12px">${esc(me.name)}（${ROLE_NAME[me.role]||""}）</span></header><main>${body}</main>`;
  bindPage();
@@ -337,6 +341,101 @@ async function detailView(){
  return h;
 }
 
+// ===== 管理（社長・本部専用） =====
+let adminMode="list",adminDetail=null,adminUsers=[],adminStoresMap={};
+let nuRole=null,nuStores=[],euRole=null,euStores=[],lastIssued=null;
+const isAdmin=()=>me&&(me.role==="CEO"||me.role==="HQ");
+const genPw=()=>{const c="abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";let p="";for(let i=0;i<10;i++)p+=c[Math.floor(Math.random()*c.length)];return p};
+
+async function adminView(){
+ if(!isAdmin())return `<p class="muted">このページを表示する権限がありません。</p>`;
+ if(adminMode==="new")return adminNewView();
+ if(adminMode==="edit")return adminEditView();
+ const [{data:us,error},{data:uss}]=await Promise.all([
+  sb.from("users").select("*"),
+  sb.from("user_stores").select("user_id,store_id")
+ ]);
+ if(error)return `<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
+ adminUsers=us||[];
+ adminStoresMap={};(uss||[]).forEach(x=>{(adminStoresMap[x.user_id]=adminStoresMap[x.user_id]||[]).push(x.store_id)});
+ const order={CEO:0,HQ:1,TEAM:2,TENCHO:3,SHAIN:4,AL:5};
+ adminUsers.sort((a,b)=>(order[a.role]??9)-(order[b.role]??9)||a.name.localeCompare(b.name,"ja"));
+ const sname=id=>{const s=stores.find(x=>x.id===id);return s?s.name:""};
+ let h=`<h2>従業員管理</h2>`;
+ if(lastIssued){h+=`<div class="info">✅ <b>${esc(lastIssued.name)}</b>さんのアカウントを発行しました。<br>ログインID: <b>${esc(lastIssued.email)}</b><br>初期パスワード: <b>${esc(lastIssued.pw)}</b><br>※この情報を本人に伝えてください（再表示されません）</div>`}
+ h+=`<button class="btn" id="adnew">＋ 入社処理（アカウント発行）</button>
+  <p class="muted">${adminUsers.length}名（タップで役職・所属の変更）</p>`;
+ adminUsers.forEach(u=>{
+  h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">無効</span>'}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}</span></span><span class="muted">›</span></div>`;
+ });
+ return h;
+}
+
+function adminNewView(){
+ return `<span class="back" id="adback">← 従業員一覧</span><h2>入社処理（アカウント発行）</h2>
+ <div class="card"><h3>基本情報</h3>
+  <input type="text" id="nu-name" placeholder="氏名（例: 山田 太郎）">
+  <input type="email" id="nu-email" placeholder="メールアドレス（ログインIDになります）">
+  <input type="text" id="nu-pw" placeholder="初期パスワード（8文字以上）">
+  <button class="btn sm sub" id="nu-gen">🎲 パスワード自動生成</button></div>
+ <div class="card"><h3>役職 <span class="req">必須</span></h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip nurole" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
+ <div class="card"><h3>所属店舗（複数可・最初に選んだ店舗がメイン）</h3>${stores.map(s=>`<span class="chip nustore" data-s="${s.id}">${esc(s.name)}</span>`).join("")}</div>
+ <button class="btn" id="nu-submit">アカウントを発行する</button>`;
+}
+async function adminCreate(){
+ const name=$("nu-name").value.trim(),email=$("nu-email").value.trim(),pw=$("nu-pw").value.trim();
+ if(!name||!email||!nuRole){toast("氏名・メールアドレス・役職は必須です",true);return}
+ if(pw.length<8){toast("パスワードは8文字以上にしてください",true);return}
+ $("nu-submit").disabled=true;
+ const {error}=await sb.rpc("admin_create_user",{p_email:email,p_password:pw,p_name:name,p_role:nuRole,p_store_ids:nuStores});
+ if(error){toast("発行エラー: "+error.message,true);$("nu-submit").disabled=false;return}
+ lastIssued={name,email,pw};
+ adminMode="list";render();
+}
+
+function adminEditView(){
+ const u=adminUsers.find(x=>x.id===adminDetail);
+ if(!u)return `<span class="back" id="adback">← 従業員一覧</span><div class="alert">ユーザーが見つかりません</div>`;
+ const cur=adminStoresMap[u.id]||[];
+ let h=`<span class="back" id="adback">← 従業員一覧</span><h2>${esc(u.name)} ${u.is_active?"":'<span class="badge">無効</span>'}</h2>
+ <p class="muted" style="margin-top:-8px">${esc(u.email)}</p>
+ <div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
+ <div class="card"><h3>所属店舗（複数可）</h3>${stores.map(s=>`<span class="chip eustore ${euStores.includes(s.id)?"on":""}" data-s="${s.id}">${esc(s.name)}</span>`).join("")}</div>
+ <button class="btn" id="eu-save">変更を保存する</button>
+ <div class="card" style="margin-top:16px"><h3>パスワード再設定</h3>
+  <input type="text" id="eu-pw" placeholder="新しいパスワード（8文字以上）">
+  <button class="btn sm" id="eu-setpw">再設定する</button></div>`;
+ if(u.id!==me.id)h+=`<button class="btn sub" id="eu-toggle" style="color:var(--red);border-color:var(--red)">${u.is_active?"アカウントを無効化する（退職処理）":"アカウントを再有効化する"}</button>`;
+ return h;
+}
+async function adminSave(){
+ const u=adminUsers.find(x=>x.id===adminDetail);
+ if(u.id===me.id&&euRole!==me.role){toast("自分自身の役職は変更できません",true);return}
+ $("eu-save").disabled=true;
+ const {error}=await sb.from("users").update({role:euRole}).eq("id",u.id);
+ if(error){toast("保存エラー: "+error.message,true);$("eu-save").disabled=false;return}
+ const {error:e2}=await sb.from("user_stores").delete().eq("user_id",u.id);
+ if(!e2&&euStores.length){
+  await sb.from("user_stores").insert(euStores.map((s,i)=>({user_id:u.id,store_id:s,is_primary:i===0})));
+ }
+ toast("保存しました");
+ if(u.id===me.id)await loadMe(me.id);else{adminMode="list";render()}
+}
+async function adminSetPw(){
+ const pw=$("eu-pw").value.trim();
+ if(pw.length<8){toast("パスワードは8文字以上にしてください",true);return}
+ const {error}=await sb.rpc("admin_set_password",{p_user_id:adminDetail,p_password:pw});
+ if(error){toast("再設定エラー: "+error.message,true);return}
+ toast("パスワードを再設定しました。本人に伝えてください");
+}
+async function adminToggle(){
+ const u=adminUsers.find(x=>x.id===adminDetail);
+ const {error}=await sb.from("users").update({is_active:!u.is_active}).eq("id",u.id);
+ if(error){toast("エラー: "+error.message,true);return}
+ toast(u.is_active?"アカウントを無効化しました":"アカウントを再有効化しました");
+ adminMode="list";render();
+}
+
 // ===== 設定 =====
 function settingsView(){
  return `<h2>設定</h2>
@@ -346,11 +445,11 @@ function settingsView(){
    <span class="muted">所属: ${me.stores.map(s=>esc(s.name)).join("・")||"なし"}</span></p></div>
   <div class="card"><p class="muted">チャット・タスク・通知・多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v1.0 (MVP)</p>`;
+  <p class="muted center" style="margin-top:16px">v1.1</p>`;
 }
 
 // ===== イベント =====
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;render()});
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;render()});
 function bindPage(){
  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=()=>{page=el.dataset.nav;detail=null;editId=null;render()});
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
@@ -387,6 +486,24 @@ function bindPage(){
   if(error)toast("送信できませんでした: "+error.message,true);
   render();
  };
+ // 管理画面
+ if($("adnew"))$("adnew").onclick=()=>{adminMode="new";nuRole=null;nuStores=[];lastIssued=null;render()};
+ if($("adback"))$("adback").onclick=()=>{adminMode="list";adminDetail=null;render()};
+ document.querySelectorAll(".row[data-au]").forEach(rw=>rw.onclick=()=>{
+  adminDetail=rw.dataset.au;adminMode="edit";
+  const u=adminUsers.find(x=>x.id===adminDetail);
+  euRole=u?u.role:null;euStores=[...(adminStoresMap[adminDetail]||[])];
+  lastIssued=null;render();
+ });
+ document.querySelectorAll(".chip.nurole").forEach(c=>c.onclick=()=>{nuRole=c.dataset.r;document.querySelectorAll(".chip.nurole").forEach(x=>x.classList.remove("on"));c.classList.add("on")});
+ document.querySelectorAll(".chip.nustore").forEach(c=>c.onclick=()=>{const s=c.dataset.s;nuStores=nuStores.includes(s)?nuStores.filter(x=>x!==s):nuStores.concat([s]);c.classList.toggle("on")});
+ document.querySelectorAll(".chip.eurole").forEach(c=>c.onclick=()=>{euRole=c.dataset.r;document.querySelectorAll(".chip.eurole").forEach(x=>x.classList.remove("on"));c.classList.add("on")});
+ document.querySelectorAll(".chip.eustore").forEach(c=>c.onclick=()=>{const s=c.dataset.s;euStores=euStores.includes(s)?euStores.filter(x=>x!==s):euStores.concat([s]);c.classList.toggle("on")});
+ if($("nu-gen"))$("nu-gen").onclick=()=>{$("nu-pw").value=genPw()};
+ if($("nu-submit"))$("nu-submit").onclick=adminCreate;
+ if($("eu-save"))$("eu-save").onclick=adminSave;
+ if($("eu-setpw"))$("eu-setpw").onclick=adminSetPw;
+ if($("eu-toggle"))$("eu-toggle").onclick=adminToggle;
  if($("editthis"))$("editthis").onclick=async()=>{
   const {data:r}=await sb.from("reports").select("kind").eq("id",detail).single();
   editId=detail;detail=null;page=r&&r.kind==="weekly"?"weekly":"write";render();

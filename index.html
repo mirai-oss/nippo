@@ -194,7 +194,18 @@ async function doJoin(){
  const {data,error:e2}=await sb.auth.signInWithPassword({email,password:pw});
  history.replaceState(null,"",location.pathname);
  if(e2){renderLogin("登録は完了しました。作成したアカウントでログインしてください。");return}
+ smaregiSync(data.user.id); // スマレジタイムカードへ自動登録（バックグラウンド）
  await loadMe(data.user.id);
+}
+async function smaregiSync(uid){ // スマレジ・タイムカードにスタッフ登録するEdge Functionを呼ぶ
+ try{
+  const {data:{session}}=await sb.auth.getSession();
+  const res=await fetch(SUPA_URL+"/functions/v1/smaregi-sync",{
+   method:"POST",
+   headers:{Authorization:"Bearer "+(session?session.access_token:SUPA_KEY),apikey:SUPA_KEY,"Content-Type":"application/json"},
+   body:JSON.stringify({action:"sync",user_id:uid})});
+  return await res.json();
+ }catch(e){return {ok:false,error:String(e)}}
 }
 async function loadMe(uid){
  $("app").innerHTML='<div class="spin">読み込み中...</div>';
@@ -498,7 +509,8 @@ async function adminEditView(){
    フリガナ: ${esc(prof.name_kana||"—")}<br>生年月日: ${prof.birth_date||"—"}<br>電話: ${esc(prof.phone||"—")}<br>
    住所: ${esc([prof.postal_code,prof.address].filter(Boolean).join(" ")||"—")}<br>
    緊急連絡先: ${esc(prof.emergency_name||"—")}${prof.emergency_relation?`（${esc(prof.emergency_relation)}）`:""} ${esc(prof.emergency_phone||"")}<br>
-   入社日: ${prof.hire_date||"—"}<br>スマレジ連携: ${smaregi}</p></div>`;
+   入社日: ${prof.hire_date||"—"}<br>スマレジ連携: ${smaregi}</p>
+   ${prof.smaregi_sync_status!=="synced"?'<button class="btn sm" id="eu-smaregi" style="margin-top:10px">スマレジに再同期する</button>':""}</div>`;
  }
  h+=`<div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
  <div class="card"><h3>所属店舗（複数可）</h3>${stores.map(s=>`<span class="chip eustore ${euStores.includes(s.id)?"on":""}" data-s="${s.id}">${esc(s.name)}</span>`).join("")}</div>
@@ -615,6 +627,13 @@ function bindPage(){
  if($("nu-submit"))$("nu-submit").onclick=adminCreate;
  if($("eu-save"))$("eu-save").onclick=adminSave;
  if($("eu-setpw"))$("eu-setpw").onclick=adminSetPw;
+ if($("eu-smaregi"))$("eu-smaregi").onclick=async()=>{
+  $("eu-smaregi").disabled=true;$("eu-smaregi").textContent="同期中...";
+  const r=await smaregiSync(adminDetail);
+  if(r&&r.ok)toast("スマレジに登録しました（スタッフID: "+r.staffId+"）");
+  else toast("同期エラー: "+((r&&(r.error&&r.error.title||JSON.stringify(r.error)))||"不明"),true);
+  render();
+ };
  if($("eu-toggle"))$("eu-toggle").onclick=adminToggle;
  if($("editthis"))$("editthis").onclick=async()=>{
   const {data:r}=await sb.from("reports").select("kind").eq("id",detail).single();

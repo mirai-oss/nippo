@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>鳥一代グループ 日報・週報システム</title>
+<style>
+  :root{--blue:#2b6cb0;--bg:#f2f4f7;--line:#dde3ea;--red:#c0392b;--green:#1e8e5a}
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,"Hiragino Sans",sans-serif;background:var(--bg);margin:0;color:#2d3340;font-size:15px}
+  .app{max-width:480px;margin:0 auto;min-height:100vh;background:#fff;padding-bottom:80px}
+  header{position:sticky;top:0;background:var(--blue);color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;z-index:10}
+  header b{font-size:15px}
+  main{padding:16px}
+  .card{border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px;background:#fff}
+  .card h3{margin:0 0 8px;font-size:14px}
+  .btn{display:block;width:100%;background:var(--blue);color:#fff;border:none;border-radius:10px;padding:13px;font-size:15px;text-align:center;cursor:pointer;margin-top:8px}
+  .btn.sub{background:#fff;color:var(--blue);border:1px solid var(--blue)}
+  .btn.sm{width:auto;display:inline-block;padding:7px 14px;font-size:13px;margin:4px 4px 0 0}
+  .btn:disabled{opacity:.5}
+  .chip{display:inline-block;border:1px solid var(--blue);color:var(--blue);border-radius:16px;padding:6px 14px;font-size:13px;margin:3px;cursor:pointer;user-select:none}
+  .chip.on{background:var(--blue);color:#fff}
+  .stars span{font-size:26px;color:#ccc;cursor:pointer;margin-right:4px}
+  .stars span.on{color:#e8b400}
+  textarea,input[type=text],input[type=email],input[type=password],select.inp{width:100%;border:1px solid #bbb;border-radius:8px;padding:10px;font-size:15px;margin-top:6px;font-family:inherit}
+  .alert{background:#fdecec;color:var(--red);border-radius:8px;padding:10px;font-size:13px;margin-bottom:10px}
+  .info{background:#eaf3fd;color:#1a5c9e;border-radius:8px;padding:10px;font-size:13px;margin-bottom:10px}
+  .muted{color:#8a93a2;font-size:12px}
+  .row{display:flex;justify-content:space-between;align-items:center;padding:11px 4px;border-bottom:1px solid #f0f2f5;cursor:pointer;font-size:14px}
+  .badge{background:var(--red);color:#fff;border-radius:10px;font-size:11px;padding:2px 8px}
+  .badge.g{background:var(--green)}
+  .badge.b{background:var(--blue)}
+  nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--line);display:flex;max-width:480px;margin:0 auto}
+  nav button{flex:1;border:none;background:none;padding:10px 0 14px;font-size:11px;color:#8a93a2;cursor:pointer}
+  nav button.on{color:var(--blue);font-weight:600}
+  nav button i{display:block;font-size:20px;font-style:normal}
+  .req{color:var(--red);font-size:12px}
+  h2{font-size:17px;margin:4px 0 12px}
+  .back{color:var(--blue);font-size:13px;cursor:pointer;margin-bottom:8px;display:inline-block}
+  .cmt{background:#f6f8fa;border-radius:8px;padding:8px 10px;margin-top:6px;font-size:13px}
+  .seg{display:flex;border:1px solid var(--blue);border-radius:8px;overflow:hidden;margin-bottom:12px}
+  .seg div{flex:1;text-align:center;padding:8px;font-size:13px;color:var(--blue);cursor:pointer}
+  .seg div.on{background:var(--blue);color:#fff}
+  .loginwrap{padding:40px 24px}
+  .center{text-align:center}
+  .spin{padding:40px;text-align:center;color:#8a93a2}
+</style>
+</head>
+<body>
+<div class="app" id="app"><div class="spin">読み込み中...</div></div>
+<nav id="nav" style="display:none">
+  <button data-p="home"><i>🏠</i>ホーム</button>
+  <button data-p="write"><i>✏️</i>日報</button>
+  <button data-p="list"><i>📋</i>一覧</button>
+  <button data-p="settings"><i>⚙️</i>設定</button>
+</nav>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+// ===== Supabase =====
+const SUPA_URL="https://uuvsxzhpxtghojoubjcc.supabase.co";
+const SUPA_KEY="sb_publishable_MrwPJAx_Ws_fdRutprKCiQ_dg3wCiTr";
+const sb=window.supabase.createClient(SUPA_URL,SUPA_KEY);
+
+// ===== フォーマット定義（プロトタイプ準拠） =====
+const ROLE_NAME={AL:"アルバイト",SHAIN:"社員",TENCHO:"店長",TEAM:"チーム長",HQ:"本部",CEO:"社長"};
+const FORMATS={
+ AL:[
+  {k:"work",label:"今日の担当業務",type:"multi",opts:["ホール","キッチン","レジ","仕込み","洗い場","清掃","その他"],req:true},
+  {k:"busy",label:"今日の忙しさ",type:"stars",req:true},
+  {k:"self",label:"今日の自己評価",type:"stars",req:true},
+  {k:"good",label:"できたこと・気づき",type:"text"},
+  {k:"issue",label:"困ったこと・伝えたいこと",type:"text"}
+ ],
+ SHAIN:[
+  {k:"store",label:"本日の勤務店舗",type:"select",req:true},
+  {k:"work",label:"本日の主業務",type:"multi",opts:["店舗運営","ヘルプ","育成","発注・在庫","事務","その他"],req:true},
+  {k:"state",label:"店舗の状況",type:"text",req:true},
+  {k:"ikusei",label:"アルバイトの様子・育成メモ",type:"text"},
+  {k:"kaizen",label:"良かった点／改善点",type:"text",req:true},
+  {k:"tomorrow",label:"明日の予定",type:"text"},
+  {k:"houkoku",label:"社長・チーム長への報告",type:"task"}
+ ],
+ TENCHO:[
+  {k:"summary",label:"営業サマリ",type:"text",req:true},
+  {k:"staff",label:"人員・シフト状況",type:"select2",opts:["問題なし","人手不足","欠勤あり"],req:true},
+  {k:"eisei",label:"衛生・清掃チェック",type:"check",opts:["冷蔵・冷凍庫温度","食材期限・先入先出","手洗い・消毒","器具の洗浄消毒","床・排水溝清掃","トイレ清掃","ゴミ処理","害虫チェック"],req:true},
+  {k:"claim",label:"クレーム・トラブル",type:"select2",opts:["なし","あり"],req:true},
+  {k:"ikusei",label:"スタッフ育成・評価メモ",type:"text"},
+  {k:"setsubi",label:"設備・発注・その他課題",type:"text"},
+  {k:"focus",label:"明日の重点",type:"text",req:true},
+  {k:"houkoku",label:"社長・チーム長への報告",type:"task"}
+ ],
+ TEAM:[
+  {k:"activity",label:"本日の活動（巡回店舗・内容）",type:"text",req:true},
+  {k:"highlight",label:"チーム状況ハイライト",type:"text",req:true},
+  {k:"kadai",label:"課題と打ち手",type:"text",req:true},
+  {k:"fbk",label:"店長へのフィードバック内容",type:"text"},
+  {k:"eisei",label:"【兼任店舗】衛生・清掃チェック",type:"check",opts:["冷蔵・冷凍庫温度","食材期限・先入先出","手洗い・消毒","器具の洗浄消毒","床・排水溝清掃","トイレ清掃","ゴミ処理","害虫チェック"],kennin:true},
+  {k:"claim",label:"【兼任店舗】クレーム・トラブル",type:"select2",opts:["なし","あり"],kennin:true},
+  {k:"houkoku",label:"社長への報告",type:"task"}
+ ],
+ HQ:[
+  {k:"work",label:"本日の業務内容",type:"text",req:true},
+  {k:"progress",label:"担当業務の進捗",type:"text",req:true},
+  {k:"kadai",label:"課題・相談",type:"text"},
+  {k:"tomorrow",label:"明日の予定",type:"text"},
+  {k:"houkoku",label:"社長への報告",type:"task"}
+ ]
+};
+const WEEKLY_FMT=[
+ {k:"summary",label:"今週の振り返り",type:"text",req:true},
+ {k:"plan",label:"来週の重点・アクションプラン",type:"text",req:true}
+];
+
+// ===== 状態 =====
+let me=null;          // {id,name,role,concurrent_role,stores:[{id,name}],team_id}
+let stores=[];        // 全店舗
+let page="home",detail=null,form={},seg="daily",editId=null,writeKind="daily";
+let todayDaily=null,todayWeekly=null;
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
+const fmtDate=s=>{if(!s)return"";const d=new Date(s+"T00:00:00");return (d.getMonth()+1)+"/"+d.getDate()+"("+"日月火水木金土"[d.getDay()]+")"};
+const isKennin=()=>me&&me.concurrent_role==="TENCHO";
+function toast(msg,isErr){
+ let t=document.getElementById("toast");
+ if(!t){t=document.createElement("div");t.id="toast";t.style.cssText="position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99;max-width:90%;padding:11px 18px;border-radius:10px;font-size:14px;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.25);transition:opacity .3s";document.body.appendChild(t)}
+ t.style.background=isErr?"var(--red)":"var(--green)";t.textContent=msg;t.style.opacity="1";
+ clearTimeout(t._tm);t._tm=setTimeout(()=>{t.style.opacity="0"},2600);
+}
+const fmtFor=(role)=> (FORMATS[role]||[]).filter(f=>!f.kennin||isKennin());
+
+// ===== 初期化 =====
+async function init(){
+ const {data:{session}}=await sb.auth.getSession();
+ if(!session){renderLogin();return}
+ await loadMe(session.user.id);
+}
+async function loadMe(uid){
+ $("app").innerHTML='<div class="spin">読み込み中...</div>';
+ let u=null,st=null;
+ for(let i=0;i<3;i++){ // ログイン直後はトークン反映前で空になることがあるためリトライ
+  const [r1,r2]=await Promise.all([
+   sb.from("users").select("*").eq("id",uid).maybeSingle(),
+   sb.from("stores").select("id,name").eq("is_active",true).order("sort_order")
+  ]);
+  u=r1.data;st=r2.data;
+  if(u&&st&&st.length)break;
+  await new Promise(r=>setTimeout(r,400));
+ }
+ if(!u){renderLogin("ユーザー情報を取得できませんでした。管理者にお問い合わせください。");await sb.auth.signOut();return}
+ stores=st||[];
+ const {data:us}=await sb.from("user_stores").select("store_id").eq("user_id",uid);
+ const myIds=(us||[]).map(x=>x.store_id);
+ me={...u,stores:stores.filter(s=>myIds.includes(s.id))};
+ page="home";await render();
+}
+
+// ===== ログイン =====
+function renderLogin(err){
+ document.getElementById("nav").style.display="none";
+ $("app").innerHTML=`<div class="loginwrap">
+  <h2 class="center" style="font-size:20px">🐔 鳥一代グループ</h2>
+  <p class="center muted">日報・週報システム</p>
+  ${err?`<div class="alert">${esc(err)}</div>`:""}
+  <div class="card">
+   <h3>ログイン</h3>
+   <input type="email" id="lemail" placeholder="メールアドレス" autocomplete="username">
+   <input type="password" id="lpw" placeholder="パスワード" autocomplete="current-password">
+   <button class="btn" id="loginbtn">ログイン</button>
+   <p class="muted" style="margin-top:10px">アカウントは本部から発行されます。パスワードを忘れた場合は本部までご連絡ください。</p>
+  </div></div>`;
+ $("loginbtn").onclick=doLogin;
+ $("lpw").onkeydown=e=>{if(e.key==="Enter")doLogin()};
+}
+async function doLogin(){
+ const email=$("lemail").value.trim(),pw=$("lpw").value;
+ if(!email||!pw)return;
+ $("loginbtn").disabled=true;$("loginbtn").textContent="ログイン中...";
+ const {data,error}=await sb.auth.signInWithPassword({email,password:pw});
+ if(error){renderLogin(error.message.includes("Invalid")?"メールアドレスまたはパスワードが違います":"ログインエラー: "+error.message);return}
+ await loadMe(data.user.id);
+}
+
+// ===== 画面描画 =====
+async function render(){
+ document.getElementById("nav").style.display="flex";
+ document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.p===page||(page==="weekly"&&b.dataset.p==="write")));
+ let body="";
+ if(page==="home")body=await homeView();
+ else if(page==="write")body=await writeView("daily");
+ else if(page==="weekly")body=await writeView("weekly");
+ else if(page==="list")body=detail?await detailView():await listView();
+ else if(page==="settings")body=settingsView();
+ $("app").innerHTML=`<header><b>日報・週報システム</b><span style="font-size:12px">${esc(me.name)}（${ROLE_NAME[me.role]||""}）</span></header><main>${body}</main>`;
+ bindPage();
+}
+
+async function fetchToday(){
+ const {data}=await sb.from("reports").select("id,kind,answers,report_date").eq("author_id",me.id).eq("report_date",todayStr());
+ todayDaily=(data||[]).find(r=>r.kind==="daily")||null;
+ todayWeekly=(data||[]).find(r=>r.kind==="weekly")||null;
+}
+
+async function homeView(){
+ await fetchToday();
+ const {count}=await sb.from("reports").select("id",{count:"exact",head:true});
+ let h=`<h2>こんにちは、${esc(me.name)}さん</h2>`;
+ if(me.stores.length)h+=`<p class="muted" style="margin-top:-8px">所属: ${me.stores.map(s=>esc(s.name)).join("・")}</p>`;
+ if(me.role!=="CEO"&&FORMATS[me.role]){
+  h+=todayDaily
+   ?`<div class="info">✅ 今日の日報: 提出済み <button class="btn sm sub" id="editdaily">修正する（当日のみ）</button></div>`
+   :`<div class="card"><h3>今日の日報 <span class="badge">未提出</span></h3><button class="btn" id="gowrite">日報を書く</button></div>`;
+  h+=todayWeekly
+   ?`<div class="info">✅ 週報: 今日提出済み</div>`
+   :`<div class="card"><h3>週報</h3><p class="muted">火曜までに提出</p><button class="btn sub" id="goweekly">週報を書く</button></div>`;
+ }
+ h+=`<div class="card" id="gofb" style="cursor:pointer"><h3>📋 日報・週報を見る</h3><p class="muted">閲覧できる日報・週報: ${count??0}件</p></div>`;
+ return h;
+}
+
+// ===== 日報・週報 入力 =====
+async function writeView(kind){
+ writeKind=kind;
+ const fmt=kind==="weekly"?WEEKLY_FMT:fmtFor(me.role);
+ if(!fmt.length)return `<span class="back" data-nav="home">← ホーム</span><p class="muted">この役職の${kind==="weekly"?"週報":"日報"}フォーマットはありません。</p>`;
+ let er=null;
+ if(editId){const {data}=await sb.from("reports").select("*").eq("id",editId).single();er=data}
+ if(!er){ // 下書き読み込み
+  const {data:d}=await sb.from("report_drafts").select("answers").eq("user_id",me.id).eq("kind",kind).maybeSingle();
+  form=(d&&d.answers)||{};
+ }else form={...er.answers};
+ let h=`<span class="back" data-nav="home">← ホーム</span><h2>${kind==="weekly"?"週報":"日報"} ${fmtDate(todayStr())}${er?"（修正）":""}</h2>`;
+ fmt.forEach(f=>{
+  h+=`<div class="card"><h3>${esc(f.label)} ${f.req?'<span class="req">必須</span>':""}</h3>`;
+  const v=form[f.k];
+  if(f.type==="text"||f.type==="task"){
+   h+=`<textarea rows="3" data-fk="${f.k}">${esc(v||"")}</textarea>`;
+   if(f.type==="task")h+=`<p class="muted">※この欄に記入するとタスクとして送信されます</p>`;
+  }else if(f.type==="stars"){
+   h+=`<div class="stars" data-fk="${f.k}">${[1,2,3,4,5].map(n=>`<span data-n="${n}" class="${v>=n?"on":""}">★</span>`).join("")}</div>`;
+  }else if(f.type==="multi"){
+   h+=f.opts.map(o=>`<span class="chip ${(v||[]).includes(o)?"on":""}" data-fk="${f.k}" data-o="${esc(o)}">${esc(o)}</span>`).join("");
+  }else if(f.type==="select2"){
+   h+=f.opts.map(o=>`<span class="chip ${v===o?"on":""}" data-fk1="${f.k}" data-o="${esc(o)}">${esc(o)}</span>`).join("");
+  }else if(f.type==="check"){
+   h+=f.opts.map(o=>`<span class="chip ${(v||[]).includes(o)?"on":""}" data-fk="${f.k}" data-o="${esc(o)}">${esc(o)}</span>`).join("")+`<p class="muted">全項目タップでチェック</p>`;
+  }else if(f.type==="select"){
+   h+=`<select class="inp" data-fk2="${f.k}"><option value="">選択してください</option>${stores.map(s=>`<option ${v===s.name?"selected":""}>${esc(s.name)}</option>`).join("")}</select>`;
+  }
+  h+=`</div>`;
+ });
+ h+=`<button class="btn sub" id="savedraft">一時保存</button><button class="btn" id="submitbtn">${er?"修正を保存する":"提出する"}</button>`;
+ return h;
+}
+function collectForm(){ // DOM→form
+ document.querySelectorAll("textarea[data-fk]").forEach(t=>form[t.dataset.fk]=t.value);
+ document.querySelectorAll("select[data-fk2]").forEach(s=>form[s.dataset.fk2]=s.value);
+}
+async function submitReport(){
+ collectForm();
+ const fmt=writeKind==="weekly"?WEEKLY_FMT:fmtFor(me.role);
+ for(const f of fmt){
+  if(f.req){const v=form[f.k];if(v==null||v===""||(Array.isArray(v)&&!v.length)){toast(`「${f.label}」は必須です`,true);return}}
+ }
+ $("submitbtn").disabled=true;
+ const rec={kind:writeKind,author_id:me.id,store_id:me.stores[0]?me.stores[0].id:null,report_date:todayStr(),answers:form};
+ const {data:rp,error}=await sb.from("reports").upsert(rec,{onConflict:"author_id,kind,report_date"}).select().single();
+ if(error){toast("送信エラー: "+error.message,true);$("submitbtn").disabled=false;return}
+ // タスク欄 → tasks へ（新規提出時のみ）
+ const taskText=(form.houkoku||"").trim();
+ if(taskText&&!editId){
+  await sb.from("tasks").insert({title:taskText.slice(0,200),created_by:me.id,is_auto:true,source_report_id:rp.id});
+ }
+ await sb.from("report_drafts").delete().eq("user_id",me.id).eq("kind",writeKind);
+ toast(editId?"修正を保存しました":(writeKind==="weekly"?"週報を提出しました":"日報を提出しました"));
+ form={};editId=null;page="home";render();
+}
+async function saveDraft(){
+ collectForm();
+ await sb.from("report_drafts").upsert({user_id:me.id,kind:writeKind,answers:form,updated_at:new Date().toISOString()});
+ toast("一時保存しました");
+}
+
+// ===== 一覧 =====
+async function listView(){
+ const {data:rs,error}=await sb.from("reports")
+  .select("id,kind,report_date,submitted_at,author:users!reports_author_id_fkey(id,name,role)")
+  .eq("kind",seg).order("report_date",{ascending:false}).order("submitted_at",{ascending:false}).limit(100);
+ let h=`<h2>一覧</h2><div class="seg"><div class="${seg==="daily"?"on":""}" data-s="daily">日報</div><div class="${seg==="weekly"?"on":""}" data-s="weekly">週報</div></div>`;
+ if(error)return h+`<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
+ if(!rs||!rs.length)return h+`<p class="muted">該当する${seg==="daily"?"日報":"週報"}はありません。</p>`;
+ // 既読状態
+ const ids=rs.map(r=>r.id);
+ const {data:reads}=await sb.from("report_reads").select("report_id").eq("user_id",me.id).in("report_id",ids);
+ const readSet=new Set((reads||[]).map(x=>x.report_id));
+ rs.forEach(r=>{
+  const unread=!readSet.has(r.id)&&r.author.id!==me.id;
+  h+=`<div class="row" data-r="${r.id}"><span>${unread?"🔵 ":""}<b>${esc(r.author.name)}</b> <span class="muted">${ROLE_NAME[r.author.role]||""}</span></span><span class="muted">${fmtDate(r.report_date)}</span></div>`;
+ });
+ return h;
+}
+
+// ===== 詳細 =====
+async function detailView(){
+ const {data:r,error}=await sb.from("reports")
+  .select("*,author:users!reports_author_id_fkey(id,name,role)").eq("id",detail).single();
+ if(error||!r)return `<span class="back" data-nav="list">← 一覧</span><div class="alert">読み込めませんでした</div>`;
+ // 既読を付ける
+ if(r.author.id!==me.id)await sb.from("report_reads").upsert({report_id:r.id,user_id:me.id});
+ const [{data:cs},{data:likes},{data:reads}]=await Promise.all([
+  sb.from("report_comments").select("id,body,created_at,author:users!report_comments_author_id_fkey(name,role)").eq("report_id",r.id).order("created_at"),
+  sb.from("report_likes").select("user_id").eq("report_id",r.id),
+  sb.from("report_reads").select("user_id, user:users!report_reads_user_id_fkey(name)").eq("report_id",r.id)
+ ]);
+ const liked=(likes||[]).some(x=>x.user_id===me.id);
+ const fmt=r.kind==="weekly"?WEEKLY_FMT:fmtFor(r.author.role).concat((FORMATS[r.author.role]||[]).filter(f=>f.kennin));
+ const seen={};
+ let h=`<span class="back" data-nav="list">← 一覧</span>
+  <h2>${esc(r.author.name)}さんの${r.kind==="weekly"?"週報":"日報"} <span class="muted">${fmtDate(r.report_date)}</span></h2>`;
+ (r.kind==="weekly"?WEEKLY_FMT:(FORMATS[r.author.role]||[])).forEach(f=>{
+  if(seen[f.k])return;seen[f.k]=1;
+  const v=r.answers[f.k];
+  if(v==null||v===""||(Array.isArray(v)&&!v.length))return;
+  let disp=Array.isArray(v)?v.join("、"):(f.type==="stars"?"★".repeat(v)+"☆".repeat(5-v):String(v));
+  h+=`<div class="card"><h3>${esc(f.label)}</h3><div style="font-size:14px;white-space:pre-wrap">${esc(disp)}</div></div>`;
+ });
+ h+=`<div class="card"><button class="btn sm ${liked?"":"sub"}" id="likebtn">❤️ いいね ${(likes||[]).length}</button>
+  <p class="muted">既読: ${(reads||[]).map(x=>esc(x.user&&x.user.name||"")).filter(Boolean).join("、")||"まだいません"}</p></div>`;
+ h+=`<div class="card"><h3>フィードバック</h3>`;
+ (cs||[]).forEach(c=>{h+=`<div class="cmt"><b>${esc(c.author.name)}</b>（${ROLE_NAME[c.author.role]||""}）<br>${esc(c.body)}</div>`});
+ if(!(cs||[]).length)h+=`<p class="muted">まだフィードバックはありません</p>`;
+ if(r.author.id!==me.id)h+=`<textarea rows="2" id="cmtin" placeholder="コメントを書く"></textarea><button class="btn sm" id="cmtsend">送信</button>`;
+ h+=`</div>`;
+ if(r.author.id===me.id&&r.report_date===todayStr()&&!r.locked_at)h+=`<button class="btn sub" id="editthis">この${r.kind==="weekly"?"週報":"日報"}を修正する（当日のみ）</button>`;
+ return h;
+}
+
+// ===== 設定 =====
+function settingsView(){
+ return `<h2>設定</h2>
+  <div class="card"><h3>プロフィール</h3>
+   <p style="font-size:14px">${esc(me.name)}（${ROLE_NAME[me.role]||""}${isKennin()?"・店長兼任":""}）<br>
+   <span class="muted">${esc(me.email)}</span><br>
+   <span class="muted">所属: ${me.stores.map(s=>esc(s.name)).join("・")||"なし"}</span></p></div>
+  <div class="card"><p class="muted">チャット・タスク・通知・多言語表示などは次のバージョンで追加予定です。</p></div>
+  <button class="btn sub" id="logoutbtn">ログアウト</button>
+  <p class="muted center" style="margin-top:16px">v1.0 (MVP)</p>`;
+}
+
+// ===== イベント =====
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;render()});
+function bindPage(){
+ document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=()=>{page=el.dataset.nav;detail=null;editId=null;render()});
+ if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
+ if($("goweekly"))$("goweekly").onclick=()=>{page="weekly";render()};
+ if($("editdaily"))$("editdaily").onclick=()=>{editId=todayDaily.id;page="write";render()};
+ if($("gofb"))$("gofb").onclick=()=>{page="list";render()};
+ if($("logoutbtn"))$("logoutbtn").onclick=async()=>{await sb.auth.signOut();me=null;renderLogin()};
+ if($("submitbtn"))$("submitbtn").onclick=submitReport;
+ if($("savedraft"))$("savedraft").onclick=saveDraft;
+ // 入力ウィジェット
+ document.querySelectorAll(".stars[data-fk] span").forEach(s=>s.onclick=()=>{
+  const fk=s.parentElement.dataset.fk,n=+s.dataset.n;form[fk]=n;
+  s.parentElement.querySelectorAll("span").forEach(x=>x.classList.toggle("on",+x.dataset.n<=n));
+ });
+ document.querySelectorAll(".chip[data-fk]").forEach(c=>c.onclick=()=>{
+  const fk=c.dataset.fk,o=c.dataset.o;let a=form[fk]||[];
+  a=a.includes(o)?a.filter(x=>x!==o):a.concat([o]);form[fk]=a;c.classList.toggle("on");
+ });
+ document.querySelectorAll(".chip[data-fk1]").forEach(c=>c.onclick=()=>{
+  const fk=c.dataset.fk1;form[fk]=c.dataset.o;
+  c.parentElement.querySelectorAll(`[data-fk1="${fk}"]`).forEach(x=>x.classList.remove("on"));c.classList.add("on");
+ });
+ document.querySelectorAll(".seg div[data-s]").forEach(d=>d.onclick=()=>{seg=d.dataset.s;render()});
+ document.querySelectorAll(".row[data-r]").forEach(rw=>rw.onclick=()=>{detail=rw.dataset.r;render()});
+ if($("likebtn"))$("likebtn").onclick=async()=>{
+  const {data:l}=await sb.from("report_likes").select("user_id").eq("report_id",detail).eq("user_id",me.id);
+  if(l&&l.length)await sb.from("report_likes").delete().eq("report_id",detail).eq("user_id",me.id);
+  else await sb.from("report_likes").insert({report_id:detail,user_id:me.id});
+  render();
+ };
+ if($("cmtsend"))$("cmtsend").onclick=async()=>{
+  const txt=$("cmtin").value.trim();if(!txt)return;
+  const {error}=await sb.from("report_comments").insert({report_id:detail,author_id:me.id,body:txt});
+  if(error)toast("送信できませんでした: "+error.message,true);
+  render();
+ };
+ if($("editthis"))$("editthis").onclick=async()=>{
+  const {data:r}=await sb.from("reports").select("kind").eq("id",detail).single();
+  editId=detail;detail=null;page=r&&r.kind==="weekly"?"weekly":"write";render();
+ };
+}
+
+// セッション切れ対応
+sb.auth.onAuthStateChange((ev)=>{if(ev==="SIGNED_OUT"){me=null;renderLogin()}});
+init();
+</script>
+</body>
+</html>

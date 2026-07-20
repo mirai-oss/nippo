@@ -661,9 +661,10 @@ async function createTask(){
  $("ntaskbtn").disabled=true;
  const assignee=$("nassign").value||null;
  const due=$("ndue").value?new Date($("ndue").value).toISOString():null;
- const {data:t,error}=await sb.from("tasks").insert({title:title.slice(0,500),created_by:me.id,assignee_id:assignee,due_at:due,files:tskFiles}).select().single();
+ const tid=crypto.randomUUID(); // RETURNINGはRLSと相性が悪いためID自前生成
+ const {error}=await sb.from("tasks").insert({id:tid,title:title.slice(0,500),created_by:me.id,assignee_id:assignee,due_at:due,files:tskFiles});
  if(error){toast("作成エラー: "+error.message,true);$("ntaskbtn").disabled=false;return}
- if(assignee)await taskNotify([assignee],"task_assigned",`${me.name}さんからタスク「${title.slice(0,30)}」の担当になりました`,t.id);
+ if(assignee)await taskNotify([assignee],"task_assigned",`${me.name}さんからタスク「${title.slice(0,30)}」の担当になりました`,tid);
  tskFiles=[];toast("タスクを作成しました");render();
 }
 

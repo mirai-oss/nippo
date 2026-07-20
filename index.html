@@ -201,44 +201,49 @@ async function renderJoin(){
  }
  const cfg=joinCfg(info.join_form);joinCfgCur=cfg;joinInfoCur=info;joinPhotos={};joinSmStaffs=null;
  const F=cfg.fields;
+ const smLinked=!!info.smaregi_staff_id; // v1.7.1: スマレジ登録済みの人はアカウント登録のみ
  const mark=k=>F[k].req?' <span class="req">必須</span>':"";
  let h=`<div class="loginwrap" style="padding:24px 20px">
   <h2 class="center" style="font-size:20px">🐔 鳥一代グループ</h2>
-  <p class="center muted">入社登録フォーム</p>
-  <div class="info">あなたの役職: <b>${ROLE_NAME[info.role]||info.role}</b>${(info.stores||[]).length?`<br>所属店舗: ${(info.stores||[]).map(esc).join("・")}`:""}${info.smaregi_staff_id?`<br>🕐 スマレジ・タイムカード: <b>${esc(info.smaregi_staff_name||"")}</b>さんとして連携されます`:""}</div>
+  <p class="center muted" id="j-title">${smLinked?"アカウント登録":"入社登録フォーム"}</p>
+  <div class="info">あなたの役職: <b>${ROLE_NAME[info.role]||info.role}</b>${(info.stores||[]).length?`<br>所属店舗: ${(info.stores||[]).map(esc).join("・")}`:""}${smLinked?`<br>🕐 スマレジ・タイムカード: <b>${esc(info.smaregi_staff_name||"")}</b>さんとして連携されます<br>すでにスマレジに登録済みのため、<b>アカウント登録だけ</b>で完了します`:""}</div>
   <div class="card"><h3>ログイン情報 <span class="req">必須</span></h3>
    <input type="email" id="j-email" placeholder="メールアドレス（ログインIDになります）" autocomplete="username">
    <input type="password" id="j-pw" placeholder="パスワード（8文字以上・自分で決める）" autocomplete="new-password"></div>`;
- if(!info.smaregi_staff_id)h+=`<div class="card" id="j-smwrap" style="display:none"><h3>🕐 スマレジ・タイムカード</h3>
-   <p class="muted" style="margin:0">すでにスマレジ・タイムカード（出勤打刻）に登録されている方は、自分の名前を選んでください。選ぶと打刻データと連携されます。</p>
+ if(!smLinked)h+=`<div class="card" id="j-smwrap" style="display:none"><h3>🕐 スマレジ・タイムカード</h3>
+   <p class="muted" style="margin:0">すでにスマレジ・タイムカード（出勤打刻）に登録されている方は、自分の名前を選んでください。選ぶと打刻データと連携され、入社情報の入力は不要になります。</p>
    <select class="inp" id="j-smid"></select></div>`;
  h+=`<div class="card"><h3>基本情報 <span class="req">必須</span></h3>
    <input type="text" id="j-name" placeholder="氏名（例: 山田 太郎）" value="${esc(info.smaregi_staff_name||"")}">
-   <input type="text" id="j-kana" placeholder="フリガナ（例: ヤマダ タロウ）" value="${esc(info.smaregi_staff_kana||"")}">
+   <input type="text" id="j-kana" placeholder="フリガナ（例: ヤマダ タロウ）" value="${esc(info.smaregi_staff_kana||"")}">`;
+ if(!smLinked)h+=`<div data-joinsec>
    ${F.birth.on?`<p class="muted" style="margin:8px 0 0">生年月日${mark("birth")}</p><input type="date" id="j-birth">`:""}
    ${F.phone.on?`<input type="text" id="j-phone" placeholder="電話番号（例: 090-1234-5678)${F.phone.req?"※必須":""}">`:""}</div>`;
- if(F.zip.on||F.addr.on)h+=`<div class="card"><h3>住所${(F.zip.req||F.addr.req)?' <span class="req">必須</span>':""}</h3>
-   ${F.zip.on?`<input type="text" id="j-zip" placeholder="郵便番号（例: 108-0014）">`:""}
-   ${F.addr.on?`<input type="text" id="j-addr" placeholder="住所">`:""}</div>`;
- if(F.ename.on||F.erel.on||F.ephone.on)h+=`<div class="card"><h3>緊急連絡先${(F.ename.req||F.erel.req||F.ephone.req)?' <span class="req">必須</span>':""}</h3>
-   ${F.ename.on?`<input type="text" id="j-ename" placeholder="氏名">`:""}
-   ${F.erel.on?`<input type="text" id="j-erel" placeholder="続柄（例: 父）">`:""}
-   ${F.ephone.on?`<input type="text" id="j-ephone" placeholder="電話番号">`:""}</div>`;
- if(F.hire.on)h+=`<div class="card"><h3>入社日${mark("hire")}</h3><input type="date" id="j-hire" value="${todayStr()}"></div>`;
- if(cfg.custom.length){
-  h+=`<div class="card"><h3>追加項目</h3>`;
-  cfg.custom.forEach((c,i)=>{
-   h+=`<p class="muted" style="margin:8px 0 0">${esc(c.label)}${c.req?' <span class="req">必須</span>':""}</p>`;
-   if(c.type==="pull")h+=`<select class="inp" data-jc="${i}"><option value="">選択してください</option>${(c.opts||[]).map(o=>`<option>${esc(o)}</option>`).join("")}</select>`;
-   else if(c.type==="radio")h+=(c.opts||[]).map(o=>`<label class="radio-row"><input type="radio" name="jrd${i}" data-jcr="${i}" value="${esc(o)}">${esc(o)}</label>`).join("");
-   else if(c.type==="multi")h+=`<div>${(c.opts||[]).map(o=>`<span class="chip" data-jmc="${i}" data-o="${esc(o)}">${esc(o)}</span>`).join("")}</div>`;
-   else if(c.type==="photo")h+=`<div class="photo-grid" data-jph="${i}"></div><p class="muted">＋をタップして写真を選択（複数可）</p>`;
-   else h+=`<input type="text" data-jc="${i}">`;
-  });
-  h+=`</div>`;
+ h+=`</div>`;
+ if(!smLinked){
+  if(F.zip.on||F.addr.on)h+=`<div class="card" data-joinsec><h3>住所${(F.zip.req||F.addr.req)?' <span class="req">必須</span>':""}</h3>
+    ${F.zip.on?`<input type="text" id="j-zip" placeholder="郵便番号（例: 108-0014）">`:""}
+    ${F.addr.on?`<input type="text" id="j-addr" placeholder="住所">`:""}</div>`;
+  if(F.ename.on||F.erel.on||F.ephone.on)h+=`<div class="card" data-joinsec><h3>緊急連絡先${(F.ename.req||F.erel.req||F.ephone.req)?' <span class="req">必須</span>':""}</h3>
+    ${F.ename.on?`<input type="text" id="j-ename" placeholder="氏名">`:""}
+    ${F.erel.on?`<input type="text" id="j-erel" placeholder="続柄（例: 父）">`:""}
+    ${F.ephone.on?`<input type="text" id="j-ephone" placeholder="電話番号">`:""}</div>`;
+  if(F.hire.on)h+=`<div class="card" data-joinsec><h3>入社日${mark("hire")}</h3><input type="date" id="j-hire" value="${todayStr()}"></div>`;
+  if(cfg.custom.length){
+   h+=`<div class="card" data-joinsec><h3>追加項目</h3>`;
+   cfg.custom.forEach((c,i)=>{
+    h+=`<p class="muted" style="margin:8px 0 0">${esc(c.label)}${c.req?' <span class="req">必須</span>':""}</p>`;
+    if(c.type==="pull")h+=`<select class="inp" data-jc="${i}"><option value="">選択してください</option>${(c.opts||[]).map(o=>`<option>${esc(o)}</option>`).join("")}</select>`;
+    else if(c.type==="radio")h+=(c.opts||[]).map(o=>`<label class="radio-row"><input type="radio" name="jrd${i}" data-jcr="${i}" value="${esc(o)}">${esc(o)}</label>`).join("");
+    else if(c.type==="multi")h+=`<div>${(c.opts||[]).map(o=>`<span class="chip" data-jmc="${i}" data-o="${esc(o)}">${esc(o)}</span>`).join("")}</div>`;
+    else if(c.type==="photo")h+=`<div class="photo-grid" data-jph="${i}"></div><p class="muted">＋をタップして写真を選択（複数可）</p>`;
+    else h+=`<input type="text" data-jc="${i}">`;
+   });
+   h+=`</div>`;
+  }
  }
- h+=`<button class="btn" id="j-submit">入社登録する</button>
-  <p class="muted center" style="margin-top:12px">送信すると本部・スマレジタイムカードに登録されます</p>
+ h+=`<button class="btn" id="j-submit">${smLinked?"アカウント登録する":"入社登録する"}</button>
+  <p class="muted center" id="j-foot" style="margin-top:12px">${smLinked?"送信するとアカウントが作成されます（勤怠はスマレジ連携済み）":"送信すると本部・スマレジタイムカードに登録されます"}</p>
  </div>`;
  $("app").innerHTML=h;
  $("j-submit").onclick=doJoin;
@@ -271,6 +276,12 @@ async function loadJoinSm(){
   $("j-smid").onchange=()=>{
    const s=joinSmStaffs.find(x=>String(x.staffId)===$("j-smid").value);
    if(s){if(!$("j-name").value.trim())$("j-name").value=s.name;if(!$("j-kana").value.trim()&&s.kana)$("j-kana").value=s.kana}
+   // v1.7.1: スマレジ登録済みを選んだら入社情報の入力を省略（アカウント登録のみ）
+   const on=!!s;
+   document.querySelectorAll("[data-joinsec]").forEach(d=>d.style.display=on?"none":"");
+   $("j-title").textContent=on?"アカウント登録":"入社登録フォーム";
+   $("j-submit").textContent=on?"アカウント登録する":"入社登録する";
+   $("j-foot").textContent=on?"すでにスマレジに登録済みのため、アカウント登録だけで完了します":"送信すると本部・スマレジタイムカードに登録されます";
   };
  }catch(e){}
 }
@@ -279,10 +290,12 @@ async function doJoin(){
  const email=val("j-email"),pw=$("j-pw").value,name=val("j-name");
  if(!email||!pw||!name||!val("j-kana")){toast("メール・パスワード・氏名・フリガナは必須です",true);return}
  if(pw.length<8){toast("パスワードは8文字以上にしてください",true);return}
+ // v1.7.1: スマレジ登録済み（紐付き招待 or プルダウン選択）はアカウント登録のみ
+ const acctOnly=!!joinInfoCur.smaregi_staff_id||!!($("j-smid")&&$("j-smid").value);
  const F=joinCfgCur.fields;
- for(const [k,label] of JOIN_STD){if(F[k].on&&F[k].req&&!val("j-"+k)){toast(`「${label}」は必須です`,true);return}}
+ if(!acctOnly)for(const [k,label] of JOIN_STD){if(F[k].on&&F[k].req&&!val("j-"+k)){toast(`「${label}」は必須です`,true);return}}
  const extra={};let missing=null;
- joinCfgCur.custom.forEach((c,i)=>{
+ if(!acctOnly)joinCfgCur.custom.forEach((c,i)=>{
   if(c.type==="photo"){if(c.req&&!(joinPhotos[i]||[]).length)missing=missing||c.label;return}
   let v="";
   if(c.type==="radio"){const r=document.querySelector(`input[data-jcr="${i}"]:checked`);v=r?r.value:""}
@@ -301,13 +314,13 @@ async function doJoin(){
   p_emergency_name:val("j-ename")||null,p_emergency_relation:val("j-erel")||null,p_emergency_phone:val("j-ephone")||null,
   p_hire_date:val("j-hire")||null,p_extra:Object.keys(extra).length?extra:null,
   p_smaregi_staff_id:smId});
- if(error){toast("登録エラー: "+error.message,true);$("j-submit").disabled=false;$("j-submit").textContent="入社登録する";return}
- toast("入社登録が完了しました！");
+ if(error){toast("登録エラー: "+error.message,true);$("j-submit").disabled=false;$("j-submit").textContent=acctOnly?"アカウント登録する":"入社登録する";return}
+ toast(acctOnly?"アカウント登録が完了しました！":"入社登録が完了しました！");
  const {data,error:e2}=await sb.auth.signInWithPassword({email,password:pw});
  history.replaceState(null,"",location.pathname);
  if(e2){renderLogin("登録は完了しました。作成したアカウントでログインしてください。");return}
  // v1.7: 写真項目をアップロードしてプロフィールに保存
- try{
+ if(!acctOnly)try{
   const extraPh={};
   for(let i=0;i<joinCfgCur.custom.length;i++){
    const c=joinCfgCur.custom[i];
@@ -916,7 +929,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">チャット・タスク・多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v1.7</p>`;
+  <p class="muted center" style="margin-top:16px">v1.7.1</p>`;
  return h;
 }
 function settingsJoinView(){

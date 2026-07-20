@@ -121,6 +121,7 @@ let me=null;          // {id,name,role,concurrent_role,stores:[{id,name}],team_i
 let stores=[];        // 全店舗
 let page="home",detail=null,form={},seg="daily",editId=null,writeKind="daily";
 let todayDaily=null,todayWeekly=null;
+let appSettings={},setMode="main",fmtRole="AL",cfgJoin=null,cfgFmts=null,joinCfgCur=null;
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
@@ -132,7 +133,20 @@ function toast(msg,isErr){
  t.style.background=isErr?"var(--red)":"var(--green)";t.textContent=msg;t.style.opacity="1";
  clearTimeout(t._tm);t._tm=setTimeout(()=>{t.style.opacity="0"},2600);
 }
-const fmtFor=(role)=> (FORMATS[role]||[]).filter(f=>!f.kennin||isKennin());
+const fmtAll=(role)=>((appSettings.formats&&appSettings.formats[role])||FORMATS[role]||[]);
+const fmtFor=(role)=>fmtAll(role).filter(f=>!f.kennin||isKennin());
+const weeklyFmt=()=>((appSettings.formats&&appSettings.formats.WEEKLY)||WEEKLY_FMT);
+// 入社フォーム設定（標準項目キーと表示名）
+const JOIN_STD=[["birth","生年月日"],["phone","電話番号"],["zip","郵便番号"],["addr","住所"],["ename","緊急連絡先の氏名"],["erel","緊急連絡先の続柄"],["ephone","緊急連絡先の電話"],["hire","入社日"]];
+function joinCfg(src){
+ const d={fields:{},custom:[]};
+ JOIN_STD.forEach(([k])=>d.fields[k]={on:true,req:false});
+ const c=src||appSettings.join_form;
+ if(!c)return d;
+ JOIN_STD.forEach(([k])=>{if(c.fields&&c.fields[k])d.fields[k]={on:!!c.fields[k].on,req:!!c.fields[k].req}});
+ d.custom=(c.custom||[]).map(x=>({label:String(x.label||""),req:!!x.req}));
+ return d;
+}
 
 // ===== 初期化 =====
 const inviteToken=new URLSearchParams(location.search).get("invite");
@@ -154,7 +168,10 @@ async function renderJoin(){
    <div class="alert">${msg}。本部までお問い合わせください。</div></div>`;
   return;
  }
- $("app").innerHTML=`<div class="loginwrap" style="padding:24px 20px">
+ const cfg=joinCfg(info.join_form);joinCfgCur=cfg;
+ const F=cfg.fields;
+ const mark=k=>F[k].req?' <span class="req">必須</span>':"";
+ let h=`<div class="loginwrap" style="padding:24px 20px">
   <h2 class="center" style="font-size:20px">🐔 鳥一代グループ</h2>
   <p class="center muted">入社登録フォーム</p>
   <div class="info">あなたの役職: <b>${ROLE_NAME[info.role]||info.role}</b>${(info.stores||[]).length?`<br>所属店舗: ${(info.stores||[]).map(esc).join("・")}`:""}</div>
@@ -164,33 +181,48 @@ async function renderJoin(){
   <div class="card"><h3>基本情報 <span class="req">必須</span></h3>
    <input type="text" id="j-name" placeholder="氏名（例: 山田 太郎）">
    <input type="text" id="j-kana" placeholder="フリガナ（例: ヤマダ タロウ）">
-   <p class="muted" style="margin:8px 0 0">生年月日</p><input type="date" id="j-birth">
-   <input type="text" id="j-phone" placeholder="電話番号（例: 090-1234-5678)"></div>
-  <div class="card"><h3>住所</h3>
-   <input type="text" id="j-zip" placeholder="郵便番号（例: 108-0014）">
-   <input type="text" id="j-addr" placeholder="住所"></div>
-  <div class="card"><h3>緊急連絡先</h3>
-   <input type="text" id="j-ename" placeholder="氏名">
-   <input type="text" id="j-erel" placeholder="続柄（例: 父）">
-   <input type="text" id="j-ephone" placeholder="電話番号"></div>
-  <div class="card"><h3>入社日</h3><input type="date" id="j-hire" value="${todayStr()}"></div>
-  <button class="btn" id="j-submit">入社登録する</button>
+   ${F.birth.on?`<p class="muted" style="margin:8px 0 0">生年月日${mark("birth")}</p><input type="date" id="j-birth">`:""}
+   ${F.phone.on?`<input type="text" id="j-phone" placeholder="電話番号（例: 090-1234-5678)${F.phone.req?"※必須":""}">`:""}</div>`;
+ if(F.zip.on||F.addr.on)h+=`<div class="card"><h3>住所${(F.zip.req||F.addr.req)?' <span class="req">必須</span>':""}</h3>
+   ${F.zip.on?`<input type="text" id="j-zip" placeholder="郵便番号（例: 108-0014）">`:""}
+   ${F.addr.on?`<input type="text" id="j-addr" placeholder="住所">`:""}</div>`;
+ if(F.ename.on||F.erel.on||F.ephone.on)h+=`<div class="card"><h3>緊急連絡先${(F.ename.req||F.erel.req||F.ephone.req)?' <span class="req">必須</span>':""}</h3>
+   ${F.ename.on?`<input type="text" id="j-ename" placeholder="氏名">`:""}
+   ${F.erel.on?`<input type="text" id="j-erel" placeholder="続柄（例: 父）">`:""}
+   ${F.ephone.on?`<input type="text" id="j-ephone" placeholder="電話番号">`:""}</div>`;
+ if(F.hire.on)h+=`<div class="card"><h3>入社日${mark("hire")}</h3><input type="date" id="j-hire" value="${todayStr()}"></div>`;
+ if(cfg.custom.length){
+  h+=`<div class="card"><h3>追加項目</h3>`;
+  cfg.custom.forEach((c,i)=>{h+=`<p class="muted" style="margin:8px 0 0">${esc(c.label)}${c.req?' <span class="req">必須</span>':""}</p><input type="text" data-jc="${i}">`});
+  h+=`</div>`;
+ }
+ h+=`<button class="btn" id="j-submit">入社登録する</button>
   <p class="muted center" style="margin-top:12px">送信すると本部・スマレジタイムカードに登録されます</p>
  </div>`;
+ $("app").innerHTML=h;
  $("j-submit").onclick=doJoin;
 }
 async function doJoin(){
- const val=id=>$(id).value.trim();
+ const val=id=>$(id)?$(id).value.trim():"";
  const email=val("j-email"),pw=$("j-pw").value,name=val("j-name");
  if(!email||!pw||!name||!val("j-kana")){toast("メール・パスワード・氏名・フリガナは必須です",true);return}
  if(pw.length<8){toast("パスワードは8文字以上にしてください",true);return}
+ const F=joinCfgCur.fields;
+ for(const [k,label] of JOIN_STD){if(F[k].on&&F[k].req&&!val("j-"+k)){toast(`「${label}」は必須です`,true);return}}
+ const extra={};let missing=null;
+ document.querySelectorAll("input[data-jc]").forEach(inp=>{
+  const c=joinCfgCur.custom[+inp.dataset.jc],v=inp.value.trim();
+  if(c.req&&!v)missing=missing||c.label;
+  if(v)extra[c.label]=v;
+ });
+ if(missing){toast(`「${missing}」は必須です`,true);return}
  $("j-submit").disabled=true;$("j-submit").textContent="登録中...";
  const {error}=await sb.rpc("register_via_invite",{
   p_token:inviteToken,p_email:email,p_password:pw,p_name:name,
   p_name_kana:val("j-kana"),p_birth_date:val("j-birth")||null,p_phone:val("j-phone")||null,
   p_postal_code:val("j-zip")||null,p_address:val("j-addr")||null,
   p_emergency_name:val("j-ename")||null,p_emergency_relation:val("j-erel")||null,p_emergency_phone:val("j-ephone")||null,
-  p_hire_date:val("j-hire")||null});
+  p_hire_date:val("j-hire")||null,p_extra:Object.keys(extra).length?extra:null});
  if(error){toast("登録エラー: "+error.message,true);$("j-submit").disabled=false;$("j-submit").textContent="入社登録する";return}
  toast("入社登録が完了しました！");
  const {data,error:e2}=await sb.auth.signInWithPassword({email,password:pw});
@@ -241,8 +273,12 @@ async function loadMe(uid){
  if(!u){renderLogin("ユーザー情報を取得できませんでした。管理者にお問い合わせください。");await sb.auth.signOut();return}
  if(!u.is_active){renderLogin("このアカウントは無効化されています。本部までお問い合わせください。");await sb.auth.signOut();return}
  stores=st||[];
- const {data:us}=await sb.from("user_stores").select("store_id").eq("user_id",uid);
+ const [{data:us},{data:as}]=await Promise.all([
+  sb.from("user_stores").select("store_id").eq("user_id",uid),
+  sb.from("app_settings").select("key,value")
+ ]);
  const myIds=(us||[]).map(x=>x.store_id);
+ appSettings={};(as||[]).forEach(r=>appSettings[r.key]=r.value);
  me={...u,stores:stores.filter(s=>myIds.includes(s.id))};
  page="home";await render();
 }
@@ -285,7 +321,7 @@ async function render(){
  else if(page==="weekly")body=await writeView("weekly");
  else if(page==="list")body=detail?await detailView():await listView();
  else if(page==="admin")body=await adminView();
- else if(page==="settings")body=settingsView();
+ else if(page==="settings")body=await settingsView();
  $("app").innerHTML=`<header><b>日報・週報システム</b><span style="font-size:12px">${esc(me.name)}（${ROLE_NAME[me.role]||""}）</span></header><main>${body}</main>`;
  bindPage();
 }
@@ -316,7 +352,7 @@ async function homeView(){
 // ===== 日報・週報 入力 =====
 async function writeView(kind){
  writeKind=kind;
- const fmt=kind==="weekly"?WEEKLY_FMT:fmtFor(me.role);
+ const fmt=kind==="weekly"?weeklyFmt():fmtFor(me.role);
  if(!fmt.length)return `<span class="back" data-nav="home">← ホーム</span><p class="muted">この役職の${kind==="weekly"?"週報":"日報"}フォーマットはありません。</p>`;
  let er=null;
  if(editId){const {data}=await sb.from("reports").select("*").eq("id",editId).single();er=data}
@@ -353,7 +389,7 @@ function collectForm(){ // DOM→form
 }
 async function submitReport(){
  collectForm();
- const fmt=writeKind==="weekly"?WEEKLY_FMT:fmtFor(me.role);
+ const fmt=writeKind==="weekly"?weeklyFmt():fmtFor(me.role);
  for(const f of fmt){
   if(f.req){const v=form[f.k];if(v==null||v===""||(Array.isArray(v)&&!v.length)){toast(`「${f.label}」は必須です`,true);return}}
  }
@@ -362,7 +398,8 @@ async function submitReport(){
  const {data:rp,error}=await sb.from("reports").upsert(rec,{onConflict:"author_id,kind,report_date"}).select().single();
  if(error){toast("送信エラー: "+error.message,true);$("submitbtn").disabled=false;return}
  // タスク欄 → tasks へ（新規提出時のみ）
- const taskText=(form.houkoku||"").trim();
+ const taskField=fmt.find(f=>f.type==="task");
+ const taskText=taskField?String(form[taskField.k]||"").trim():"";
  if(taskText&&!editId){
   await sb.from("tasks").insert({title:taskText.slice(0,200),created_by:me.id,is_auto:true,source_report_id:rp.id});
  }
@@ -408,11 +445,10 @@ async function detailView(){
   sb.from("report_reads").select("user_id, user:users!report_reads_user_id_fkey(name)").eq("report_id",r.id)
  ]);
  const liked=(likes||[]).some(x=>x.user_id===me.id);
- const fmt=r.kind==="weekly"?WEEKLY_FMT:fmtFor(r.author.role).concat((FORMATS[r.author.role]||[]).filter(f=>f.kennin));
  const seen={};
  let h=`<span class="back" data-nav="list">← 一覧</span>
   <h2>${esc(r.author.name)}さんの${r.kind==="weekly"?"週報":"日報"} <span class="muted">${fmtDate(r.report_date)}</span></h2>`;
- (r.kind==="weekly"?WEEKLY_FMT:(FORMATS[r.author.role]||[])).forEach(f=>{
+ (r.kind==="weekly"?weeklyFmt():fmtAll(r.author.role)).forEach(f=>{
   if(seen[f.k])return;seen[f.k]=1;
   const v=r.answers[f.k];
   if(v==null||v===""||(Array.isArray(v)&&!v.length))return;
@@ -553,7 +589,7 @@ async function adminEditView(){
    フリガナ: ${esc(prof.name_kana||"—")}<br>生年月日: ${prof.birth_date||"—"}<br>電話: ${esc(prof.phone||"—")}<br>
    住所: ${esc([prof.postal_code,prof.address].filter(Boolean).join(" ")||"—")}<br>
    緊急連絡先: ${esc(prof.emergency_name||"—")}${prof.emergency_relation?`（${esc(prof.emergency_relation)}）`:""} ${esc(prof.emergency_phone||"")}<br>
-   入社日: ${prof.hire_date||"—"}<br>スマレジ連携: ${smaregi}</p>
+   入社日: ${prof.hire_date||"—"}<br>${prof.extra?Object.entries(prof.extra).map(([k,v])=>`${esc(k)}: ${esc(v)}<br>`).join(""):""}スマレジ連携: ${smaregi}</p>
    ${prof.smaregi_sync_status!=="synced"?'<button class="btn sm" id="eu-smaregi" style="margin-top:10px">スマレジに再同期する</button>':""}</div>`;
  }
  h+=`<div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
@@ -594,19 +630,124 @@ async function adminToggle(){
 }
 
 // ===== 設定 =====
-function settingsView(){
- return `<h2>設定</h2>
+async function settingsView(){
+ if(setMode==="join")return settingsJoinView();
+ if(setMode==="fmt")return settingsFmtView();
+ let h=`<h2>設定</h2>
   <div class="card"><h3>プロフィール</h3>
    <p style="font-size:14px">${esc(me.name)}（${ROLE_NAME[me.role]||""}${isKennin()?"・店長兼任":""}）<br>
    <span class="muted">${esc(me.email)}</span><br>
-   <span class="muted">所属: ${me.stores.map(s=>esc(s.name)).join("・")||"なし"}</span></p></div>
-  <div class="card"><p class="muted">チャット・タスク・多言語表示などは次のバージョンで追加予定です。</p></div>
+   <span class="muted">所属: ${me.stores.map(s=>esc(s.name)).join("・")||"なし"}</span></p></div>`;
+ if(me.role==="CEO"){
+  h+=`<div class="card"><h3>🛠 カスタマイズ（社長のみ）</h3>
+   <button class="btn sm" id="set-join" style="margin-bottom:8px">入社フォームの項目設定</button>
+   <button class="btn sm" id="set-fmt">日報・週報の項目設定</button></div>`;
+ }
+ h+=`<div class="card"><p class="muted">チャット・タスク・多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v1.4</p>`;
+  <p class="muted center" style="margin-top:16px">v1.5</p>`;
+ return h;
+}
+function settingsJoinView(){
+ const cfg=cfgJoin;
+ let h=`<span class="back" id="setback">← 設定</span><h2>入社フォームの項目設定</h2>
+  <p class="muted" style="margin-top:-8px;font-size:13px">氏名・フリガナ・メール・パスワードは常に必須です。以下の項目の表示と必須を切り替えられます。</p>`;
+ h+=`<div class="card"><h3>標準項目</h3>`+JOIN_STD.map(([k,label])=>{
+  const f=cfg.fields[k];
+  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+   <span style="flex:1;font-size:14px">${label}</span>
+   <span class="chip jf-on ${f.on?"on":""}" data-k="${k}">表示</span>
+   <span class="chip jf-req ${f.req?"on":""}" data-k="${k}">必須</span></div>`;
+ }).join("")+`</div>`;
+ h+=`<div class="card"><h3>自由項目（追加の質問）</h3>`+cfg.custom.map((c,i)=>
+  `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+   <input type="text" data-jclabel="${i}" value="${esc(c.label)}" placeholder="質問名（例: 制服サイズ）" style="flex:1;margin:0">
+   <span class="chip jc-req ${c.req?"on":""}" data-i="${i}">必須</span>
+   <span class="chip" data-jcdel="${i}" style="color:var(--red)">削除</span></div>`).join("")+
+  `<button class="btn sm sub" id="jc-add">＋ 項目を追加</button></div>
+  <button class="btn" id="jf-save">保存する</button>`;
+ return h;
+}
+function collectJoinDom(){
+ document.querySelectorAll(".chip.jf-on").forEach(c=>cfgJoin.fields[c.dataset.k].on=c.classList.contains("on"));
+ document.querySelectorAll(".chip.jf-req").forEach(c=>cfgJoin.fields[c.dataset.k].req=c.classList.contains("on"));
+ document.querySelectorAll("input[data-jclabel]").forEach(inp=>cfgJoin.custom[+inp.dataset.jclabel].label=inp.value.trim());
+ document.querySelectorAll(".chip.jc-req").forEach(c=>cfgJoin.custom[+c.dataset.i].req=c.classList.contains("on"));
+}
+async function saveJoin(){
+ collectJoinDom();
+ cfgJoin.custom=cfgJoin.custom.filter(c=>c.label);
+ JOIN_STD.forEach(([k])=>{if(cfgJoin.fields[k].req)cfgJoin.fields[k].on=true});
+ $("jf-save").disabled=true;
+ const {error}=await sb.from("app_settings").upsert({key:"join_form",value:cfgJoin,updated_at:new Date().toISOString(),updated_by:me.id});
+ if(error){toast("保存エラー: "+error.message,true);$("jf-save").disabled=false;return}
+ appSettings.join_form=cfgJoin;
+ toast("保存しました。新しい招待リンクから反映されます");
+ setMode="main";render();
+}
+const TYPE_NAMES={text:"自由記述",stars:"★5段階",multi:"複数選択",select2:"単一選択",check:"チェックリスト",select:"店舗選択",task:"報告（タスク化）"};
+function curFmtList(){
+ if(!cfgFmts[fmtRole])cfgFmts[fmtRole]=JSON.parse(JSON.stringify(fmtRole==="WEEKLY"?WEEKLY_FMT:(FORMATS[fmtRole]||[])));
+ return cfgFmts[fmtRole];
+}
+function settingsFmtView(){
+ const list=curFmtList();
+ let h=`<span class="back" id="setback">← 設定</span><h2>日報・週報の項目設定</h2>
+  <div class="card" style="padding:12px">${["AL","SHAIN","TENCHO","TEAM","HQ","WEEKLY"].map(r=>
+   `<span class="chip fmtrole ${fmtRole===r?"on":""}" data-r="${r}">${r==="WEEKLY"?"週報（共通）":ROLE_NAME[r]}</span>`).join("")}</div>`;
+ h+=list.map((f,i)=>`<div class="card" style="padding:12px">
+  <div style="display:flex;gap:8px;margin-bottom:8px">
+   <input type="text" data-flabel="${i}" value="${esc(f.label)}" placeholder="項目名" style="flex:1;margin:0">
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+   <select class="inp" data-ftype="${i}" style="width:auto;margin:0">${Object.entries(TYPE_NAMES).map(([t,n])=>`<option value="${t}" ${f.type===t?"selected":""}>${n}</option>`).join("")}</select>
+   <span class="chip f-req ${f.req?"on":""}" data-i="${i}">必須</span>
+   <span class="chip" data-fup="${i}">↑</span><span class="chip" data-fdn="${i}">↓</span>
+   <span class="chip" data-fdel="${i}" style="color:var(--red)">削除</span></div>
+  <input type="text" data-fopts="${i}" value="${esc((f.opts||[]).join("、"))}" placeholder="選択肢（「、」区切り。選択系のみ）" style="margin:8px 0 0;font-size:13px">
+  </div>`).join("");
+ h+=`<button class="btn sm sub" id="f-add">＋ 項目を追加</button>
+  <button class="btn" id="f-save" style="margin-top:12px">この内容で保存する</button>
+  <button class="btn sub" id="f-reset">標準の項目に戻す</button>`;
+ return h;
+}
+function collectFmtDom(){
+ const list=curFmtList();
+ document.querySelectorAll("input[data-flabel]").forEach(inp=>list[+inp.dataset.flabel].label=inp.value.trim());
+ document.querySelectorAll("select[data-ftype]").forEach(s=>list[+s.dataset.ftype].type=s.value);
+ document.querySelectorAll("input[data-fopts]").forEach(inp=>{
+  const v=inp.value.trim();list[+inp.dataset.fopts].opts=v?v.split(/[、,]/).map(x=>x.trim()).filter(Boolean):[];
+ });
+ document.querySelectorAll(".chip.f-req").forEach(c=>list[+c.dataset.i].req=c.classList.contains("on"));
+}
+async function saveFmt(){
+ collectFmtDom();
+ let list=curFmtList().filter(f=>f.label);
+ for(const [i,f] of list.entries()){
+  if(!f.k)f.k="c"+i+Date.now().toString(36);
+  if(["multi","select2","check"].includes(f.type)&&(!f.opts||!f.opts.length)){
+   toast(`「${f.label}」に選択肢を入力してください（「、」区切り）`,true);return}
+ }
+ cfgFmts[fmtRole]=list;
+ $("f-save").disabled=true;
+ const merged={...(appSettings.formats||{}),...cfgFmts};
+ const {error}=await sb.from("app_settings").upsert({key:"formats",value:merged,updated_at:new Date().toISOString(),updated_by:me.id});
+ if(error){toast("保存エラー: "+error.message,true);$("f-save").disabled=false;return}
+ appSettings.formats=merged;
+ toast("保存しました");render();
+}
+async function resetFmt(){
+ const merged={...(appSettings.formats||{})};
+ delete merged[fmtRole];
+ const {error}=await sb.from("app_settings").upsert({key:"formats",value:merged,updated_at:new Date().toISOString(),updated_by:me.id});
+ if(error){toast("エラー: "+error.message,true);return}
+ appSettings.formats=merged;
+ delete cfgFmts[fmtRole];
+ toast("標準の項目に戻しました");render();
 }
 
 // ===== イベント =====
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;render()});
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";render()});
 function bindPage(){
  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=()=>{page=el.dataset.nav;detail=null;editId=null;render()});
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
@@ -654,6 +795,21 @@ function bindPage(){
   render();
  });
  if($("adback"))$("adback").onclick=()=>{adminMode="list";adminDetail=null;render()};
+ // 設定カスタマイズ（v1.5）
+ if($("set-join"))$("set-join").onclick=()=>{setMode="join";cfgJoin=joinCfg();render()};
+ if($("set-fmt"))$("set-fmt").onclick=()=>{setMode="fmt";cfgFmts=JSON.parse(JSON.stringify(appSettings.formats||{}));render()};
+ if($("setback"))$("setback").onclick=()=>{setMode="main";render()};
+ document.querySelectorAll(".chip.jf-on,.chip.jf-req,.chip.jc-req,.chip.f-req").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
+ document.querySelectorAll("[data-jcdel]").forEach(c=>c.onclick=()=>{collectJoinDom();cfgJoin.custom.splice(+c.dataset.jcdel,1);render()});
+ if($("jc-add"))$("jc-add").onclick=()=>{collectJoinDom();cfgJoin.custom.push({label:"",req:false});render()};
+ if($("jf-save"))$("jf-save").onclick=saveJoin;
+ document.querySelectorAll(".chip.fmtrole").forEach(c=>c.onclick=()=>{collectFmtDom();fmtRole=c.dataset.r;render()});
+ document.querySelectorAll("[data-fup]").forEach(c=>c.onclick=()=>{collectFmtDom();const l=curFmtList(),i=+c.dataset.fup;if(i>0){[l[i-1],l[i]]=[l[i],l[i-1]]}render()});
+ document.querySelectorAll("[data-fdn]").forEach(c=>c.onclick=()=>{collectFmtDom();const l=curFmtList(),i=+c.dataset.fdn;if(i<l.length-1){[l[i+1],l[i]]=[l[i],l[i+1]]}render()});
+ document.querySelectorAll("[data-fdel]").forEach(c=>c.onclick=()=>{collectFmtDom();curFmtList().splice(+c.dataset.fdel,1);render()});
+ if($("f-add"))$("f-add").onclick=()=>{collectFmtDom();curFmtList().push({k:"",label:"",type:"text",req:false});render()};
+ if($("f-save"))$("f-save").onclick=saveFmt;
+ if($("f-reset"))$("f-reset").onclick=resetFmt;
  document.querySelectorAll(".chip.ivrole").forEach(c=>c.onclick=()=>{ivRole=c.dataset.r;document.querySelectorAll(".chip.ivrole").forEach(x=>x.classList.remove("on"));c.classList.add("on")});
  document.querySelectorAll(".chip.ivstore").forEach(c=>c.onclick=()=>{const s=c.dataset.s;ivStores=ivStores.includes(s)?ivStores.filter(x=>x!==s):ivStores.concat([s]);c.classList.toggle("on")});
  if($("iv-submit"))$("iv-submit").onclick=adminInviteCreate;

@@ -38,6 +38,7 @@
   .cb{background:#fff;border:1px solid #e3e7ee;border-radius:14px 14px 14px 4px;padding:8px 11px;font-size:14px;text-align:left;word-break:break-word}
   .cbwrap.mine .cb{background:#d9edff;border-color:#c9e2f6;border-radius:14px 14px 4px 14px}
   .cact{margin:3px 0 0;display:none}
+  .cquote{border-left:3px solid #9db8d4;background:#eef2f7;color:#5a6675;font-size:11px;padding:3px 8px;border-radius:6px;margin-bottom:4px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .cact button{border:1px solid #d5dbe3;background:#fff;border-radius:8px;font-size:11px;padding:3px 8px;margin:0 4px 0 0;cursor:pointer}
   .info{background:#eaf3fd;color:#1a5c9e;border-radius:8px;padding:10px;font-size:13px;margin-bottom:10px}
   .muted{color:#8a93a2;font-size:12px}
@@ -171,6 +172,7 @@ let tskSeg="open",tskEdit=null,tskFiles=[],tskCmtFiles={},tskUsers=null; // v1.8
 let chatRoom=null,chatNew=null,chatSeg="all",chatFiles=[],chatGm=[],chatDraft="",chatTimer=null,chatDescEdit=false,chatRename=false,chatMsgCount=0; // v1.9 チャット
 let dashPeriod="d7",dashMetric="rate"; // v2.0 ダッシュボード
 let chatQ="",tskQ="",chatMeta={}; // v2.1 検索・メッセージ操作
+let chatReply=null,chatInvite=false,chatInviteSel=[]; // v2.2 返信・招待
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
@@ -659,7 +661,7 @@ async function tasksView(){
     <b style="font-size:14px;flex:1">${k.is_auto?"📝 ":""}${esc(k.title)}</b>
     ${k.status==="open"?`<button class="btn sm" data-tdone="${k.id}" style="flex-shrink:0">完了</button>`:`<button class="btn sm sub" data-tundone="${k.id}" style="flex-shrink:0">戻す</button>`}
    </div>
-   <p class="muted" style="margin:6px 0 0;font-size:12px">担当: ${esc(taskUserName(k.assignee_id))} ／ 期日: ${k.due_at?`<span ${overdue?'style="color:#c62828;font-weight:bold"':""}>${fmtDue(k.due_at)}${overdue?" ⚠️期限切れ":""}</span>`:"未定"} ／ 作成: ${esc(taskUserName(k.created_by))}${k.done_at?` ／ 完了: ${fmtDue(k.done_at)}`:""}</p>
+   <p class="muted" style="margin:6px 0 0;font-size:12px">担当: ${esc(taskUserName(k.assignee_id))} ／ 期日: ${k.due_at?`<span ${overdue?'style="color:#c62828;font-weight:bold"':""}>${fmtDue(k.due_at)}${overdue?" ⚠️期限切れ":""}</span>`:"未定"} ／ 作成: ${esc(taskUserName(k.created_by))}${k.done_at?` ／ 完了: ${fmtDue(k.done_at)}`:""}${kc.length?` ／ 💬${kc.length}${kc.some(c=>c.author_id===me.id)?` <span style="color:#2e7d32">✓返信済み</span>`:` <span style="color:#c98a00">未返信</span>`}`:""}</p>
    ${taskFileHtml(k.files)}
    ${canEdit?(tskEdit===k.id
     ?`<div style="margin-top:8px;background:#f6f8fa;border-radius:8px;padding:10px">
@@ -667,7 +669,7 @@ async function tasksView(){
       <input type="datetime-local" class="inp" id="te_due" style="margin-top:8px" value="${k.due_at?new Date(new Date(k.due_at).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):""}">
       <button class="btn sm" data-tesave="${k.id}">保存</button> <button class="btn sm sub" id="tecancel">キャンセル</button></div>`
     :`<button class="btn sm sub" data-tedit="${k.id}" style="margin-top:8px">担当・期日を変更</button>`):""}
-   ${kc.map(c=>`<div class="cmt"><b>${esc(taskUserName(c.author_id))}</b> <span class="muted" style="font-size:11px">${new Date(c.created_at).toLocaleString("ja-JP")}</span><br>${esc(c.body)}${taskFileHtml(c.files)}</div>`).join("")}
+   ${kc.map(c=>`<div class="cmt"><b>${esc(taskUserName(c.author_id))}</b> <span class="muted" style="font-size:11px">${new Date(c.created_at).toLocaleString("ja-JP")}</span> <span data-tcreply="${k.id}" data-tcrn="${esc(taskUserName(c.author_id))}" data-tcrs="${esc(((c.body||"").split("\n").find(l=>!l.startsWith("＞"))||"").slice(0,30))}" style="color:var(--blue);cursor:pointer;font-size:11px">↩ 返信</span><br>${esc(c.body).split("\n").map(l=>l.startsWith("＞")?`<span class="muted" style="font-size:11px">${l}</span>`:l).join("<br>")}${taskFileHtml(c.files)}</div>`).join("")}
    <div style="margin-top:8px">
     ${(()=>{const ms=tskUsers.filter(u=>u.id!==me.id&&(u.role==="CEO"||u.role==="TEAM"||u.id===k.created_by||u.id===k.assignee_id));
       return ms.length?`<div style="margin-bottom:4px">${ms.map(u=>`<span class="chip" data-mtgt="tc_${k.id}" data-mname="${esc(u.name)}" style="font-size:11px;padding:2px 8px">@${esc(u.name)}</span>`).join("")}</div>`:""})()}
@@ -778,7 +780,7 @@ async function chatView(){
  if(!list.length)h+=`<p class="muted center" style="margin-top:16px">${chatSeg==="un"?"未読のチャットはありません":"チャットはありません"}</p>`;
  list.forEach(r=>{
   const l=last[r.id];
-  const prev=l?((l.files&&l.files.length?"📎 ":"")+(l.kind==="deleted"?"送信取り消し":l.body||"")):"メッセージはまだありません";
+  const prev=l?((l.sender_id===me.id&&l.kind!=="sys"?"自分: ":"")+(l.files&&l.files.length?"📎 ":"")+(l.kind==="deleted"?"送信取り消し":l.body||"")):"メッセージはまだありません";
   h+=`<div class="crow" data-croom="${r.id}"><span class="cava">${chatRoomEmoji(r)}</span>
    <span style="flex:1;min-width:0"><b style="font-size:14px">${chatRoomName(r,mems)}</b><span class="muted cell1" style="font-size:12px">${esc(String(prev).split("\n")[0]).slice(0,40)}</span></span>
    <span style="flex-shrink:0;text-align:right"><span class="muted" style="font-size:10px">${l?fmtDue(l.created_at):""}</span><br>${unread[r.id]?`<span class="badge">${unread[r.id]}</span>`:'<span class="muted">›</span>'}</span></div>`;
@@ -814,7 +816,7 @@ async function chatRoomView(){
  await sb.from("room_members").update({last_read_at:new Date().toISOString()}).eq("room_id",r.id).eq("user_id",me.id); // 既読化
  const others=(mems||[]).filter(m=>m.user_id!==me.id);
  let h=`<div style="display:flex;justify-content:space-between;align-items:center"><span class="back" id="backchat" style="margin:0">← チャット</span>
-  <span>${r.type==="group"?`<button class="btn sm sub" id="crenamebtn" style="margin:0 4px 0 0">✏️ 名前</button><button class="btn sm sub" id="cleave" style="margin:0;color:var(--red);border-color:var(--red)">🚪 退会</button>`:""}</span></div>
+  <span>${r.type!=="dm"?`<button class="btn sm sub" id="cinvite" style="margin:0 4px 0 0">➕ 招待</button>`:""}${r.type==="group"?`<button class="btn sm sub" id="crenamebtn" style="margin:0 4px 0 0">✏️ 名前</button><button class="btn sm sub" id="cleave" style="margin:0;color:var(--red);border-color:var(--red)">🚪 退会</button>`:""}</span></div>
  <h2 style="margin-top:8px">${chatRoomTitle(r,(mems||[]).map(x=>({room_id:r.id,user_id:x.user_id})))}</h2>
  <p class="muted" style="margin-top:-8px;font-size:12px">メンバー: ${(mems||[]).map(m=>esc(taskUserName(m.user_id))).join("、")||"なし"}</p>`;
  if(chatRename)h+=`<div class="card"><h3>✏️ グループ名を変更</h3><input type="text" id="crname" value="${esc(r.name||"")}"><button class="btn sm" id="crsave">保存</button> <button class="btn sm sub" id="crcancel">キャンセル</button></div>`;
@@ -823,7 +825,15 @@ async function chatRoomView(){
    ?`<div class="card" style="background:#fffbea"><h3>📌 概要</h3><textarea rows="3" id="cdesc">${esc(r.description||"")}</textarea><button class="btn sm" id="cdescsave">保存</button> <button class="btn sm sub" id="cdesccancel">キャンセル</button></div>`
    :`<div class="card" style="background:#fffbea"><h3>📌 概要 <span style="color:var(--blue);cursor:pointer;font-size:12px;font-weight:400" id="cdescedit">✏️ 編集</span></h3><p style="margin:0;white-space:pre-wrap;font-size:13px" class="${r.description?"":"muted"}">${esc(r.description||"未設定（✏️編集から目的や共有事項を書けます）")}</p></div>`;
  }
+ if(chatInvite&&r.type!=="dm"){ // v2.2 招待
+  const cand=(tskUsers||[]).filter(u=>u.id!==me.id&&!(mems||[]).some(m=>m.user_id===u.id));
+  h+=`<div class="card" style="background:#f0f7ff"><h3>➕ メンバーを招待</h3>${cand.length
+   ?`<div>${cand.map(u=>`<span class="chip${chatInviteSel.includes(u.id)?" on":""}" data-cinvsel="${u.id}">${esc(u.name)}</span>`).join("")}</div><button class="btn sm" id="cinvgo" style="margin-top:8px">招待する</button> <button class="btn sm sub" id="cinvcancel">キャンセル</button>`
+   :`<p class="muted" style="margin:0 0 8px">招待できるメンバーはいません（全員参加済み）</p><button class="btn sm sub" id="cinvcancel">閉じる</button>`}</div>`;
+ }
  chatMeta={}; // v2.1 メッセージ操作用
+ const byId={},replied={},repliedMe={}; // v2.2 返信
+ (msgs||[]).forEach(x=>{byId[x.id]=x;if(x.reply_to&&x.kind!=="deleted"){replied[x.reply_to]=(replied[x.reply_to]||0)+1;if(x.sender_id===me.id)repliedMe[x.reply_to]=1}});
  let prevDay="";
  const dayLbl=d=>{
   const k=x=>x.getFullYear()+"/"+x.getMonth()+"/"+x.getDate();
@@ -839,7 +849,9 @@ async function chatRoomView(){
   const mine=m.sender_id===me.id;
   const ava=mine?"":`<span class="cava sm">${esc((taskUserName(m.sender_id)||"?").slice(0,1))}</span>`;
   if(m.kind==="deleted"){h+=`<div class="cbwrap${mine?" mine":""}">${ava}<div class="cb" style="color:#9aa3b0;font-style:italic;font-size:12px">🚫 送信が取り消されました</div></div>`;return}
-  chatMeta[m.id]={body:m.body||"",at:m.created_at,mine};
+  chatMeta[m.id]={body:m.body||"",at:m.created_at,mine,name:taskUserName(m.sender_id)};
+  const q=m.reply_to?byId[m.reply_to]:null; // v2.2 引用
+  const qh=m.reply_to?`<div class="cquote">↩ ${q?esc(taskUserName(q.sender_id))+": "+esc(q.kind==="deleted"?"送信が取り消されました":((q.body||"📎 添付").split("\n")[0].slice(0,50))):"元のメッセージ"}</div>`:"";
   const likes=lks.filter(l=>l.message_id===m.id);
   const liked=likes.some(l=>l.user_id===me.id);
   const readers=mine?others.filter(x=>x.last_read_at>=m.created_at):[];
@@ -847,13 +859,15 @@ async function chatRoomView(){
   h+=`<div class="cbwrap${mine?" mine":""}">${ava}
    <div style="max-width:78%;text-align:${mine?"right":"left"}">
     ${mine?"":`<span class="muted" style="font-size:11px">${esc(taskUserName(m.sender_id))}</span><br>`}
-    <div class="cb" style="display:inline-block">${taskFileHtml(m.files)}${m.body?esc(m.body).replace(/\n/g,"<br>"):""}</div>
+    <div class="cb" style="display:inline-block">${qh}${taskFileHtml(m.files)}${m.body?esc(m.body).replace(/\n/g,"<br>"):""}</div>
     <div style="font-size:12px;margin-top:1px">
      <span data-clike="${m.id}" ${liked?'data-liked="1"':""} style="cursor:pointer;user-select:none">${liked?"❤️":"🤍"}${likes.length||""}</span>${likes.length?`<span class="muted" style="font-size:10px">（${likes.map(l=>esc(taskUserName(l.user_id))).join("、")}）</span>`:""}
+     ${replied[m.id]?`<span style="font-size:10px;color:${repliedMe[m.id]?"#2e7d32":"#7a869a"}">↩ 返信${replied[m.id]}${repliedMe[m.id]?"・✓返信済み":""}</span>`:""}
      <span class="muted" style="font-size:10px">${mine&&readers.length?`既読${r.type==="dm"?"":" "+readers.length}・`:""}${tm}</span>
      <span class="muted" data-cmore="${m.id}" style="cursor:pointer;padding:0 5px;font-weight:700">⋯</span>
     </div>
     <div class="cact" id="cact-${m.id}">
+     <button data-creply="${m.id}">↩ 返信</button>
      ${m.body?`<button data-ccopy="${m.id}">📋 コピー</button>`:""}
      <button data-cunread="${m.id}">🔵 ここから未読</button>
      ${mine?`<button data-cdel="${m.id}" style="color:var(--red)">🗑 送信取消</button>`:""}
@@ -861,8 +875,9 @@ async function chatRoomView(){
    </div></div>`;
  });
  const mentionables=(tskUsers||[]).filter(u=>u.id!==me.id&&(mems||[]).some(m=>m.user_id===u.id));
- h+=`<div class="card"><div id="cfilelist">${taskFileHtml(chatFiles)}</div>
-  <textarea rows="2" id="chatbox" placeholder="メッセージを書く（@でメンション通知）" style="margin-top:0">${esc(chatDraft||"")}</textarea>
+ const rp=chatReply&&chatMeta[chatReply]?chatMeta[chatReply]:null; // v2.2 返信プレビュー
+ h+=`<div class="card">${rp?`<div class="cquote" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span>↩ ${esc(rp.name)}: ${esc(rp.body.split("\n")[0].slice(0,50))||"📎 添付"}</span><span id="creplyoff" style="cursor:pointer;padding:0 6px;font-weight:700">✕</span></div>`:""}<div id="cfilelist">${taskFileHtml(chatFiles)}</div>
+  <textarea rows="2" id="chatbox" placeholder="${rp?"返信を書く":"メッセージを書く（@でメンション通知）"}" style="margin-top:0">${esc(chatDraft||"")}</textarea>
   ${r.type!=="dm"?`<div style="margin-top:4px"><span class="chip" data-mtgt="chatbox" data-mname="全員" style="font-size:11px;padding:2px 8px">@全員</span>${mentionables.map(u=>`<span class="chip" data-mtgt="chatbox" data-mname="${esc(u.name)}" style="font-size:11px;padding:2px 8px">@${esc(u.name)}</span>`).join("")}</div>`:""}
   <label class="btn sm sub" style="display:inline-block;margin-top:6px">📎 添付<input type="file" id="chatfile" multiple style="display:none"></label>
   <button class="btn sm" id="chatsend" style="margin-left:6px">送信</button>
@@ -1285,7 +1300,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.1</p>`;
+  <p class="muted center" style="margin-top:16px">v2.2</p>`;
  return h;
 }
 function settingsJoinView(){
@@ -1403,7 +1418,7 @@ async function resetFmt(){
 }
 
 // ===== イベント =====
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";render()});
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";chatReply=null;chatInvite=false;chatInviteSel=[];render()});
 function bindPage(){
  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=()=>{page=el.dataset.nav;detail=null;editId=null;render()});
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
@@ -1491,6 +1506,11 @@ function bindPage(){
   const ta=$(c.dataset.mtgt);if(!ta)return;
   ta.value=(ta.value?ta.value+" ":"")+"@"+c.dataset.mname+" ";ta.focus();
  });
+ document.querySelectorAll("[data-tcreply]").forEach(b=>b.onclick=()=>{ // v2.2 コメント返信（引用）
+  const ta=$("tc_"+b.dataset.tcreply);if(!ta)return;
+  ta.value="＞"+b.dataset.tcrn+"「"+b.dataset.tcrs+"」\n"+ta.value;
+  ta.rows=3;ta.focus();
+ });
  document.querySelectorAll("input[data-tcf]").forEach(inp=>inp.onchange=async e=>{ // コメント添付
   const id=inp.dataset.tcf;const fs=[...e.target.files];if(!fs.length)return;toast("アップロード中...");
   tskCmtFiles[id]=tskCmtFiles[id]||[];
@@ -1530,11 +1550,31 @@ function bindPage(){
    }catch(e){}
   },7000);
  }
- document.querySelectorAll("[data-croom]").forEach(rw=>rw.onclick=()=>{chatRoom=rw.dataset.croom;chatDraft="";chatFiles=[];chatDescEdit=false;chatRename=false;render()});
+ document.querySelectorAll("[data-croom]").forEach(rw=>rw.onclick=()=>{chatRoom=rw.dataset.croom;chatDraft="";chatFiles=[];chatDescEdit=false;chatRename=false;chatReply=null;chatInvite=false;chatInviteSel=[];render()});
  // v2.1 検索・メッセージ操作
  if($("chatq"))$("chatq").onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();chatQ=e.target.value.trim();render()}};
  if($("chatqclear"))$("chatqclear").onclick=()=>{chatQ="";render()};
  document.querySelectorAll("[data-cmore]").forEach(b=>b.onclick=()=>{const el=$("cact-"+b.dataset.cmore);if(el)el.style.display=el.style.display==="block"?"none":"block"});
+ // v2.2 返信・招待
+ document.querySelectorAll("[data-creply]").forEach(b=>b.onclick=()=>{chatReply=b.dataset.creply;const box=$("chatbox");if(box)chatDraft=box.value;render();setTimeout(()=>{const t=$("chatbox");if(t)t.focus()},50)});
+ if($("creplyoff"))$("creplyoff").onclick=()=>{chatReply=null;const box=$("chatbox");if(box)chatDraft=box.value;render()};
+ if($("cinvite"))$("cinvite").onclick=()=>{chatInvite=!chatInvite;const box=$("chatbox");if(box)chatDraft=box.value;render()};
+ if($("cinvcancel"))$("cinvcancel").onclick=()=>{chatInvite=false;chatInviteSel=[];render()};
+ document.querySelectorAll("[data-cinvsel]").forEach(c=>c.onclick=()=>{
+  const id=c.dataset.cinvsel;
+  chatInviteSel=chatInviteSel.includes(id)?chatInviteSel.filter(x=>x!==id):[...chatInviteSel,id];
+  c.classList.toggle("on",chatInviteSel.includes(id));
+ });
+ if($("cinvgo"))$("cinvgo").onclick=async()=>{
+  if(!chatInviteSel.length){toast("招待するメンバーを選択してください",true);return}
+  $("cinvgo").disabled=true;
+  const {error}=await sb.rpc("invite_to_room",{p_room:chatRoom,p_users:chatInviteSel});
+  if(error){toast("招待エラー: "+error.message,true);$("cinvgo").disabled=false;return}
+  const names=chatInviteSel.map(id=>taskUserName(id)).join("さん、")+"さん";
+  await sb.from("messages").insert({id:crypto.randomUUID(),room_id:chatRoom,sender_id:me.id,kind:"sys",body:`${me.name}さんが${names}を招待しました`});
+  await chatNotify(chatInviteSel,`${me.name}さんがあなたをチャットに招待しました`,chatRoom);
+  chatInvite=false;chatInviteSel=[];toast("招待しました");render();
+ };
  document.querySelectorAll("[data-ccopy]").forEach(b=>b.onclick=async()=>{
   const m=chatMeta[b.dataset.ccopy];if(!m)return;
   try{await navigator.clipboard.writeText(m.body)}catch(e){const t=document.createElement("textarea");t.value=m.body;document.body.appendChild(t);t.select();document.execCommand("copy");t.remove()}
@@ -1543,7 +1583,7 @@ function bindPage(){
  document.querySelectorAll("[data-cunread]").forEach(b=>b.onclick=async()=>{
   const m=chatMeta[b.dataset.cunread];if(!m)return;
   await sb.from("room_members").update({last_read_at:new Date(new Date(m.at).getTime()-1000).toISOString()}).eq("room_id",chatRoom).eq("user_id",me.id);
-  toast("このメッセージから未読にしました");chatRoom=null;chatDraft="";chatFiles=[];render();updateDots();
+  toast("このメッセージから未読にしました");chatRoom=null;chatDraft="";chatFiles=[];chatReply=null;render();updateDots();
  });
  document.querySelectorAll("[data-cdel]").forEach(b=>b.onclick=async()=>{
   if(!confirm("このメッセージの送信を取り消しますか？"))return;
@@ -1556,7 +1596,7 @@ function bindPage(){
  if($("newdm"))$("newdm").onclick=()=>{chatNew="dm";render()};
  if($("newgroup"))$("newgroup").onclick=()=>{chatNew="group";chatGm=[];render()};
  if($("backchatlist"))$("backchatlist").onclick=()=>{chatNew=null;chatGm=[];render()};
- if($("backchat"))$("backchat").onclick=()=>{chatRoom=null;chatDraft="";chatFiles=[];render()};
+ if($("backchat"))$("backchat").onclick=()=>{chatRoom=null;chatDraft="";chatFiles=[];chatReply=null;chatInvite=false;chatInviteSel=[];render()};
  document.querySelectorAll("[data-cdm]").forEach(rw=>rw.onclick=async()=>{ // 個別チャット開始（既存があれば開く）
   const peer=rw.dataset.cdm;
   const key=[me.id,peer].sort().join("|");
@@ -1626,8 +1666,9 @@ function bindPage(){
   const body=$("chatbox").value.trim();
   if(!body&&!chatFiles.length)return;
   $("chatsend").disabled=true;
-  const {error}=await sb.from("messages").insert({id:crypto.randomUUID(),room_id:chatRoom,sender_id:me.id,body,files:chatFiles});
+  const {error}=await sb.from("messages").insert({id:crypto.randomUUID(),room_id:chatRoom,sender_id:me.id,body,files:chatFiles,reply_to:chatReply||null});
   if(error){toast("送信エラー: "+error.message,true);$("chatsend").disabled=false;return}
+  chatReply=null; // v2.2
   try{ // 通知: DM=相手全員／グループ・店舗=@メンションのみ
    const {data:mm}=await sb.from("room_members").select("user_id").eq("room_id",chatRoom).is("left_at",null);
    const others=(mm||[]).map(x=>x.user_id).filter(x=>x!==me.id);

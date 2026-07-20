@@ -80,6 +80,7 @@
   <button data-p="write"><i>✏️</i>日報</button>
   <button data-p="list"><i>📋</i>一覧</button>
   <button data-p="tasks"><i>✅</i>タスク<span class="ndot" id="taskdot" style="display:none"></span></button>
+  <button data-p="chat"><i>💬</i>チャット<span class="ndot" id="chatdot" style="display:none"></span></button>
   <button data-p="admin" id="navadmin" style="display:none"><i>👥</i>管理<span class="ndot" id="admdot" style="display:none"></span></button>
   <button data-p="settings"><i>⚙️</i>設定</button>
 </nav>
@@ -152,6 +153,7 @@ let searchQ="",fRole="",fStore="";                       // v1.7 検索
 let joinPhotos={},joinSmStaffs=null,joinInfoCur=null;    // v1.7 入社フォーム写真＋スマレジ選択
 let smStaffsCache=null,smSel=null,smRole=null,smStores=[],smResult=null; // v1.7 スマレジ連携招待
 let tskSeg="open",tskEdit=null,tskFiles=[],tskCmtFiles={},tskUsers=null; // v1.8 タスク
+let chatRoom=null,chatNew=null,chatSeg="all",chatFiles=[],chatGm=[],chatDraft="",chatTimer=null,chatDescEdit=false,chatRename=false,chatMsgCount=0; // v1.9 チャット
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
@@ -371,6 +373,7 @@ async function updateDots(){ // v1.7 未読通知バッジ（ホーム=自分宛
   set($("homedot"),others);set($("admdot"),joins);
   const {count:tn}=await sb.from("tasks").select("id",{count:"exact",head:true}).eq("assignee_id",me.id).eq("status","open"); // v1.8 自分担当の未完了タスク
   set($("taskdot"),tn||0);
+  set($("chatdot"),await chatUnreadTotal()); // v1.9 チャット未読
  }catch(e){}
 }
 async function loadMe(uid){
@@ -438,6 +441,7 @@ async function render(){
  else if(page==="weekly")body=await writeView("weekly");
  else if(page==="list")body=detail?await detailView():await listView();
  else if(page==="tasks")body=await tasksView();
+ else if(page==="chat")body=await chatView();
  else if(page==="admin")body=await adminView();
  else if(page==="settings")body=await settingsView();
  $("app").innerHTML=`<header><b>日報・週報システム</b><span style="font-size:12px">${esc(me.name)}（${ROLE_NAME[me.role]||""}）</span></header><main>${body}</main>`;
@@ -461,8 +465,9 @@ async function homeView(){
  (myNtf||[]).forEach(n=>{ // v1.7 自分宛の通知
   const rid=n.link&&n.link.report_id;
   const tid=!rid&&n.link&&n.link.task_id; // v1.8 タスク通知
+  const cid=!rid&&!tid&&n.link&&n.link.room_id; // v1.9 チャット通知
   h+=`<div class="info" style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
-   <span ${rid?`data-ntfgo="${esc(rid)}" data-nid="${n.id}" style="cursor:pointer"`:tid?`data-ntfgotask="${n.id}" style="cursor:pointer"`:""}>🔔 ${esc((n.body_i18n&&n.body_i18n.ja)||"")}${(rid||tid)?' <span class="muted">→タップで開く</span>':""}<br><span class="muted">${new Date(n.created_at).toLocaleString("ja-JP")}</span></span>
+   <span ${rid?`data-ntfgo="${esc(rid)}" data-nid="${n.id}" style="cursor:pointer"`:tid?`data-ntfgotask="${n.id}" style="cursor:pointer"`:cid?`data-ntfgoroom="${esc(cid)}" data-nid="${n.id}" style="cursor:pointer"`:""}>🔔 ${esc((n.body_i18n&&n.body_i18n.ja)||"")}${(rid||tid||cid)?' <span class="muted">→タップで開く</span>':""}<br><span class="muted">${new Date(n.created_at).toLocaleString("ja-JP")}</span></span>
    <button class="btn sm sub" data-ntfread="${n.id}" style="flex-shrink:0">既読</button></div>`;
  });
  if(me.role!=="CEO"&&FORMATS[me.role]){
@@ -579,9 +584,9 @@ async function saveDraft(){
 }
 
 // ===== v1.8 タスク =====
-async function taskUpload(f){ // 添付ファイルをStorageへ → {url,name,type}
+async function taskUpload(f,prefix){ // 添付ファイルをStorageへ → {url,name,type}（v1.9: prefix指定でチャット等にも利用）
  const ext=((f.name.split(".").pop()||"dat").toLowerCase().replace(/[^a-z0-9]/g,""))||"dat";
- const path="tasks/"+me.id+"/"+Date.now()+"_"+Math.random().toString(36).slice(2,8)+"."+ext;
+ const path=(prefix||"tasks")+"/"+me.id+"/"+Date.now()+"_"+Math.random().toString(36).slice(2,8)+"."+ext;
  const {error}=await sb.storage.from("report-photos").upload(path,f,{contentType:f.type||"application/octet-stream"});
  if(error){toast("アップロードエラー: "+error.message,true);return null}
  const {data}=sb.storage.from("report-photos").getPublicUrl(path);
@@ -666,6 +671,135 @@ async function createTask(){
  if(error){toast("作成エラー: "+error.message,true);$("ntaskbtn").disabled=false;return}
  if(assignee)await taskNotify([assignee],"task_assigned",`${me.name}さんからタスク「${title.slice(0,30)}」の担当になりました`,tid);
  tskFiles=[];toast("タスクを作成しました");render();
+}
+
+// ===== v1.9 チャット =====
+async function chatEnsureUsers(){
+ if(!tskUsers){const {data}=await sb.from("users").select("id,name,role").eq("is_active",true).order("name");tskUsers=data||[]}
+ return tskUsers;
+}
+async function chatUnreadTotal(){ // 自分の全ルーム未読合計（バッジ用）
+ const {data:mm}=await sb.from("room_members").select("room_id,last_read_at").eq("user_id",me.id).is("left_at",null);
+ if(!mm||!mm.length)return 0;
+ const minRead=mm.map(m=>m.last_read_at).sort()[0];
+ const {data:ms}=await sb.from("messages").select("room_id,created_at,sender_id").in("room_id",mm.map(m=>m.room_id)).gt("created_at",minRead).neq("sender_id",me.id).order("created_at",{ascending:false}).limit(300);
+ const rd={};mm.forEach(m=>rd[m.room_id]=m.last_read_at);
+ return (ms||[]).filter(m=>m.created_at>rd[m.room_id]).length;
+}
+function chatRoomTitle(r,mems){
+ if(r.type==="dm"){
+  const other=(mems||[]).find(m=>(m.room_id?m.room_id===r.id:true)&&m.user_id!==me.id);
+  return "👤 "+esc(other?taskUserName(other.user_id):"個別チャット");
+ }
+ return (r.type==="store"?"🏪 ":"👥 ")+esc(r.name||"グループ");
+}
+async function chatNotify(recips,bodyJa,roomId){ // チャット通知（自分除外・重複排除）
+ const uniq=[...new Set(recips.filter(x=>x&&x!==me.id))];
+ if(!uniq.length)return;
+ try{await sb.from("notifications").insert(uniq.map(x=>({recipient_id:x,actor_id:me.id,type:"chat_message",body_i18n:{ja:bodyJa},link:{room_id:roomId||chatRoom}})));}catch(e){}
+}
+async function chatFetchAll(){ // ルーム一覧＋メンバー＋最新メッセージ
+ const {data:rooms}=await sb.from("chat_rooms").select("*");
+ const myStoreIds=me.stores.map(s=>s.id);
+ const seeAll=["CEO","TEAM","HQ"].includes(me.role);
+ const joinRows=(rooms||[]).filter(r=>r.type==="store"&&myStoreIds.includes(r.store_id)).map(r=>({room_id:r.id,user_id:me.id}));
+ if(joinRows.length)await sb.from("room_members").upsert(joinRows,{onConflict:"room_id,user_id",ignoreDuplicates:true}); // 自店舗ルームへ自動参加
+ const vis=(rooms||[]).filter(r=>r.type!=="store"||seeAll||myStoreIds.includes(r.store_id));
+ const ids=vis.map(r=>r.id);
+ let mems=[],msgs=[];
+ if(ids.length){
+  const [{data:m1},{data:m2}]=await Promise.all([
+   sb.from("room_members").select("room_id,user_id,last_read_at").in("room_id",ids).is("left_at",null),
+   sb.from("messages").select("id,room_id,sender_id,kind,body,files,created_at").in("room_id",ids).order("created_at",{ascending:false}).limit(500)
+  ]);
+  mems=m1||[];msgs=m2||[];
+ }
+ return {rooms:vis,mems,msgs};
+}
+async function chatView(){
+ await chatEnsureUsers();
+ if(chatRoom)return await chatRoomView();
+ if(chatNew==="dm")return chatNewDmView();
+ if(chatNew==="group")return chatNewGroupView();
+ const {rooms,mems,msgs}=await chatFetchAll();
+ const last={},unread={},myRead={};
+ mems.forEach(m=>{if(m.user_id===me.id)myRead[m.room_id]=m.last_read_at});
+ msgs.forEach(m=>{
+  if(!last[m.room_id])last[m.room_id]=m;
+  if(m.sender_id!==me.id&&myRead[m.room_id]!=null&&m.created_at>myRead[m.room_id])unread[m.room_id]=(unread[m.room_id]||0)+1;
+ });
+ let list=rooms.slice().sort((a,b)=>{const ta=last[a.id]?last[a.id].created_at:a.created_at,tb=last[b.id]?last[b.id].created_at:b.created_at;return ta<tb?1:-1});
+ if(chatSeg==="un")list=list.filter(r=>unread[r.id]);
+ let h=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><h2 style="margin:0">💬 チャット</h2>
+  <span><button class="btn sm sub" id="newdm" style="margin:0 4px 0 0">👤 個別</button><button class="btn sm sub" id="newgroup" style="margin:0">👥 グループ</button></span></div>
+ <div class="seg"><div class="${chatSeg==="all"?"on":""}" data-cseg="all">すべて</div><div class="${chatSeg==="un"?"on":""}" data-cseg="un">未読のみ</div></div>`;
+ if(!list.length)h+=`<p class="muted center" style="margin-top:16px">${chatSeg==="un"?"未読のチャットはありません":"チャットはありません"}</p>`;
+ list.forEach(r=>{
+  const l=last[r.id];
+  const prev=l?((l.files&&l.files.length?"📎 ":"")+(l.body||"")):"メッセージはまだありません";
+  h+=`<div class="row" data-croom="${r.id}"><span style="min-width:0"><b style="font-size:14px">${chatRoomTitle(r,mems)}</b><br><span class="muted" style="font-size:12px">${esc(String(prev).split("\n")[0]).slice(0,40)}${l?" ・"+fmtDue(l.created_at):""}</span></span>
+   <span style="flex-shrink:0">${unread[r.id]?`<span class="badge">${unread[r.id]}</span>`:'<span class="muted">›</span>'}</span></div>`;
+ });
+ return h;
+}
+function chatNewDmView(){
+ let h=`<span class="back" id="backchatlist">← チャット</span><h2>👤 個別チャットを開始</h2><p class="muted">相手をタップするとトークが開きます</p>`;
+ (tskUsers||[]).filter(u=>u.id!==me.id).forEach(u=>{
+  h+=`<div class="row" data-cdm="${u.id}"><span>👤 ${esc(u.name)}<span class="muted">（${ROLE_NAME[u.role]||""}）</span></span><span class="muted">›</span></div>`;
+ });
+ return h;
+}
+function chatNewGroupView(){
+ return `<span class="back" id="backchatlist">← チャット</span><h2>👥 グループ作成</h2>
+ <div class="card"><h3>グループ名 <span class="req">必須</span></h3><input type="text" id="gname" placeholder="例: 新メニュー開発">
+ <h3 style="margin-top:12px">📌 概要（任意）</h3><textarea rows="2" id="gdesc" placeholder="グループの目的・共有事項など"></textarea>
+ <h3 style="margin-top:12px">メンバー <span class="req">必須</span></h3><div>${(tskUsers||[]).filter(u=>u.id!==me.id).map(u=>`<span class="chip${chatGm.includes(u.id)?" on":""}" data-cgm="${u.id}">${esc(u.name)}</span>`).join("")}</div>
+ <button class="btn" id="gcreate">👥 作成する</button></div>`;
+}
+async function chatRoomView(){
+ const {data:r}=await sb.from("chat_rooms").select("*").eq("id",chatRoom).maybeSingle();
+ if(!r){chatRoom=null;return await chatView()}
+ if(r.type==="store")await sb.from("room_members").upsert([{room_id:r.id,user_id:me.id}],{onConflict:"room_id,user_id",ignoreDuplicates:true}); // 店舗ルームは開いたら参加
+ const [{data:mems},{data:msgs}]=await Promise.all([
+  sb.from("room_members").select("user_id,last_read_at").eq("room_id",r.id).is("left_at",null),
+  sb.from("messages").select("*").eq("room_id",r.id).order("created_at").limit(200)
+ ]);
+ chatMsgCount=(msgs||[]).length;
+ const ids=(msgs||[]).filter(m=>m.kind!=="sys").map(m=>m.id);
+ let lks=[];
+ if(ids.length){const {data:l1}=await sb.from("message_likes").select("message_id,user_id").in("message_id",ids);lks=l1||[]}
+ await sb.from("room_members").update({last_read_at:new Date().toISOString()}).eq("room_id",r.id).eq("user_id",me.id); // 既読化
+ const others=(mems||[]).filter(m=>m.user_id!==me.id);
+ let h=`<div style="display:flex;justify-content:space-between;align-items:center"><span class="back" id="backchat" style="margin:0">← チャット</span>
+  <span>${r.type==="group"?`<button class="btn sm sub" id="crenamebtn" style="margin:0 4px 0 0">✏️ 名前</button><button class="btn sm sub" id="cleave" style="margin:0;color:var(--red);border-color:var(--red)">🚪 退会</button>`:""}</span></div>
+ <h2 style="margin-top:8px">${chatRoomTitle(r,(mems||[]).map(x=>({room_id:r.id,user_id:x.user_id})))}</h2>
+ <p class="muted" style="margin-top:-8px;font-size:12px">メンバー: ${(mems||[]).map(m=>esc(taskUserName(m.user_id))).join("、")||"なし"}</p>`;
+ if(chatRename)h+=`<div class="card"><h3>✏️ グループ名を変更</h3><input type="text" id="crname" value="${esc(r.name||"")}"><button class="btn sm" id="crsave">保存</button> <button class="btn sm sub" id="crcancel">キャンセル</button></div>`;
+ if(r.type!=="dm"){
+  h+=chatDescEdit
+   ?`<div class="card" style="background:#fffbea"><h3>📌 概要</h3><textarea rows="3" id="cdesc">${esc(r.description||"")}</textarea><button class="btn sm" id="cdescsave">保存</button> <button class="btn sm sub" id="cdesccancel">キャンセル</button></div>`
+   :`<div class="card" style="background:#fffbea"><h3>📌 概要 <span style="color:var(--blue);cursor:pointer;font-size:12px;font-weight:400" id="cdescedit">✏️ 編集</span></h3><p style="margin:0;white-space:pre-wrap;font-size:13px" class="${r.description?"":"muted"}">${esc(r.description||"未設定（✏️編集から目的や共有事項を書けます）")}</p></div>`;
+ }
+ (msgs||[]).forEach(m=>{
+  if(m.kind==="sys"){h+=`<p class="muted center" style="margin:10px 0;font-size:12px">${esc(m.body)}</p>`;return}
+  const mine=m.sender_id===me.id;
+  const likes=lks.filter(l=>l.message_id===m.id);
+  const liked=likes.some(l=>l.user_id===me.id);
+  const readers=mine?others.filter(x=>x.last_read_at>=m.created_at):[];
+  h+=`<div style="text-align:${mine?"right":"left"};margin:10px 0">
+   <span class="muted" style="font-size:11px">${esc(taskUserName(m.sender_id))}　${fmtDue(m.created_at)}</span><br>
+   <div class="cmt" style="display:inline-block;text-align:left;max-width:85%;margin-top:2px${mine?";background:#dbeafe":""}">${taskFileHtml(m.files)}${m.body?esc(m.body).replace(/\n/g,"<br>"):""}</div><br>
+   <span data-clike="${m.id}" ${liked?'data-liked="1"':""} style="cursor:pointer;font-size:12px;user-select:none">${liked?"❤️":"🤍"}${likes.length||""}</span>${likes.length?`<span class="muted" style="font-size:10px">（${likes.map(l=>esc(taskUserName(l.user_id))).join("、")}）</span>`:""}
+   ${mine&&readers.length?`<span class="muted" style="font-size:10px">　既読${r.type==="dm"?"":" "+readers.length}</span>`:""}</div>`;
+ });
+ const mentionables=(tskUsers||[]).filter(u=>u.id!==me.id&&(mems||[]).some(m=>m.user_id===u.id));
+ h+=`<div class="card"><div id="cfilelist">${taskFileHtml(chatFiles)}</div>
+  <textarea rows="2" id="chatbox" placeholder="メッセージを書く（@でメンション通知）" style="margin-top:0">${esc(chatDraft||"")}</textarea>
+  ${r.type!=="dm"?`<div style="margin-top:4px"><span class="chip" data-mtgt="chatbox" data-mname="全員" style="font-size:11px;padding:2px 8px">@全員</span>${mentionables.map(u=>`<span class="chip" data-mtgt="chatbox" data-mname="${esc(u.name)}" style="font-size:11px;padding:2px 8px">@${esc(u.name)}</span>`).join("")}</div>`:""}
+  <label class="btn sm sub" style="display:inline-block;margin-top:6px">📎 添付<input type="file" id="chatfile" multiple style="display:none"></label>
+  <button class="btn sm" id="chatsend" style="margin-left:6px">送信</button>
+  <p class="muted" style="margin:6px 0 0">個別チャットは相手に通知。グループ・店舗は@メンションで通知されます</p></div>`;
+ return h;
 }
 
 // ===== 一覧 =====
@@ -1023,9 +1157,9 @@ async function settingsView(){
    <button class="btn sm" id="set-join" style="margin-bottom:8px">入社フォームの項目設定</button>
    <button class="btn sm" id="set-fmt">日報・週報の項目設定</button></div>`;
  }
- h+=`<div class="card"><p class="muted">チャット・タスク・多言語表示などは次のバージョンで追加予定です。</p></div>
+ h+=`<div class="card"><p class="muted">ダッシュボード・多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v1.8</p>`;
+  <p class="muted center" style="margin-top:16px">v1.9</p>`;
  return h;
 }
 function settingsJoinView(){
@@ -1143,7 +1277,7 @@ async function resetFmt(){
 }
 
 // ===== イベント =====
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;tskEdit=null;render()});
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];render()});
 function bindPage(){
  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=()=>{page=el.dataset.nav;detail=null;editId=null;render()});
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
@@ -1252,6 +1386,118 @@ function bindPage(){
  document.querySelectorAll("[data-ntfgotask]").forEach(b=>b.onclick=async()=>{ // 通知→タスク画面
   await sb.from("notifications").update({read_at:new Date().toISOString()}).eq("id",b.dataset.ntfgotask);
   page="tasks";tskSeg="open";render();
+ });
+ // v1.9 チャット
+ if(chatTimer){clearInterval(chatTimer);chatTimer=null}
+ if(page==="chat"&&chatRoom){ // 開室中は新着ポーリング
+  const rid=chatRoom,cnt=chatMsgCount;
+  chatTimer=setInterval(async()=>{
+   if(page!=="chat"||chatRoom!==rid){clearInterval(chatTimer);chatTimer=null;return}
+   try{
+    const {count}=await sb.from("messages").select("id",{count:"exact",head:true}).eq("room_id",rid);
+    if(count!=null&&count!==cnt){if($("chatbox"))chatDraft=$("chatbox").value;render()}
+   }catch(e){}
+  },7000);
+ }
+ document.querySelectorAll("[data-croom]").forEach(rw=>rw.onclick=()=>{chatRoom=rw.dataset.croom;chatDraft="";chatFiles=[];chatDescEdit=false;chatRename=false;render()});
+ document.querySelectorAll("[data-cseg]").forEach(d=>d.onclick=()=>{chatSeg=d.dataset.cseg;render()});
+ if($("newdm"))$("newdm").onclick=()=>{chatNew="dm";render()};
+ if($("newgroup"))$("newgroup").onclick=()=>{chatNew="group";chatGm=[];render()};
+ if($("backchatlist"))$("backchatlist").onclick=()=>{chatNew=null;chatGm=[];render()};
+ if($("backchat"))$("backchat").onclick=()=>{chatRoom=null;chatDraft="";chatFiles=[];render()};
+ document.querySelectorAll("[data-cdm]").forEach(rw=>rw.onclick=async()=>{ // 個別チャット開始（既存があれば開く）
+  const peer=rw.dataset.cdm;
+  const key=[me.id,peer].sort().join("|");
+  let {data:ex}=await sb.from("chat_rooms").select("id").eq("dm_key",key).maybeSingle();
+  if(!ex){
+   const rid=crypto.randomUUID(); // RETURNINGはRLSと相性が悪いためID自前生成
+   const {error}=await sb.from("chat_rooms").insert({id:rid,type:"dm",dm_key:key});
+   if(error){
+    const {data:ex2}=await sb.from("chat_rooms").select("id").eq("dm_key",key).maybeSingle(); // 同時作成の場合は再取得
+    if(!ex2){toast("作成エラー: "+error.message,true);return}
+    ex=ex2;
+   }else{
+    await sb.from("room_members").insert([{room_id:rid,user_id:me.id},{room_id:rid,user_id:peer}]);
+    ex={id:rid};
+   }
+  }
+  chatNew=null;chatRoom=ex.id;chatDraft="";chatFiles=[];render();
+ });
+ document.querySelectorAll("[data-cgm]").forEach(c=>c.onclick=()=>{ // グループメンバー選択
+  const id=c.dataset.cgm,i=chatGm.indexOf(id);
+  i>=0?chatGm.splice(i,1):chatGm.push(id);
+  c.classList.toggle("on",i<0);
+ });
+ if($("gcreate"))$("gcreate").onclick=async()=>{
+  const name=$("gname").value.trim();
+  if(!name){toast("グループ名を入力してください",true);return}
+  if(!chatGm.length){toast("メンバーを選択してください",true);return}
+  $("gcreate").disabled=true;
+  const rid=crypto.randomUUID();
+  const {error}=await sb.from("chat_rooms").insert({id:rid,type:"group",name:name.slice(0,100),description:$("gdesc").value.trim()});
+  if(error){toast("作成エラー: "+error.message,true);$("gcreate").disabled=false;return}
+  await sb.from("room_members").insert([{room_id:rid,user_id:me.id},...chatGm.map(u=>({room_id:rid,user_id:u}))]);
+  await sb.from("messages").insert({id:crypto.randomUUID(),room_id:rid,sender_id:me.id,kind:"sys",body:`${me.name}さんがグループ「${name}」を作成しました`});
+  await chatNotify(chatGm,`${me.name}さんがグループ「${name.slice(0,20)}」にあなたを追加しました`,rid);
+  chatGm=[];chatNew=null;chatRoom=rid;chatDraft="";toast("グループを作成しました");render();
+ };
+ if($("crenamebtn"))$("crenamebtn").onclick=()=>{chatRename=!chatRename;render()};
+ if($("crcancel"))$("crcancel").onclick=()=>{chatRename=false;render()};
+ if($("crsave"))$("crsave").onclick=async()=>{
+  const name=$("crname").value.trim();
+  if(!name){toast("名前を入力してください",true);return}
+  const {error}=await sb.from("chat_rooms").update({name:name.slice(0,100)}).eq("id",chatRoom);
+  if(error){toast("保存エラー: "+error.message,true);return}
+  chatRename=false;toast("名前を変更しました");render();
+ };
+ if($("cdescedit"))$("cdescedit").onclick=()=>{chatDescEdit=true;render()};
+ if($("cdesccancel"))$("cdesccancel").onclick=()=>{chatDescEdit=false;render()};
+ if($("cdescsave"))$("cdescsave").onclick=async()=>{
+  const {error}=await sb.from("chat_rooms").update({description:$("cdesc").value.trim()}).eq("id",chatRoom);
+  if(error){toast("保存エラー: "+error.message,true);return}
+  chatDescEdit=false;toast("概要を保存しました");render();
+ };
+ if($("cleave"))$("cleave").onclick=async()=>{
+  if(!confirm("このグループから退会しますか？"))return;
+  await sb.from("messages").insert({id:crypto.randomUUID(),room_id:chatRoom,sender_id:me.id,kind:"sys",body:`${me.name}さんが退会しました`});
+  const {error}=await sb.from("room_members").update({left_at:new Date().toISOString()}).eq("room_id",chatRoom).eq("user_id",me.id);
+  if(error){toast("エラー: "+error.message,true);return}
+  chatRoom=null;toast("退会しました");render();
+ };
+ if($("chatfile"))$("chatfile").onchange=async e=>{
+  const fs=[...e.target.files];if(!fs.length)return;toast("アップロード中...");
+  for(const f of fs){const r=await taskUpload(f,"chat");if(r)chatFiles.push(r)}
+  if($("cfilelist"))$("cfilelist").innerHTML=taskFileHtml(chatFiles);
+  toast("添付しました");
+ };
+ if($("chatsend"))$("chatsend").onclick=async()=>{
+  const body=$("chatbox").value.trim();
+  if(!body&&!chatFiles.length)return;
+  $("chatsend").disabled=true;
+  const {error}=await sb.from("messages").insert({id:crypto.randomUUID(),room_id:chatRoom,sender_id:me.id,body,files:chatFiles});
+  if(error){toast("送信エラー: "+error.message,true);$("chatsend").disabled=false;return}
+  try{ // 通知: DM=相手全員／グループ・店舗=@メンションのみ
+   const {data:mm}=await sb.from("room_members").select("user_id").eq("room_id",chatRoom).is("left_at",null);
+   const others=(mm||[]).map(x=>x.user_id).filter(x=>x!==me.id);
+   const {data:rr}=await sb.from("chat_rooms").select("type,name").eq("id",chatRoom).maybeSingle();
+   let recips=[];
+   if(rr&&rr.type==="dm")recips=others;
+   else if(body.includes("@全員"))recips=others;
+   else recips=others.filter(x=>{const u=(tskUsers||[]).find(y=>y.id===x);return u&&body.includes("@"+u.name)});
+   if(recips.length)await chatNotify(recips,rr&&rr.type==="dm"?`${me.name}さんからメッセージが届きました`:`「${(rr&&rr.name||"チャット").slice(0,20)}」で${me.name}さんからメンションされました`,chatRoom);
+  }catch(e){}
+  chatFiles=[];chatDraft="";render();
+ };
+ document.querySelectorAll("[data-clike]").forEach(s=>s.onclick=async()=>{ // いいねトグル
+  const id=s.dataset.clike;
+  if(s.dataset.liked)await sb.from("message_likes").delete().eq("message_id",id).eq("user_id",me.id);
+  else await sb.from("message_likes").insert({message_id:id,user_id:me.id});
+  if($("chatbox"))chatDraft=$("chatbox").value;
+  render();
+ });
+ document.querySelectorAll("[data-ntfgoroom]").forEach(b=>b.onclick=async()=>{ // 通知→チャットルーム
+  await sb.from("notifications").update({read_at:new Date().toISOString()}).eq("id",b.dataset.nid);
+  page="chat";chatRoom=b.dataset.ntfgoroom;chatNew=null;chatDraft="";render();
  });
  // 管理画面
  if($("adnew"))$("adnew").onclick=()=>{adminMode="new";nuRole=null;nuStores=[];lastIssued=null;render()};

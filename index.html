@@ -79,6 +79,7 @@
   <button data-p="home"><i>🏠</i>ホーム<span class="ndot" id="homedot" style="display:none"></span></button>
   <button data-p="write"><i>✏️</i>日報</button>
   <button data-p="list"><i>📋</i>一覧</button>
+  <button data-p="tasks"><i>✅</i>タスク<span class="ndot" id="taskdot" style="display:none"></span></button>
   <button data-p="admin" id="navadmin" style="display:none"><i>👥</i>管理<span class="ndot" id="admdot" style="display:none"></span></button>
   <button data-p="settings"><i>⚙️</i>設定</button>
 </nav>
@@ -150,6 +151,7 @@ let appSettings={},setMode="main",fmtRole="AL",cfgJoin=null,cfgFmts=null,joinCfg
 let searchQ="",fRole="",fStore="";                       // v1.7 検索
 let joinPhotos={},joinSmStaffs=null,joinInfoCur=null;    // v1.7 入社フォーム写真＋スマレジ選択
 let smStaffsCache=null,smSel=null,smRole=null,smStores=[],smResult=null; // v1.7 スマレジ連携招待
+let tskSeg="open",tskEdit=null,tskFiles=[],tskCmtFiles={},tskUsers=null; // v1.8 タスク
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
@@ -367,6 +369,8 @@ async function updateDots(){ // v1.7 未読通知バッジ（ホーム=自分宛
   const others=(ns||[]).length-joins;
   const set=(el,n)=>{if(!el)return;if(n>0){el.textContent=n>99?"99+":n;el.style.display=""}else el.style.display="none"};
   set($("homedot"),others);set($("admdot"),joins);
+  const {count:tn}=await sb.from("tasks").select("id",{count:"exact",head:true}).eq("assignee_id",me.id).eq("status","open"); // v1.8 自分担当の未完了タスク
+  set($("taskdot"),tn||0);
  }catch(e){}
 }
 async function loadMe(uid){
@@ -433,6 +437,7 @@ async function render(){
  else if(page==="write")body=await writeView("daily");
  else if(page==="weekly")body=await writeView("weekly");
  else if(page==="list")body=detail?await detailView():await listView();
+ else if(page==="tasks")body=await tasksView();
  else if(page==="admin")body=await adminView();
  else if(page==="settings")body=await settingsView();
  $("app").innerHTML=`<header><b>日報・週報システム</b><span style="font-size:12px">${esc(me.name)}（${ROLE_NAME[me.role]||""}）</span></header><main>${body}</main>`;
@@ -455,8 +460,9 @@ async function homeView(){
  if(me.stores.length)h+=`<p class="muted" style="margin-top:-8px">所属: ${me.stores.map(s=>esc(s.name)).join("・")}</p>`;
  (myNtf||[]).forEach(n=>{ // v1.7 自分宛の通知
   const rid=n.link&&n.link.report_id;
+  const tid=!rid&&n.link&&n.link.task_id; // v1.8 タスク通知
   h+=`<div class="info" style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
-   <span ${rid?`data-ntfgo="${esc(rid)}" data-nid="${n.id}" style="cursor:pointer"`:""}>🔔 ${esc((n.body_i18n&&n.body_i18n.ja)||"")}${rid?' <span class="muted">→タップで開く</span>':""}<br><span class="muted">${new Date(n.created_at).toLocaleString("ja-JP")}</span></span>
+   <span ${rid?`data-ntfgo="${esc(rid)}" data-nid="${n.id}" style="cursor:pointer"`:tid?`data-ntfgotask="${n.id}" style="cursor:pointer"`:""}>🔔 ${esc((n.body_i18n&&n.body_i18n.ja)||"")}${(rid||tid)?' <span class="muted">→タップで開く</span>':""}<br><span class="muted">${new Date(n.created_at).toLocaleString("ja-JP")}</span></span>
    <button class="btn sm sub" data-ntfread="${n.id}" style="flex-shrink:0">既読</button></div>`;
  });
  if(me.role!=="CEO"&&FORMATS[me.role]){
@@ -570,6 +576,95 @@ async function saveDraft(){
  collectForm();
  await sb.from("report_drafts").upsert({user_id:me.id,kind:writeKind,answers:form,updated_at:new Date().toISOString()});
  toast("一時保存しました");
+}
+
+// ===== v1.8 タスク =====
+async function taskUpload(f){ // 添付ファイルをStorageへ → {url,name,type}
+ const ext=((f.name.split(".").pop()||"dat").toLowerCase().replace(/[^a-z0-9]/g,""))||"dat";
+ const path="tasks/"+me.id+"/"+Date.now()+"_"+Math.random().toString(36).slice(2,8)+"."+ext;
+ const {error}=await sb.storage.from("report-photos").upload(path,f,{contentType:f.type||"application/octet-stream"});
+ if(error){toast("アップロードエラー: "+error.message,true);return null}
+ const {data}=sb.storage.from("report-photos").getPublicUrl(path);
+ return {url:data.publicUrl,name:f.name,type:f.type||""};
+}
+function taskFileHtml(fl){
+ return (fl||[]).map(f=>(f.type||"").startsWith("image/")
+  ?`<a href="${esc(f.url)}" target="_blank"><img src="${esc(f.url)}" style="max-width:120px;max-height:120px;border-radius:8px;margin:4px 4px 0 0;vertical-align:top"></a>`
+  :`<a href="${esc(f.url)}" target="_blank" style="display:inline-block;margin:4px 6px 0 0;font-size:13px">📎 ${esc(f.name||"ファイル")}</a>`).join("");
+}
+const fmtDue=d=>{if(!d)return"";const t=new Date(d);return (t.getMonth()+1)+"/"+t.getDate()+" "+String(t.getHours()).padStart(2,"0")+":"+String(t.getMinutes()).padStart(2,"0")};
+function taskUserName(id){const u=(tskUsers||[]).find(x=>x.id===id);return u?u.name:"未定"}
+async function tasksView(){
+ const [{data:ts,error},{data:us}]=await Promise.all([
+  sb.from("tasks").select("*").order("created_at",{ascending:false}).limit(300),
+  tskUsers?Promise.resolve({data:tskUsers}):sb.from("users").select("id,name,role").eq("is_active",true).order("name")
+ ]);
+ if(error)return `<h2>タスク</h2><div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
+ tskUsers=us||[];
+ const ids=(ts||[]).map(t=>t.id);
+ let cmts=[];
+ if(ids.length){const {data:cs}=await sb.from("task_comments").select("*").in("task_id",ids).order("created_at");cmts=cs||[]}
+ const open=(ts||[]).filter(t=>t.status==="open").sort((a,b)=>(a.due_at||"9999")<(b.due_at||"9999")?-1:1);
+ const done=(ts||[]).filter(t=>t.status==="done");
+ const now=new Date().toISOString();
+ let h=`<h2>タスク</h2>`;
+ // 作成カード
+ h+=`<div class="card"><h3>➕ タスクを作成</h3>
+  <textarea id="ntask" rows="2" placeholder="タスク内容"></textarea>
+  <select class="inp" id="nassign"><option value="">担当: 未定</option>${tskUsers.map(u=>`<option value="${u.id}">${esc(u.name)}（${ROLE_NAME[u.role]||""}）</option>`).join("")}</select>
+  <input type="datetime-local" class="inp" id="ndue" style="margin-top:8px">
+  <div id="ntfilelist" style="margin-top:4px">${taskFileHtml(tskFiles)}</div>
+  <label class="btn sm sub" style="display:inline-block;margin-top:8px">📎 添付<input type="file" id="ntfile" multiple style="display:none"></label>
+  <button class="btn" id="ntaskbtn">作成する</button></div>`;
+ // セグメント
+ h+=`<div class="seg"><div class="${tskSeg==="open"?"on":""}" data-tseg="open">未完了 ${open.length}</div><div class="${tskSeg==="done"?"on":""}" data-tseg="done">完了 ${done.length}</div></div>`;
+ const list=tskSeg==="open"?open:done;
+ if(!list.length)h+=`<p class="muted center" style="margin-top:16px">${tskSeg==="open"?"未完了のタスクはありません":"完了したタスクはありません"}</p>`;
+ for(const k of list){
+  const overdue=k.status==="open"&&k.due_at&&k.due_at<now;
+  const canEdit=k.status==="open"&&(k.created_by===me.id||k.assignee_id===me.id||me.role==="CEO"||me.role==="TEAM");
+  const kc=cmts.filter(c=>c.task_id===k.id);
+  h+=`<div class="card" ${overdue?'style="border:1px solid #c62828"':""}>
+   <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+    <b style="font-size:14px;flex:1">${k.is_auto?"📝 ":""}${esc(k.title)}</b>
+    ${k.status==="open"?`<button class="btn sm" data-tdone="${k.id}" style="flex-shrink:0">完了</button>`:`<button class="btn sm sub" data-tundone="${k.id}" style="flex-shrink:0">戻す</button>`}
+   </div>
+   <p class="muted" style="margin:6px 0 0;font-size:12px">担当: ${esc(taskUserName(k.assignee_id))} ／ 期日: ${k.due_at?`<span ${overdue?'style="color:#c62828;font-weight:bold"':""}>${fmtDue(k.due_at)}${overdue?" ⚠️期限切れ":""}</span>`:"未定"} ／ 作成: ${esc(taskUserName(k.created_by))}${k.done_at?` ／ 完了: ${fmtDue(k.done_at)}`:""}</p>
+   ${taskFileHtml(k.files)}
+   ${canEdit?(tskEdit===k.id
+    ?`<div style="margin-top:8px;background:#f6f8fa;border-radius:8px;padding:10px">
+      <select class="inp" id="te_assign">${`<option value="">担当: 未定</option>`+tskUsers.map(u=>`<option value="${u.id}" ${k.assignee_id===u.id?"selected":""}>${esc(u.name)}</option>`).join("")}</select>
+      <input type="datetime-local" class="inp" id="te_due" style="margin-top:8px" value="${k.due_at?new Date(new Date(k.due_at).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):""}">
+      <button class="btn sm" data-tesave="${k.id}">保存</button> <button class="btn sm sub" id="tecancel">キャンセル</button></div>`
+    :`<button class="btn sm sub" data-tedit="${k.id}" style="margin-top:8px">担当・期日を変更</button>`):""}
+   ${kc.map(c=>`<div class="cmt"><b>${esc(taskUserName(c.author_id))}</b> <span class="muted" style="font-size:11px">${new Date(c.created_at).toLocaleString("ja-JP")}</span><br>${esc(c.body)}${taskFileHtml(c.files)}</div>`).join("")}
+   <div style="margin-top:8px">
+    ${(()=>{const ms=tskUsers.filter(u=>u.id!==me.id&&(u.role==="CEO"||u.role==="TEAM"||u.id===k.created_by||u.id===k.assignee_id));
+      return ms.length?`<div style="margin-bottom:4px">${ms.map(u=>`<span class="chip" data-mtgt="tc_${k.id}" data-mname="${esc(u.name)}" style="font-size:11px;padding:2px 8px">@${esc(u.name)}</span>`).join("")}</div>`:""})()}
+    <div id="tcf_${k.id}">${taskFileHtml(tskCmtFiles[k.id])}</div>
+    <div style="display:flex;gap:6px;align-items:flex-end">
+     <textarea id="tc_${k.id}" rows="1" placeholder="コメント" style="flex:1;margin-top:0"></textarea>
+     <label class="btn sm sub" style="flex-shrink:0">📎<input type="file" data-tcf="${k.id}" multiple style="display:none"></label>
+     <button class="btn sm" data-tcmt="${k.id}" style="flex-shrink:0">送信</button>
+    </div></div></div>`;
+ }
+ return h;
+}
+async function taskNotify(recips,type,bodyJa,taskId){ // 通知（自分除外・重複排除）
+ const uniq=[...new Set(recips.filter(r=>r&&r!==me.id))];
+ if(!uniq.length)return;
+ try{await sb.from("notifications").insert(uniq.map(r=>({recipient_id:r,actor_id:me.id,type,body_i18n:{ja:bodyJa},link:{task_id:taskId}})));}catch(e){}
+}
+async function createTask(){
+ const title=$("ntask").value.trim();
+ if(!title){toast("タスク内容を入力してください",true);return}
+ $("ntaskbtn").disabled=true;
+ const assignee=$("nassign").value||null;
+ const due=$("ndue").value?new Date($("ndue").value).toISOString():null;
+ const {data:t,error}=await sb.from("tasks").insert({title:title.slice(0,500),created_by:me.id,assignee_id:assignee,due_at:due,files:tskFiles}).select().single();
+ if(error){toast("作成エラー: "+error.message,true);$("ntaskbtn").disabled=false;return}
+ if(assignee)await taskNotify([assignee],"task_assigned",`${me.name}さんからタスク「${title.slice(0,30)}」の担当になりました`,t.id);
+ tskFiles=[];toast("タスクを作成しました");render();
 }
 
 // ===== 一覧 =====
@@ -929,7 +1024,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">チャット・タスク・多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v1.7.1</p>`;
+  <p class="muted center" style="margin-top:16px">v1.8</p>`;
  return h;
 }
 function settingsJoinView(){
@@ -1047,7 +1142,7 @@ async function resetFmt(){
 }
 
 // ===== イベント =====
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;render()});
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;tskEdit=null;render()});
 function bindPage(){
  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=()=>{page=el.dataset.nav;detail=null;editId=null;render()});
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
@@ -1090,6 +1185,73 @@ function bindPage(){
   if(error)toast("送信できませんでした: "+error.message,true);
   render();
  };
+ // v1.8 タスク
+ document.querySelectorAll("[data-tseg]").forEach(d=>d.onclick=()=>{tskSeg=d.dataset.tseg;tskEdit=null;render()});
+ if($("ntaskbtn"))$("ntaskbtn").onclick=createTask;
+ if($("ntfile"))$("ntfile").onchange=async e=>{
+  const fs=[...e.target.files];if(!fs.length)return;toast("アップロード中...");
+  for(const f of fs){const r=await taskUpload(f);if(r)tskFiles.push(r)}
+  render();
+ };
+ document.querySelectorAll("[data-tedit]").forEach(b=>b.onclick=()=>{tskEdit=b.dataset.tedit;render()});
+ if($("tecancel"))$("tecancel").onclick=()=>{tskEdit=null;render()};
+ document.querySelectorAll("[data-tesave]").forEach(b=>b.onclick=async()=>{
+  b.disabled=true;
+  const id=b.dataset.tesave;
+  const assignee=$("te_assign").value||null;
+  const due=$("te_due").value?new Date($("te_due").value).toISOString():null;
+  const {data:old}=await sb.from("tasks").select("assignee_id,title").eq("id",id).single();
+  const {error}=await sb.from("tasks").update({assignee_id:assignee,due_at:due,updated_at:new Date().toISOString()}).eq("id",id);
+  if(error){toast("保存エラー: "+error.message,true);return}
+  if(assignee&&(!old||old.assignee_id!==assignee))await taskNotify([assignee],"task_assigned",`${me.name}さんからタスク「${(old&&old.title||"").slice(0,30)}」の担当になりました`,id);
+  tskEdit=null;toast("保存しました");render();
+ });
+ document.querySelectorAll("[data-tdone]").forEach(b=>b.onclick=async()=>{
+  b.disabled=true;
+  const id=b.dataset.tdone;
+  const {data:t}=await sb.from("tasks").select("created_by,assignee_id,title").eq("id",id).single();
+  const {error}=await sb.from("tasks").update({status:"done",done_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq("id",id);
+  if(error){toast("エラー: "+error.message,true);return}
+  if(t)await taskNotify([t.created_by,t.assignee_id],"task_done",`${me.name}さんがタスク「${(t.title||"").slice(0,30)}」を完了しました`,id);
+  toast("完了しました 🎉");render();
+ });
+ document.querySelectorAll("[data-tundone]").forEach(b=>b.onclick=async()=>{
+  b.disabled=true;
+  const {error}=await sb.from("tasks").update({status:"open",done_at:null,updated_at:new Date().toISOString()}).eq("id",b.dataset.tundone);
+  if(error){toast("エラー: "+error.message,true);return}
+  toast("未完了に戻しました");render();
+ });
+ document.querySelectorAll("[data-mtgt]").forEach(c=>c.onclick=()=>{ // @メンションチップ
+  const ta=$(c.dataset.mtgt);if(!ta)return;
+  ta.value=(ta.value?ta.value+" ":"")+"@"+c.dataset.mname+" ";ta.focus();
+ });
+ document.querySelectorAll("input[data-tcf]").forEach(inp=>inp.onchange=async e=>{ // コメント添付
+  const id=inp.dataset.tcf;const fs=[...e.target.files];if(!fs.length)return;toast("アップロード中...");
+  tskCmtFiles[id]=tskCmtFiles[id]||[];
+  for(const f of fs){const r=await taskUpload(f);if(r)tskCmtFiles[id].push(r)}
+  const w=$("tcf_"+id);if(w)w.innerHTML=taskFileHtml(tskCmtFiles[id]);
+  toast("添付しました");
+ });
+ document.querySelectorAll("[data-tcmt]").forEach(b=>b.onclick=async()=>{ // コメント送信
+  const id=b.dataset.tcmt;
+  const ta=$("tc_"+id);const body=ta?ta.value.trim():"";
+  const fls=tskCmtFiles[id]||[];
+  if(!body&&!fls.length)return;
+  b.disabled=true;
+  const {error}=await sb.from("task_comments").insert({task_id:id,author_id:me.id,body:body||"（添付）",files:fls});
+  if(error){toast("送信エラー: "+error.message,true);b.disabled=false;return}
+  const {data:t}=await sb.from("tasks").select("created_by,assignee_id,title").eq("id",id).single();
+  if(t){
+   const recips=[t.created_by,t.assignee_id];
+   (tskUsers||[]).forEach(u=>{if(body.includes("@"+u.name))recips.push(u.id)}); // メンション先も通知
+   await taskNotify(recips,"task_comment",`${me.name}さんがタスク「${(t.title||"").slice(0,30)}」にコメントしました`,id);
+  }
+  delete tskCmtFiles[id];render();
+ });
+ document.querySelectorAll("[data-ntfgotask]").forEach(b=>b.onclick=async()=>{ // 通知→タスク画面
+  await sb.from("notifications").update({read_at:new Date().toISOString()}).eq("id",b.dataset.ntfgotask);
+  page="tasks";tskSeg="open";render();
+ });
  // 管理画面
  if($("adnew"))$("adnew").onclick=()=>{adminMode="new";nuRole=null;nuStores=[];lastIssued=null;render()};
  if($("adinvite"))$("adinvite").onclick=()=>{adminMode="invite";ivRole=null;ivStores=[];lastInvite=null;lastIssued=null;render()};

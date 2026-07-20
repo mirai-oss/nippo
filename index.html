@@ -46,6 +46,31 @@
   .spin{padding:40px;text-align:center;color:#8a93a2}
   nav button{position:relative}
   .ndot{position:absolute;top:2px;right:12px;background:var(--red);color:#fff;font-size:10px;min-width:16px;height:16px;line-height:16px;border-radius:8px;padding:0 4px;text-align:center}
+  /* v1.6 入力部品 */
+  .radio-row{display:block;padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin-top:6px;cursor:pointer;font-size:14px}
+  .radio-row input{margin-right:8px}
+  .photo-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .photo-grid .ph{position:relative;width:84px;height:84px;border-radius:8px;overflow:hidden;border:1px solid var(--line);display:block}
+  .photo-grid .ph img{width:100%;height:100%;object-fit:cover}
+  .photo-grid .ph .del{position:absolute;top:2px;right:2px;background:rgba(0,0,0,.55);color:#fff;border-radius:50%;width:20px;height:20px;line-height:20px;text-align:center;font-size:12px;cursor:pointer}
+  .addph{width:84px;height:84px;border:2px dashed #bbb;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#8a93a2;font-size:26px;cursor:pointer}
+  /* v1.6 フォームデザイナー */
+  .fhandle{cursor:grab;color:#8a93a2;font-size:18px;padding:0 6px;user-select:none}
+  .fnum{display:inline-block;background:#eaf3fd;color:var(--blue);border-radius:6px;font-size:12px;padding:2px 8px;font-weight:600}
+  .fcard.dragover{outline:2px solid var(--blue);outline-offset:-2px}
+  /* v1.6 PC 2カラムレイアウト */
+  @media(min-width:900px){
+   body.withnav .app{max-width:940px;margin:0 0 0 calc(max(0px, 50vw - 590px) + 240px);border-left:1px solid var(--line);border-right:1px solid var(--line);padding-bottom:24px}
+   body.withnav nav{top:0;bottom:0;right:auto;left:max(0px, 50vw - 590px);width:240px;max-width:240px;flex-direction:column;justify-content:flex-start;border-top:none;border-right:1px solid var(--line);padding-top:14px}
+   body.withnav nav:before{content:"🐔 鳥一代グループ";display:block;font-weight:700;font-size:15px;color:var(--blue);padding:10px 20px 18px}
+   body.withnav nav button{flex:0 0 auto;display:flex;align-items:center;gap:12px;padding:14px 20px;font-size:15px;text-align:left}
+   body.withnav nav button i{display:inline-block;font-size:20px}
+   body.withnav nav button.on{background:#eaf3fd}
+   body.withnav .ndot{position:static;margin-left:auto}
+   body.withnav main{padding:24px 36px}
+   body.withnav header{padding:14px 36px}
+   .loginwrap{max-width:480px;margin:0 auto}
+  }
 </style>
 </head>
 <body>
@@ -144,9 +169,10 @@ function joinCfg(src){
  const c=src||appSettings.join_form;
  if(!c)return d;
  JOIN_STD.forEach(([k])=>{if(c.fields&&c.fields[k])d.fields[k]={on:!!c.fields[k].on,req:!!c.fields[k].req}});
- d.custom=(c.custom||[]).map(x=>({label:String(x.label||""),req:!!x.req}));
+ d.custom=(c.custom||[]).map(x=>({label:String(x.label||""),req:!!x.req,type:x.type||"text",opts:Array.isArray(x.opts)?x.opts:[]}));
  return d;
 }
+const JC_TYPES={text:"記入式",pull:"プルダウン",radio:"ラジオボタン",multi:"複数選択"};
 
 // ===== 初期化 =====
 const inviteToken=new URLSearchParams(location.search).get("invite");
@@ -160,6 +186,7 @@ async function init(){
 // ===== 入社登録（招待リンクから本人が入力） =====
 async function renderJoin(){
  document.getElementById("nav").style.display="none";
+ document.body.classList.remove("withnav");
  $("app").innerHTML='<div class="spin">読み込み中...</div>';
  const {data:info,error}=await sb.rpc("get_invite_info",{p_token:inviteToken});
  if(error||!info||!info.ok){
@@ -193,7 +220,13 @@ async function renderJoin(){
  if(F.hire.on)h+=`<div class="card"><h3>入社日${mark("hire")}</h3><input type="date" id="j-hire" value="${todayStr()}"></div>`;
  if(cfg.custom.length){
   h+=`<div class="card"><h3>追加項目</h3>`;
-  cfg.custom.forEach((c,i)=>{h+=`<p class="muted" style="margin:8px 0 0">${esc(c.label)}${c.req?' <span class="req">必須</span>':""}</p><input type="text" data-jc="${i}">`});
+  cfg.custom.forEach((c,i)=>{
+   h+=`<p class="muted" style="margin:8px 0 0">${esc(c.label)}${c.req?' <span class="req">必須</span>':""}</p>`;
+   if(c.type==="pull")h+=`<select class="inp" data-jc="${i}"><option value="">選択してください</option>${(c.opts||[]).map(o=>`<option>${esc(o)}</option>`).join("")}</select>`;
+   else if(c.type==="radio")h+=(c.opts||[]).map(o=>`<label class="radio-row"><input type="radio" name="jrd${i}" data-jcr="${i}" value="${esc(o)}">${esc(o)}</label>`).join("");
+   else if(c.type==="multi")h+=`<div>${(c.opts||[]).map(o=>`<span class="chip" data-jmc="${i}" data-o="${esc(o)}">${esc(o)}</span>`).join("")}</div>`;
+   else h+=`<input type="text" data-jc="${i}">`;
+  });
   h+=`</div>`;
  }
  h+=`<button class="btn" id="j-submit">入社登録する</button>
@@ -201,6 +234,7 @@ async function renderJoin(){
  </div>`;
  $("app").innerHTML=h;
  $("j-submit").onclick=doJoin;
+ document.querySelectorAll(".chip[data-jmc]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
 }
 async function doJoin(){
  const val=id=>$(id)?$(id).value.trim():"";
@@ -210,8 +244,11 @@ async function doJoin(){
  const F=joinCfgCur.fields;
  for(const [k,label] of JOIN_STD){if(F[k].on&&F[k].req&&!val("j-"+k)){toast(`「${label}」は必須です`,true);return}}
  const extra={};let missing=null;
- document.querySelectorAll("input[data-jc]").forEach(inp=>{
-  const c=joinCfgCur.custom[+inp.dataset.jc],v=inp.value.trim();
+ joinCfgCur.custom.forEach((c,i)=>{
+  let v="";
+  if(c.type==="radio"){const r=document.querySelector(`input[data-jcr="${i}"]:checked`);v=r?r.value:""}
+  else if(c.type==="multi"){v=[...document.querySelectorAll(`.chip[data-jmc="${i}"].on`)].map(x=>x.dataset.o).join("、")}
+  else{const el=document.querySelector(`[data-jc="${i}"]`);v=el?el.value.trim():""}
   if(c.req&&!v)missing=missing||c.label;
   if(v)extra[c.label]=v;
  });
@@ -286,6 +323,7 @@ async function loadMe(uid){
 // ===== ログイン =====
 function renderLogin(err){
  document.getElementById("nav").style.display="none";
+ document.body.classList.remove("withnav");
  $("app").innerHTML=`<div class="loginwrap">
   <h2 class="center" style="font-size:20px">🐔 鳥一代グループ</h2>
   <p class="center muted">日報・週報システム</p>
@@ -312,6 +350,7 @@ async function doLogin(){
 // ===== 画面描画 =====
 async function render(){
  document.getElementById("nav").style.display="flex";
+ document.body.classList.add("withnav");
  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.p===page||(page==="weekly"&&b.dataset.p==="write")));
  document.getElementById("navadmin").style.display=isAdmin()?"":"none";
  if(isAdmin())updateAdmDot();
@@ -377,6 +416,14 @@ async function writeView(kind){
    h+=f.opts.map(o=>`<span class="chip ${(v||[]).includes(o)?"on":""}" data-fk="${f.k}" data-o="${esc(o)}">${esc(o)}</span>`).join("")+`<p class="muted">全項目タップでチェック</p>`;
   }else if(f.type==="select"){
    h+=`<select class="inp" data-fk2="${f.k}"><option value="">選択してください</option>${stores.map(s=>`<option ${v===s.name?"selected":""}>${esc(s.name)}</option>`).join("")}</select>`;
+  }else if(f.type==="pull"){
+   h+=`<select class="inp" data-fk2="${f.k}"><option value="">選択してください</option>${(f.opts||[]).map(o=>`<option ${v===o?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
+  }else if(f.type==="radio"){
+   h+=(f.opts||[]).map(o=>`<label class="radio-row"><input type="radio" name="rd-${f.k}" data-fkr="${f.k}" value="${esc(o)}" ${v===o?"checked":""}>${esc(o)}</label>`).join("");
+  }else if(f.type==="num"){
+   h+=`<div>${[1,2,3,4,5,6,7,8,9,10].map(n=>`<span class="chip ${v==n?"on":""}" data-fkn="${f.k}" data-n="${n}">${n}</span>`).join("")}</div><p class="muted">点数をタップ（1〜10）</p>`;
+  }else if(f.type==="photo"){
+   h+=`<div class="photo-grid" data-phwrap="${f.k}"></div><p class="muted">＋をタップして写真を選択（複数可）</p>`;
   }
   h+=`</div>`;
  });
@@ -386,6 +433,30 @@ async function writeView(kind){
 function collectForm(){ // DOM→form
  document.querySelectorAll("textarea[data-fk]").forEach(t=>form[t.dataset.fk]=t.value);
  document.querySelectorAll("select[data-fk2]").forEach(s=>form[s.dataset.fk2]=s.value);
+ document.querySelectorAll("input[data-fkr]:checked").forEach(r=>form[r.dataset.fkr]=r.value);
+}
+// 写真グリッド描画＋アップロード（v1.6）
+function renderPhotoGrid(fk){
+ const wrap=document.querySelector(`[data-phwrap="${fk}"]`);if(!wrap)return;
+ const arr=form[fk]||[];
+ wrap.innerHTML=arr.map((u,i)=>`<div class="ph"><img src="${esc(u)}"><span class="del" data-phdel="${fk}" data-i="${i}">✕</span></div>`).join("")+
+  `<label class="addph">＋<input type="file" accept="image/*" data-phadd="${fk}" style="display:none" multiple></label>`;
+ wrap.querySelectorAll("[data-phdel]").forEach(d=>d.onclick=()=>{
+  form[fk]=(form[fk]||[]).filter((_,x)=>x!==+d.dataset.i);renderPhotoGrid(fk);
+ });
+ wrap.querySelector("input[data-phadd]").onchange=async e=>{
+  const files=[...e.target.files];if(!files.length)return;
+  toast("アップロード中...");
+  for(const f of files){
+   const ext=((f.name.split(".").pop()||"jpg").toLowerCase().replace(/[^a-z0-9]/g,""))||"jpg";
+   const path=me.id+"/"+todayStr().replace(/-/g,"")+"_"+Math.random().toString(36).slice(2,10)+"."+ext;
+   const {error}=await sb.storage.from("report-photos").upload(path,f,{contentType:f.type||"image/jpeg"});
+   if(error){toast("アップロードエラー: "+error.message,true);return}
+   const {data}=sb.storage.from("report-photos").getPublicUrl(path);
+   form[fk]=(form[fk]||[]).concat([data.publicUrl]);
+  }
+  toast("写真を追加しました");renderPhotoGrid(fk);
+ };
 }
 async function submitReport(){
  collectForm();
@@ -452,7 +523,11 @@ async function detailView(){
   if(seen[f.k])return;seen[f.k]=1;
   const v=r.answers[f.k];
   if(v==null||v===""||(Array.isArray(v)&&!v.length))return;
-  let disp=Array.isArray(v)?v.join("、"):(f.type==="stars"?"★".repeat(v)+"☆".repeat(5-v):String(v));
+  if(f.type==="photo"&&Array.isArray(v)){
+   h+=`<div class="card"><h3>${esc(f.label)}</h3><div class="photo-grid">${v.map(u=>`<a class="ph" href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}"></a>`).join("")}</div></div>`;
+   return;
+  }
+  let disp=Array.isArray(v)?v.join("、"):(f.type==="stars"?"★".repeat(v)+"☆".repeat(5-v):f.type==="num"?v+"点／10点":String(v));
   h+=`<div class="card"><h3>${esc(f.label)}</h3><div style="font-size:14px;white-space:pre-wrap">${esc(disp)}</div></div>`;
  });
  h+=`<div class="card"><button class="btn sm ${liked?"":"sub"}" id="likebtn">❤️ いいね ${(likes||[]).length}</button>
@@ -479,6 +554,7 @@ async function adminView(){
  if(adminMode==="edit")return await adminEditView();
  if(adminMode==="invite")return await adminInviteView();
  if(adminMode==="smaregi")return await adminSmaregiView();
+ if(adminMode==="stores")return await adminStoresView();
  const [{data:us,error},{data:uss},{data:ntfs}]=await Promise.all([
   sb.from("users").select("*"),
   sb.from("user_stores").select("user_id,store_id"),
@@ -496,11 +572,79 @@ async function adminView(){
  h+=`<button class="btn" id="adinvite">🔗 招待リンクを発行（入社者が自分で登録）</button>
   <button class="btn sub" id="adnew">＋ 入社処理（本部が代理で発行）</button>
   <button class="btn sub" id="adsmaregi">📇 スマレジ登録スタッフ一覧</button>
+  <button class="btn sub" id="adstores">🏪 店舗管理（追加・並び替え・スマレジ紐付け）</button>
   <p class="muted">${adminUsers.length}名（タップで役職・所属の変更）</p>`;
  adminUsers.forEach(u=>{
   h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">無効</span>'}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}</span></span><span class="muted">›</span></div>`;
  });
  return h;
+}
+
+// ===== 店舗マスタ管理（v1.6） =====
+let stList=null,stSmaregi;
+async function smaregiStores(){ // スマレジ店舗一覧（紐付け用）
+ try{
+  const {data:{session}}=await sb.auth.getSession();
+  const res=await fetch(SUPA_URL+"/functions/v1/smaregi-sync",{
+   method:"POST",
+   headers:{Authorization:"Bearer "+(session?session.access_token:SUPA_KEY),apikey:SUPA_KEY,"Content-Type":"application/json"},
+   body:JSON.stringify({action:"test"})});
+  const r=await res.json();
+  if(!r||!r.ok)return null;
+  const arr=Array.isArray(r.stores)?r.stores:((r.stores&&r.stores.stores)||[]);
+  return arr.map(s=>({id:String(s.storeId??s.id??""),name:String(s.storeName??s.name??"")})).filter(s=>s.id);
+ }catch(e){return null}
+}
+async function adminStoresView(){
+ if(!stList){
+  const {data}=await sb.from("stores").select("*").order("sort_order");
+  stList=(data||[]).map(s=>({id:s.id,name:s.name,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||""}));
+ }
+ if(stSmaregi===undefined)stSmaregi=await smaregiStores();
+ let h=`<span class="back" id="adback">← 従業員一覧</span><h2>店舗管理</h2>
+ <p class="muted" style="margin-top:-8px;font-size:13px">店舗の追加・名前変更・並び替えができます。閉店した店舗は「非表示」に（過去の日報データは残ります）。スマレジ店舗と紐付けておくと、今後の売上ダッシュボード連携の土台になります。</p>`;
+ h+=stList.map((s,i)=>`<div class="card" style="padding:12px">
+  <div style="display:flex;gap:8px;align-items:center">
+   <span class="fnum">${i+1}</span>
+   <input type="text" data-stname="${i}" value="${esc(s.name)}" style="flex:1;margin:0">
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+   <span class="chip st-act ${s.is_active?"on":""}" data-i="${i}">${s.is_active?"営業中":"非表示"}</span>
+   <span class="chip" data-stup="${i}">↑</span><span class="chip" data-stdn="${i}">↓</span>
+  </div>
+  ${stSmaregi?`<select class="inp" data-stsm="${i}" style="font-size:13px"><option value="">スマレジ店舗と紐付けない</option>${stSmaregi.map(m=>`<option value="${esc(m.id)}" ${s.smaregi_store_id===m.id?"selected":""}>スマレジ: ${esc(m.name)}</option>`).join("")}</select>`:`<p class="muted" style="margin:8px 0 0">スマレジ店舗一覧を取得できませんでした（紐付けは後で設定できます）</p>`}
+ </div>`).join("");
+ h+=`<div class="card"><h3>＋ 店舗を追加</h3><input type="text" id="st-newname" placeholder="店舗名（例: 鳥一代 渋谷店）"><button class="btn sm" id="st-add">追加する</button><p class="muted">追加すると店舗チャットも自動で作成されます</p></div>
+ <button class="btn" id="st-save">この内容で保存する</button>`;
+ return h;
+}
+function collectStoresDom(){
+ document.querySelectorAll("input[data-stname]").forEach(inp=>stList[+inp.dataset.stname].name=inp.value.trim());
+ document.querySelectorAll(".chip.st-act").forEach(c=>stList[+c.dataset.i].is_active=c.classList.contains("on"));
+ document.querySelectorAll("select[data-stsm]").forEach(s=>stList[+s.dataset.stsm].smaregi_store_id=s.value);
+}
+async function addStore(){
+ const name=$("st-newname").value.trim();
+ if(!name){toast("店舗名を入力してください",true);return}
+ collectStoresDom();
+ $("st-add").disabled=true;
+ const {data:ns,error}=await sb.from("stores").insert({name,sort_order:stList.length+1}).select().single();
+ if(error){toast("追加エラー: "+(error.message.includes("duplicate")?"同じ名前の店舗がすでにあります":error.message),true);$("st-add").disabled=false;return}
+ stList.push({id:ns.id,name:ns.name,is_active:true,smaregi_store_id:""});
+ toast("店舗を追加しました（チャットも自動作成）");render();
+}
+async function saveStores(){
+ collectStoresDom();
+ if(stList.some(s=>!s.name)){toast("店舗名を入力してください",true);return}
+ $("st-save").disabled=true;
+ for(const [i,s] of stList.entries()){
+  const {error}=await sb.from("stores").update({name:s.name,sort_order:i+1,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||null}).eq("id",s.id);
+  if(error){toast("保存エラー: "+error.message,true);$("st-save").disabled=false;return}
+ }
+ const {data:st2}=await sb.from("stores").select("id,name").eq("is_active",true).order("sort_order");
+ if(st2)stores=st2;
+ toast("店舗を保存しました");
+ stList=null;adminMode="list";render();
 }
 
 async function adminSmaregiView(){
@@ -527,7 +671,7 @@ async function adminInviteView(){
  const {data:ivs}=await sb.from("invitations").select("*").is("used_at",null).gt("expires_at",new Date().toISOString()).order("created_at",{ascending:false});
  const inviteUrl=t=>location.origin+location.pathname+"?invite="+t;
  let h=`<span class="back" id="adback">← 従業員一覧</span><h2>招待リンク発行</h2>
- <p class="muted" style="margin-top:-8px">リンクを入社する本人に送ると、本人がアカウント作成＋入社情報の入力を行います。</p>`;
+ <p class="muted" style="margin-top:-8px">リンクを入社する本人に送ると、本人がアカウント作成＋入社情報の入力を行えます。</p>`;
  if(lastInvite){h+=`<div class="info">✅ 招待リンクを発行しました。<br>
   <input type="text" id="iv-url" value="${esc(inviteUrl(lastInvite))}" readonly style="font-size:12px">
   <button class="btn sm" id="iv-copy">📋 リンクをコピー</button><br>
@@ -645,7 +789,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">チャット・タスク・多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v1.5</p>`;
+  <p class="muted center" style="margin-top:16px">v1.6</p>`;
  return h;
 }
 function settingsJoinView(){
@@ -660,10 +804,15 @@ function settingsJoinView(){
    <span class="chip jf-req ${f.req?"on":""}" data-k="${k}">必須</span></div>`;
  }).join("")+`</div>`;
  h+=`<div class="card"><h3>自由項目（追加の質問）</h3>`+cfg.custom.map((c,i)=>
-  `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-   <input type="text" data-jclabel="${i}" value="${esc(c.label)}" placeholder="質問名（例: 制服サイズ）" style="flex:1;margin:0">
-   <span class="chip jc-req ${c.req?"on":""}" data-i="${i}">必須</span>
-   <span class="chip" data-jcdel="${i}" style="color:var(--red)">削除</span></div>`).join("")+
+  `<div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px">
+   <div style="display:flex;align-items:center;gap:8px">
+    <input type="text" data-jclabel="${i}" value="${esc(c.label)}" placeholder="質問名（例: 制服サイズ）" style="flex:1;margin:0">
+    <span class="chip jc-req ${c.req?"on":""}" data-i="${i}">必須</span>
+    <span class="chip" data-jcdel="${i}" style="color:var(--red)">削除</span></div>
+   <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+    <select class="inp" data-jctype="${i}" style="width:auto;margin:0">${Object.entries(JC_TYPES).map(([t,n])=>`<option value="${t}" ${(c.type||"text")===t?"selected":""}>${n}</option>`).join("")}</select>
+    <input type="text" data-jcopts="${i}" value="${esc((c.opts||[]).join("、"))}" placeholder="選択肢（「、」区切り）" style="flex:1;margin:0;font-size:13px;display:${(c.type||"text")==="text"?"none":""}">
+   </div></div>`).join("")+
   `<button class="btn sm sub" id="jc-add">＋ 項目を追加</button></div>
   <button class="btn" id="jf-save">保存する</button>`;
  return h;
@@ -673,10 +822,17 @@ function collectJoinDom(){
  document.querySelectorAll(".chip.jf-req").forEach(c=>cfgJoin.fields[c.dataset.k].req=c.classList.contains("on"));
  document.querySelectorAll("input[data-jclabel]").forEach(inp=>cfgJoin.custom[+inp.dataset.jclabel].label=inp.value.trim());
  document.querySelectorAll(".chip.jc-req").forEach(c=>cfgJoin.custom[+c.dataset.i].req=c.classList.contains("on"));
+ document.querySelectorAll("select[data-jctype]").forEach(s=>cfgJoin.custom[+s.dataset.jctype].type=s.value);
+ document.querySelectorAll("input[data-jcopts]").forEach(inp=>{
+  const v=inp.value.trim();cfgJoin.custom[+inp.dataset.jcopts].opts=v?v.split(/[、,]/).map(x=>x.trim()).filter(Boolean):[];
+ });
 }
 async function saveJoin(){
  collectJoinDom();
  cfgJoin.custom=cfgJoin.custom.filter(c=>c.label);
+ for(const c of cfgJoin.custom){
+  if(c.type!=="text"&&(!c.opts||!c.opts.length)){toast(`「${c.label}」に選択肢を入力してください（「、」区切り）`,true);return}
+ }
  JOIN_STD.forEach(([k])=>{if(cfgJoin.fields[k].req)cfgJoin.fields[k].on=true});
  $("jf-save").disabled=true;
  const {error}=await sb.from("app_settings").upsert({key:"join_form",value:cfgJoin,updated_at:new Date().toISOString(),updated_by:me.id});
@@ -685,7 +841,8 @@ async function saveJoin(){
  toast("保存しました。新しい招待リンクから反映されます");
  setMode="main";render();
 }
-const TYPE_NAMES={text:"自由記述",stars:"★5段階",multi:"複数選択",select2:"単一選択",check:"チェックリスト",select:"店舗選択",task:"報告（タスク化）"};
+const TYPE_NAMES={text:"記入式（自由記述）",stars:"★5段階",num:"評価点数（1〜10）",select2:"単一選択（ボタン）",radio:"ラジオボタン",pull:"プルダウン",multi:"複数選択",check:"チェックリスト",photo:"写真添付",select:"店舗選択",task:"報告（タスク化）"};
+const OPT_TYPES=["multi","select2","check","radio","pull"];
 function curFmtList(){
  if(!cfgFmts[fmtRole])cfgFmts[fmtRole]=JSON.parse(JSON.stringify(fmtRole==="WEEKLY"?WEEKLY_FMT:(FORMATS[fmtRole]||[])));
  return cfgFmts[fmtRole];
@@ -695,16 +852,19 @@ function settingsFmtView(){
  let h=`<span class="back" id="setback">← 設定</span><h2>日報・週報の項目設定</h2>
   <div class="card" style="padding:12px">${["AL","SHAIN","TENCHO","TEAM","HQ","WEEKLY"].map(r=>
    `<span class="chip fmtrole ${fmtRole===r?"on":""}" data-r="${r}">${r==="WEEKLY"?"週報（共通）":ROLE_NAME[r]}</span>`).join("")}</div>`;
- h+=list.map((f,i)=>`<div class="card" style="padding:12px">
-  <div style="display:flex;gap:8px;margin-bottom:8px">
-   <input type="text" data-flabel="${i}" value="${esc(f.label)}" placeholder="項目名" style="flex:1;margin:0">
+ h+=`<p class="muted" style="font-size:12px">⠿ をドラッグ、または ↑↓ で並び替えできます。</p>`;
+ h+=list.map((f,i)=>`<div class="card fcard" data-fi="${i}" style="padding:12px">
+  <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
+   <span class="fhandle" draggable="true" data-fi="${i}" title="ドラッグで並び替え">⠿</span>
+   <span class="fnum">${i+1}</span>
+   <input type="text" data-flabel="${i}" value="${esc(f.label)}" placeholder="項目名（質問文）" style="flex:1;margin:0">
   </div>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
    <select class="inp" data-ftype="${i}" style="width:auto;margin:0">${Object.entries(TYPE_NAMES).map(([t,n])=>`<option value="${t}" ${f.type===t?"selected":""}>${n}</option>`).join("")}</select>
    <span class="chip f-req ${f.req?"on":""}" data-i="${i}">必須</span>
    <span class="chip" data-fup="${i}">↑</span><span class="chip" data-fdn="${i}">↓</span>
    <span class="chip" data-fdel="${i}" style="color:var(--red)">削除</span></div>
-  <input type="text" data-fopts="${i}" value="${esc((f.opts||[]).join("、"))}" placeholder="選択肢（「、」区切り。選択系のみ）" style="margin:8px 0 0;font-size:13px">
+  <input type="text" data-fopts="${i}" value="${esc((f.opts||[]).join("、"))}" placeholder="選択肢を「、」区切りで入力（例: 良い、普通、悪い）" style="margin:8px 0 0;font-size:13px;display:${OPT_TYPES.includes(f.type)?"":"none"}">
   </div>`).join("");
  h+=`<button class="btn sm sub" id="f-add">＋ 項目を追加</button>
   <button class="btn" id="f-save" style="margin-top:12px">この内容で保存する</button>
@@ -725,7 +885,7 @@ async function saveFmt(){
  let list=curFmtList().filter(f=>f.label);
  for(const [i,f] of list.entries()){
   if(!f.k)f.k="c"+i+Date.now().toString(36);
-  if(["multi","select2","check"].includes(f.type)&&(!f.opts||!f.opts.length)){
+  if(OPT_TYPES.includes(f.type)&&(!f.opts||!f.opts.length)){
    toast(`「${f.label}」に選択肢を入力してください（「、」区切り）`,true);return}
  }
  cfgFmts[fmtRole]=list;
@@ -770,6 +930,12 @@ function bindPage(){
   const fk=c.dataset.fk1;form[fk]=c.dataset.o;
   c.parentElement.querySelectorAll(`[data-fk1="${fk}"]`).forEach(x=>x.classList.remove("on"));c.classList.add("on");
  });
+ document.querySelectorAll(".chip[data-fkn]").forEach(c=>c.onclick=()=>{ // 評価点数
+  const fk=c.dataset.fkn;form[fk]=+c.dataset.n;
+  c.parentElement.querySelectorAll(".chip").forEach(x=>x.classList.toggle("on",x===c));
+ });
+ document.querySelectorAll("input[data-fkr]").forEach(r=>r.onchange=()=>{form[r.dataset.fkr]=r.value}); // ラジオ
+ document.querySelectorAll("[data-phwrap]").forEach(w=>renderPhotoGrid(w.dataset.phwrap)); // 写真
  document.querySelectorAll(".seg div[data-s]").forEach(d=>d.onclick=()=>{seg=d.dataset.s;render()});
  document.querySelectorAll(".row[data-r]").forEach(rw=>rw.onclick=()=>{detail=rw.dataset.r;render()});
  if($("likebtn"))$("likebtn").onclick=async()=>{
@@ -788,6 +954,12 @@ function bindPage(){
  if($("adnew"))$("adnew").onclick=()=>{adminMode="new";nuRole=null;nuStores=[];lastIssued=null;render()};
  if($("adinvite"))$("adinvite").onclick=()=>{adminMode="invite";ivRole=null;ivStores=[];lastInvite=null;lastIssued=null;render()};
  if($("adsmaregi"))$("adsmaregi").onclick=()=>{adminMode="smaregi";lastIssued=null;lastInvite=null;render()};
+ if($("adstores"))$("adstores").onclick=()=>{adminMode="stores";stList=null;stSmaregi=undefined;lastIssued=null;lastInvite=null;render()};
+ document.querySelectorAll(".chip.st-act").forEach(c=>c.onclick=()=>{c.classList.toggle("on");c.textContent=c.classList.contains("on")?"営業中":"非表示"});
+ document.querySelectorAll("[data-stup]").forEach(c=>c.onclick=()=>{collectStoresDom();const i=+c.dataset.stup;if(i>0){[stList[i-1],stList[i]]=[stList[i],stList[i-1]]}render()});
+ document.querySelectorAll("[data-stdn]").forEach(c=>c.onclick=()=>{collectStoresDom();const i=+c.dataset.stdn;if(i<stList.length-1){[stList[i+1],stList[i]]=[stList[i],stList[i+1]]}render()});
+ if($("st-add"))$("st-add").onclick=addStore;
+ if($("st-save"))$("st-save").onclick=saveStores;
  document.querySelectorAll("[data-ntfread]").forEach(b=>b.onclick=async()=>{
   b.disabled=true;
   const {error}=await sb.from("notifications").update({read_at:new Date().toISOString()}).eq("id",b.dataset.ntfread);
@@ -801,7 +973,11 @@ function bindPage(){
  if($("setback"))$("setback").onclick=()=>{setMode="main";render()};
  document.querySelectorAll(".chip.jf-on,.chip.jf-req,.chip.jc-req,.chip.f-req").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
  document.querySelectorAll("[data-jcdel]").forEach(c=>c.onclick=()=>{collectJoinDom();cfgJoin.custom.splice(+c.dataset.jcdel,1);render()});
- if($("jc-add"))$("jc-add").onclick=()=>{collectJoinDom();cfgJoin.custom.push({label:"",req:false});render()};
+ if($("jc-add"))$("jc-add").onclick=()=>{collectJoinDom();cfgJoin.custom.push({label:"",req:false,type:"text",opts:[]});render()};
+ document.querySelectorAll("select[data-jctype]").forEach(s=>s.onchange=()=>{ // 選択肢欄の表示切替
+  const inp=document.querySelector(`input[data-jcopts="${s.dataset.jctype}"]`);
+  if(inp)inp.style.display=s.value==="text"?"none":"";
+ });
  if($("jf-save"))$("jf-save").onclick=saveJoin;
  document.querySelectorAll(".chip.fmtrole").forEach(c=>c.onclick=()=>{collectFmtDom();fmtRole=c.dataset.r;render()});
  document.querySelectorAll("[data-fup]").forEach(c=>c.onclick=()=>{collectFmtDom();const l=curFmtList(),i=+c.dataset.fup;if(i>0){[l[i-1],l[i]]=[l[i],l[i-1]]}render()});
@@ -810,6 +986,25 @@ function bindPage(){
  if($("f-add"))$("f-add").onclick=()=>{collectFmtDom();curFmtList().push({k:"",label:"",type:"text",req:false});render()};
  if($("f-save"))$("f-save").onclick=saveFmt;
  if($("f-reset"))$("f-reset").onclick=resetFmt;
+ document.querySelectorAll("select[data-ftype]").forEach(s=>s.onchange=()=>{ // 選択肢欄の表示切替
+  const inp=document.querySelector(`input[data-fopts="${s.dataset.ftype}"]`);
+  if(inp)inp.style.display=OPT_TYPES.includes(s.value)?"":"none";
+ });
+ // ドラッグで並び替え（フォームデザイナー）
+ let dragIdx=null;
+ document.querySelectorAll(".fhandle").forEach(hd=>{
+  hd.ondragstart=e=>{dragIdx=+hd.dataset.fi;e.dataTransfer.effectAllowed="move"};
+ });
+ document.querySelectorAll(".fcard").forEach(cd=>{
+  cd.ondragover=e=>{e.preventDefault();cd.classList.add("dragover")};
+  cd.ondragleave=()=>cd.classList.remove("dragover");
+  cd.ondrop=e=>{
+   e.preventDefault();cd.classList.remove("dragover");
+   const to=+cd.dataset.fi;
+   if(dragIdx==null||dragIdx===to)return;
+   collectFmtDom();const l=curFmtList();const [m]=l.splice(dragIdx,1);l.splice(to,0,m);dragIdx=null;render();
+  };
+ });
  document.querySelectorAll(".chip.ivrole").forEach(c=>c.onclick=()=>{ivRole=c.dataset.r;document.querySelectorAll(".chip.ivrole").forEach(x=>x.classList.remove("on"));c.classList.add("on")});
  document.querySelectorAll(".chip.ivstore").forEach(c=>c.onclick=()=>{const s=c.dataset.s;ivStores=ivStores.includes(s)?ivStores.filter(x=>x!==s):ivStores.concat([s]);c.classList.toggle("on")});
  if($("iv-submit"))$("iv-submit").onclick=adminInviteCreate;

@@ -76,7 +76,7 @@
 <body>
 <div class="app" id="app"><div class="spin">読み込み中...</div></div>
 <nav id="nav" style="display:none">
-  <button data-p="home"><i>🏠</i>ホーム</button>
+  <button data-p="home"><i>🏠</i>ホーム<span class="ndot" id="homedot" style="display:none"></span></button>
   <button data-p="write"><i>✏️</i>日報</button>
   <button data-p="list"><i>📋</i>一覧</button>
   <button data-p="admin" id="navadmin" style="display:none"><i>👥</i>管理<span class="ndot" id="admdot" style="display:none"></span></button>
@@ -147,6 +147,9 @@ let stores=[];        // 全店舗
 let page="home",detail=null,form={},seg="daily",editId=null,writeKind="daily";
 let todayDaily=null,todayWeekly=null;
 let appSettings={},setMode="main",fmtRole="AL",cfgJoin=null,cfgFmts=null,joinCfgCur=null;
+let searchQ="",fRole="",fStore="";                       // v1.7 検索
+let joinPhotos={},joinSmStaffs=null,joinInfoCur=null;    // v1.7 入社フォーム写真＋スマレジ選択
+let smStaffsCache=null,smSel=null,smRole=null,smStores=[],smResult=null; // v1.7 スマレジ連携招待
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
@@ -172,7 +175,8 @@ function joinCfg(src){
  d.custom=(c.custom||[]).map(x=>({label:String(x.label||""),req:!!x.req,type:x.type||"text",opts:Array.isArray(x.opts)?x.opts:[]}));
  return d;
 }
-const JC_TYPES={text:"記入式",pull:"プルダウン",radio:"ラジオボタン",multi:"複数選択"};
+const JC_TYPES={text:"記入式",pull:"プルダウン",radio:"ラジオボタン",multi:"複数選択",photo:"写真添付"};
+const JC_NOOPT=["text","photo"]; // 選択肢入力が不要な種類
 
 // ===== 初期化 =====
 const inviteToken=new URLSearchParams(location.search).get("invite");
@@ -195,19 +199,22 @@ async function renderJoin(){
    <div class="alert">${msg}。本部までお問い合わせください。</div></div>`;
   return;
  }
- const cfg=joinCfg(info.join_form);joinCfgCur=cfg;
+ const cfg=joinCfg(info.join_form);joinCfgCur=cfg;joinInfoCur=info;joinPhotos={};joinSmStaffs=null;
  const F=cfg.fields;
  const mark=k=>F[k].req?' <span class="req">必須</span>':"";
  let h=`<div class="loginwrap" style="padding:24px 20px">
   <h2 class="center" style="font-size:20px">🐔 鳥一代グループ</h2>
   <p class="center muted">入社登録フォーム</p>
-  <div class="info">あなたの役職: <b>${ROLE_NAME[info.role]||info.role}</b>${(info.stores||[]).length?`<br>所属店舗: ${(info.stores||[]).map(esc).join("・")}`:""}</div>
+  <div class="info">あなたの役職: <b>${ROLE_NAME[info.role]||info.role}</b>${(info.stores||[]).length?`<br>所属店舗: ${(info.stores||[]).map(esc).join("・")}`:""}${info.smaregi_staff_id?`<br>🕐 スマレジ・タイムカード: <b>${esc(info.smaregi_staff_name||"")}</b>さんとして連携されます`:""}</div>
   <div class="card"><h3>ログイン情報 <span class="req">必須</span></h3>
    <input type="email" id="j-email" placeholder="メールアドレス（ログインIDになります）" autocomplete="username">
-   <input type="password" id="j-pw" placeholder="パスワード（8文字以上・自分で決める）" autocomplete="new-password"></div>
-  <div class="card"><h3>基本情報 <span class="req">必須</span></h3>
-   <input type="text" id="j-name" placeholder="氏名（例: 山田 太郎）">
-   <input type="text" id="j-kana" placeholder="フリガナ（例: ヤマダ タロウ）">
+   <input type="password" id="j-pw" placeholder="パスワード（8文字以上・自分で決める）" autocomplete="new-password"></div>`;
+ if(!info.smaregi_staff_id)h+=`<div class="card" id="j-smwrap" style="display:none"><h3>🕐 スマレジ・タイムカード</h3>
+   <p class="muted" style="margin:0">すでにスマレジ・タイムカード（出勤打刻）に登録されている方は、自分の名前を選んでください。選ぶと打刻データと連携されます。</p>
+   <select class="inp" id="j-smid"></select></div>`;
+ h+=`<div class="card"><h3>基本情報 <span class="req">必須</span></h3>
+   <input type="text" id="j-name" placeholder="氏名（例: 山田 太郎）" value="${esc(info.smaregi_staff_name||"")}">
+   <input type="text" id="j-kana" placeholder="フリガナ（例: ヤマダ タロウ）" value="${esc(info.smaregi_staff_kana||"")}">
    ${F.birth.on?`<p class="muted" style="margin:8px 0 0">生年月日${mark("birth")}</p><input type="date" id="j-birth">`:""}
    ${F.phone.on?`<input type="text" id="j-phone" placeholder="電話番号（例: 090-1234-5678)${F.phone.req?"※必須":""}">`:""}</div>`;
  if(F.zip.on||F.addr.on)h+=`<div class="card"><h3>住所${(F.zip.req||F.addr.req)?' <span class="req">必須</span>':""}</h3>
@@ -225,6 +232,7 @@ async function renderJoin(){
    if(c.type==="pull")h+=`<select class="inp" data-jc="${i}"><option value="">選択してください</option>${(c.opts||[]).map(o=>`<option>${esc(o)}</option>`).join("")}</select>`;
    else if(c.type==="radio")h+=(c.opts||[]).map(o=>`<label class="radio-row"><input type="radio" name="jrd${i}" data-jcr="${i}" value="${esc(o)}">${esc(o)}</label>`).join("");
    else if(c.type==="multi")h+=`<div>${(c.opts||[]).map(o=>`<span class="chip" data-jmc="${i}" data-o="${esc(o)}">${esc(o)}</span>`).join("")}</div>`;
+   else if(c.type==="photo")h+=`<div class="photo-grid" data-jph="${i}"></div><p class="muted">＋をタップして写真を選択（複数可）</p>`;
    else h+=`<input type="text" data-jc="${i}">`;
   });
   h+=`</div>`;
@@ -235,6 +243,36 @@ async function renderJoin(){
  $("app").innerHTML=h;
  $("j-submit").onclick=doJoin;
  document.querySelectorAll(".chip[data-jmc]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
+ cfg.custom.forEach((c,i)=>{if(c.type==="photo")renderJoinPhoto(i)});
+ if(!info.smaregi_staff_id)loadJoinSm();
+}
+// v1.7: 入社フォームの写真（ローカル保持→登録後にアップロード）
+function renderJoinPhoto(i){
+ const wrap=document.querySelector(`[data-jph="${i}"]`);if(!wrap)return;
+ const arr=joinPhotos[i]||[];
+ wrap.innerHTML=arr.map((f,x)=>`<div class="ph"><img src="${URL.createObjectURL(f)}"><span class="del" data-jpdel="${i}" data-x="${x}">✕</span></div>`).join("")+
+  `<label class="addph">＋<input type="file" accept="image/*" data-jpadd="${i}" style="display:none" multiple></label>`;
+ wrap.querySelectorAll("[data-jpdel]").forEach(d=>d.onclick=()=>{joinPhotos[i]=(joinPhotos[i]||[]).filter((_,x)=>x!==+d.dataset.x);renderJoinPhoto(i)});
+ wrap.querySelector("input[data-jpadd]").onchange=e=>{joinPhotos[i]=(joinPhotos[i]||[]).concat([...e.target.files]);renderJoinPhoto(i)};
+}
+// v1.7: 未連携スマレジスタッフの名前プルダウン（招待トークンで取得）
+async function loadJoinSm(){
+ try{
+  const res=await fetch(SUPA_URL+"/functions/v1/smaregi-sync",{method:"POST",
+   headers:{"Content-Type":"application/json",apikey:SUPA_KEY},
+   body:JSON.stringify({action:"invite_staffs",invite_token:inviteToken})});
+  const r=await res.json();
+  if(!r||!r.ok||!Array.isArray(r.staffs)||!r.staffs.length)return;
+  joinSmStaffs=r.staffs;
+  const w=$("j-smwrap");if(!w)return;
+  w.style.display="";
+  $("j-smid").innerHTML=`<option value="">登録されていない／わからない</option>`+
+   r.staffs.map(s=>`<option value="${esc(s.staffId)}">${esc(s.name)}${s.kana?"（"+esc(s.kana)+"）":""}</option>`).join("");
+  $("j-smid").onchange=()=>{
+   const s=joinSmStaffs.find(x=>String(x.staffId)===$("j-smid").value);
+   if(s){if(!$("j-name").value.trim())$("j-name").value=s.name;if(!$("j-kana").value.trim()&&s.kana)$("j-kana").value=s.kana}
+  };
+ }catch(e){}
 }
 async function doJoin(){
  const val=id=>$(id)?$(id).value.trim():"";
@@ -245,6 +283,7 @@ async function doJoin(){
  for(const [k,label] of JOIN_STD){if(F[k].on&&F[k].req&&!val("j-"+k)){toast(`「${label}」は必須です`,true);return}}
  const extra={};let missing=null;
  joinCfgCur.custom.forEach((c,i)=>{
+  if(c.type==="photo"){if(c.req&&!(joinPhotos[i]||[]).length)missing=missing||c.label;return}
   let v="";
   if(c.type==="radio"){const r=document.querySelector(`input[data-jcr="${i}"]:checked`);v=r?r.value:""}
   else if(c.type==="multi"){v=[...document.querySelectorAll(`.chip[data-jmc="${i}"].on`)].map(x=>x.dataset.o).join("、")}
@@ -253,19 +292,39 @@ async function doJoin(){
   if(v)extra[c.label]=v;
  });
  if(missing){toast(`「${missing}」は必須です`,true);return}
+ const smId=($("j-smid")&&$("j-smid").value)||null; // v1.7 本人選択のスマレジスタッフ
  $("j-submit").disabled=true;$("j-submit").textContent="登録中...";
  const {error}=await sb.rpc("register_via_invite",{
   p_token:inviteToken,p_email:email,p_password:pw,p_name:name,
   p_name_kana:val("j-kana"),p_birth_date:val("j-birth")||null,p_phone:val("j-phone")||null,
   p_postal_code:val("j-zip")||null,p_address:val("j-addr")||null,
   p_emergency_name:val("j-ename")||null,p_emergency_relation:val("j-erel")||null,p_emergency_phone:val("j-ephone")||null,
-  p_hire_date:val("j-hire")||null,p_extra:Object.keys(extra).length?extra:null});
+  p_hire_date:val("j-hire")||null,p_extra:Object.keys(extra).length?extra:null,
+  p_smaregi_staff_id:smId});
  if(error){toast("登録エラー: "+error.message,true);$("j-submit").disabled=false;$("j-submit").textContent="入社登録する";return}
  toast("入社登録が完了しました！");
  const {data,error:e2}=await sb.auth.signInWithPassword({email,password:pw});
  history.replaceState(null,"",location.pathname);
  if(e2){renderLogin("登録は完了しました。作成したアカウントでログインしてください。");return}
- smaregiSync(data.user.id); // スマレジタイムカードへ自動登録（バックグラウンド）
+ // v1.7: 写真項目をアップロードしてプロフィールに保存
+ try{
+  const extraPh={};
+  for(let i=0;i<joinCfgCur.custom.length;i++){
+   const c=joinCfgCur.custom[i];
+   if(c.type!=="photo"||!(joinPhotos[i]||[]).length)continue;
+   const urls=[];
+   for(const f of joinPhotos[i]){
+    const ext=((f.name.split(".").pop()||"jpg").toLowerCase().replace(/[^a-z0-9]/g,""))||"jpg";
+    const path=data.user.id+"/join_"+Math.random().toString(36).slice(2,10)+"."+ext;
+    const {error:pe}=await sb.storage.from("report-photos").upload(path,f,{contentType:f.type||"image/jpeg"});
+    if(!pe){const {data:pu}=sb.storage.from("report-photos").getPublicUrl(path);urls.push(pu.publicUrl)}
+   }
+   if(urls.length)extraPh[c.label]=urls;
+  }
+  if(Object.keys(extraPh).length)await sb.rpc("merge_profile_extra",{p_extra:extraPh});
+ }catch(e){}
+ const linked=smId||(joinInfoCur&&joinInfoCur.smaregi_staff_id);
+ if(!linked)smaregiSync(data.user.id); // スマレジタイムカードへ自動登録（連携済みならスキップ）
  await loadMe(data.user.id);
 }
 async function smaregiSync(uid){ // スマレジ・タイムカードにスタッフ登録するEdge Functionを呼ぶ
@@ -288,11 +347,13 @@ async function smaregiStaffs(){ // スマレジ登録済みスタッフ一覧を
   return await res.json();
  }catch(e){return {ok:false,error:String(e)}}
 }
-async function updateAdmDot(){ // 未読通知バッジ（管理タブ）
+async function updateDots(){ // v1.7 未読通知バッジ（ホーム=自分宛／管理=入社通知）
  try{
-  const {count}=await sb.from("notifications").select("id",{count:"exact",head:true}).eq("recipient_id",me.id).is("read_at",null);
-  const d=$("admdot");if(!d)return;
-  if(count>0){d.textContent=count>99?"99+":count;d.style.display=""}else d.style.display="none";
+  const {data:ns}=await sb.from("notifications").select("id,type").eq("recipient_id",me.id).is("read_at",null).limit(100);
+  const joins=(ns||[]).filter(n=>n.type==="join_registered").length;
+  const others=(ns||[]).length-joins;
+  const set=(el,n)=>{if(!el)return;if(n>0){el.textContent=n>99?"99+":n;el.style.display=""}else el.style.display="none"};
+  set($("homedot"),others);set($("admdot"),joins);
  }catch(e){}
 }
 async function loadMe(uid){
@@ -353,7 +414,7 @@ async function render(){
  document.body.classList.add("withnav");
  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.p===page||(page==="weekly"&&b.dataset.p==="write")));
  document.getElementById("navadmin").style.display=isAdmin()?"":"none";
- if(isAdmin())updateAdmDot();
+ updateDots();
  let body="";
  if(page==="home")body=await homeView();
  else if(page==="write")body=await writeView("daily");
@@ -373,9 +434,18 @@ async function fetchToday(){
 
 async function homeView(){
  await fetchToday();
- const {count}=await sb.from("reports").select("id",{count:"exact",head:true});
+ const [{count},{data:myNtf}]=await Promise.all([
+  sb.from("reports").select("id",{count:"exact",head:true}),
+  sb.from("notifications").select("*").eq("recipient_id",me.id).is("read_at",null).neq("type","join_registered").order("created_at",{ascending:false}).limit(10)
+ ]);
  let h=`<h2>こんにちは、${esc(me.name)}さん</h2>`;
  if(me.stores.length)h+=`<p class="muted" style="margin-top:-8px">所属: ${me.stores.map(s=>esc(s.name)).join("・")}</p>`;
+ (myNtf||[]).forEach(n=>{ // v1.7 自分宛の通知
+  const rid=n.link&&n.link.report_id;
+  h+=`<div class="info" style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+   <span ${rid?`data-ntfgo="${esc(rid)}" data-nid="${n.id}" style="cursor:pointer"`:""}>🔔 ${esc((n.body_i18n&&n.body_i18n.ja)||"")}${rid?' <span class="muted">→タップで開く</span>':""}<br><span class="muted">${new Date(n.created_at).toLocaleString("ja-JP")}</span></span>
+   <button class="btn sm sub" data-ntfread="${n.id}" style="flex-shrink:0">既読</button></div>`;
+ });
  if(me.role!=="CEO"&&FORMATS[me.role]){
   h+=todayDaily
    ?`<div class="info">✅ 今日の日報: 提出済み <button class="btn sm sub" id="editdaily">修正する（当日のみ）</button></div>`
@@ -385,6 +455,11 @@ async function homeView(){
    :`<div class="card"><h3>週報</h3><p class="muted">火曜までに提出</p><button class="btn sub" id="goweekly">週報を書く</button></div>`;
  }
  h+=`<div class="card" id="gofb" style="cursor:pointer"><h3>📋 日報・週報を見る</h3><p class="muted">閲覧できる日報・週報: ${count??0}件</p></div>`;
+ h+=`<div class="card"><h3>🔍 検索</h3>
+  <input type="text" id="homeq" placeholder="フリーワード（内容・氏名・店舗など）" value="${esc(searchQ)}" style="margin-top:0">
+  <div style="margin-top:6px"><span class="chip ${seg==="daily"?"on":""}" data-hseg="daily">日報</span><span class="chip ${seg==="weekly"?"on":""}" data-hseg="weekly">週報</span></div>
+  <button class="btn sm" id="homesearch">検索する</button>
+  <p class="muted" style="margin:6px 0 0">一覧画面では役職・店舗でも絞り込めます</p></div>`;
  return h;
 }
 
@@ -487,18 +562,34 @@ async function saveDraft(){
 // ===== 一覧 =====
 async function listView(){
  const {data:rs,error}=await sb.from("reports")
-  .select("id,kind,report_date,submitted_at,author:users!reports_author_id_fkey(id,name,role)")
-  .eq("kind",seg).order("report_date",{ascending:false}).order("submitted_at",{ascending:false}).limit(100);
+  .select("id,kind,report_date,submitted_at,store_id,answers,author:users!reports_author_id_fkey(id,name,role)")
+  .eq("kind",seg).order("report_date",{ascending:false}).order("submitted_at",{ascending:false}).limit(300);
  let h=`<h2>一覧</h2><div class="seg"><div class="${seg==="daily"?"on":""}" data-s="daily">日報</div><div class="${seg==="weekly"?"on":""}" data-s="weekly">週報</div></div>`;
+ // v1.7 検索・フィルター
+ h+=`<div class="card" style="padding:12px">
+  <input type="text" id="lq" placeholder="🔍 フリーワード（内容・氏名など）Enterで検索" value="${esc(searchQ)}" style="margin-top:0">
+  <div style="display:flex;gap:8px;margin-top:8px">
+   <select class="inp" id="lrole" style="margin:0;font-size:13px"><option value="">役職: すべて</option>${Object.entries(ROLE_NAME).map(([r,n])=>`<option value="${r}" ${fRole===r?"selected":""}>${n}</option>`).join("")}</select>
+   <select class="inp" id="lstore" style="margin:0;font-size:13px"><option value="">店舗: すべて</option>${stores.map(s=>`<option value="${s.id}" ${fStore===s.id?"selected":""}>${esc(s.name)}</option>`).join("")}</select>
+  </div></div>`;
  if(error)return h+`<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
- if(!rs||!rs.length)return h+`<p class="muted">該当する${seg==="daily"?"日報":"週報"}はありません。</p>`;
+ let list=rs||[];
+ if(fRole)list=list.filter(r=>r.author.role===fRole);
+ if(fStore)list=list.filter(r=>r.store_id===fStore);
+ if(searchQ){
+  const q=searchQ.toLowerCase();
+  list=list.filter(r=>((r.author.name||"")+" "+(ROLE_NAME[r.author.role]||"")+" "+r.report_date+" "+JSON.stringify(r.answers||{})).toLowerCase().includes(q));
+ }
+ if(searchQ||fRole||fStore)h+=`<p class="muted">検索結果: ${list.length}件 <span class="chip" id="lclear" style="font-size:11px;padding:3px 10px">条件をクリア</span></p>`;
+ if(!list.length)return h+`<p class="muted">該当する${seg==="daily"?"日報":"週報"}はありません。</p>`;
  // 既読状態
- const ids=rs.map(r=>r.id);
+ const ids=list.map(r=>r.id);
  const {data:reads}=await sb.from("report_reads").select("report_id").eq("user_id",me.id).in("report_id",ids);
  const readSet=new Set((reads||[]).map(x=>x.report_id));
- rs.forEach(r=>{
+ const sname=id=>{const s=stores.find(x=>x.id===id);return s?s.name:""};
+ list.forEach(r=>{
   const unread=!readSet.has(r.id)&&r.author.id!==me.id;
-  h+=`<div class="row" data-r="${r.id}"><span>${unread?"🔵 ":""}<b>${esc(r.author.name)}</b> <span class="muted">${ROLE_NAME[r.author.role]||""}</span></span><span class="muted">${fmtDate(r.report_date)}</span></div>`;
+  h+=`<div class="row" data-r="${r.id}"><span>${unread?"🔵 ":""}<b>${esc(r.author.name)}</b> <span class="muted">${ROLE_NAME[r.author.role]||""}${r.store_id?"・"+esc(sname(r.store_id)):""}</span></span><span class="muted">${fmtDate(r.report_date)}</span></div>`;
  });
  return h;
 }
@@ -558,7 +649,7 @@ async function adminView(){
  const [{data:us,error},{data:uss},{data:ntfs}]=await Promise.all([
   sb.from("users").select("*"),
   sb.from("user_stores").select("user_id,store_id"),
-  sb.from("notifications").select("*").eq("recipient_id",me.id).is("read_at",null).order("created_at",{ascending:false}).limit(20)
+  sb.from("notifications").select("*").eq("recipient_id",me.id).eq("type","join_registered").is("read_at",null).order("created_at",{ascending:false}).limit(20)
  ]);
  if(error)return `<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
  adminUsers=us||[];
@@ -573,7 +664,8 @@ async function adminView(){
   <button class="btn sub" id="adnew">＋ 入社処理（本部が代理で発行）</button>
   <button class="btn sub" id="adsmaregi">📇 スマレジ登録スタッフ一覧</button>
   <button class="btn sub" id="adstores">🏪 店舗管理（追加・並び替え・スマレジ紐付け）</button>
-  <p class="muted">${adminUsers.length}名（タップで役職・所属の変更）</p>`;
+  <p class="muted">${adminUsers.length}名（タップで役職・所属の変更）</p>
+  <input type="text" id="auq" placeholder="🔍 氏名・メール・役職・店舗で絞り込み" style="margin:4px 0 8px">`;
  adminUsers.forEach(u=>{
   h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">無効</span>'}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}</span></span><span class="muted">›</span></div>`;
  });
@@ -649,22 +741,57 @@ async function saveStores(){
 
 async function adminSmaregiView(){
  let h=`<span class="back" id="adback">← 従業員一覧</span><h2>スマレジ登録スタッフ</h2>
- <p class="muted" style="margin-top:-8px">スマレジ・タイムカードに登録されているスタッフの一覧です。</p>`;
- const [r,{data:profs},{data:us}]=await Promise.all([
-  smaregiStaffs(),
-  sb.from("employee_profiles").select("user_id,smaregi_staff_id").not("smaregi_staff_id","is",null),
-  sb.from("users").select("id,name")
- ]);
- if(!r||!r.ok)return h+`<div class="alert">取得エラー: ${esc((r&&(typeof r.error==="string"?r.error:JSON.stringify(r.error)))||"不明")}</div>`;
- const linked={};(profs||[]).forEach(p=>{linked[String(p.smaregi_staff_id)]=p.user_id});
- const uname=id=>{const u=(us||[]).find(x=>x.id===id);return u?u.name:""};
- h+=`<p class="muted">${r.staffs.length}名が登録されています</p>`;
- r.staffs.forEach(s=>{
+ <p class="muted" style="margin-top:-8px">スマレジ・タイムカードに登録されているスタッフの一覧です。「連携する」で本人に招待メール／リンクを送れます。</p>`;
+ if(!smStaffsCache){
+  const [r,{data:profs},{data:us}]=await Promise.all([
+   smaregiStaffs(),
+   sb.from("employee_profiles").select("user_id,smaregi_staff_id").not("smaregi_staff_id","is",null),
+   sb.from("users").select("id,name")
+  ]);
+  if(!r||!r.ok)return h+`<div class="alert">取得エラー: ${esc((r&&(typeof r.error==="string"?r.error:JSON.stringify(r.error)))||"不明")}</div>`;
+  smStaffsCache={staffs:r.staffs,profs:profs||[],us:us||[]};
+ }
+ const {staffs,profs,us}=smStaffsCache;
+ const linked={};profs.forEach(p=>{linked[String(p.smaregi_staff_id)]=p.user_id});
+ const uname=id=>{const u=us.find(x=>x.id===id);return u?u.name:""};
+ const linkedCount=staffs.filter(s=>linked[String(s.staffId)]).length;
+ if(smResult){h+=`<div class="info">✅ ${esc(smResult.msg)}${smResult.url?`<br><input type="text" id="sm-url" value="${esc(smResult.url)}" readonly style="font-size:12px"><button class="btn sm" id="sm-copy">📋 リンクをコピー</button>`:""}</div>`}
+ if(smSel){ // v1.7 連携パネル
+  h+=`<div class="card" style="border-color:var(--blue)"><h3>🔗 ${esc(smSel.name)} さんをアプリに招待</h3>
+   <p class="muted" style="margin:0">スマレジ登録メール: ${smSel.mail?`<b>${esc(smSel.mail)}</b>`:"未登録（リンクを発行してLINE等で送ってください）"}</p>
+   <p class="muted" style="margin:8px 0 0">役職</p>${Object.keys(ROLE_NAME).map(r=>`<span class="chip smrole ${smRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}
+   <p class="muted" style="margin:8px 0 0">所属店舗（複数可）</p>${stores.map(s=>`<span class="chip smstore ${smStores.includes(s.id)?"on":""}" data-s="${s.id}">${esc(s.name)}</span>`).join("")}
+   <select class="inp" id="sm-days"><option value="7">有効期限: 7日間</option><option value="14">14日間</option><option value="30">30日間</option></select>
+   ${smSel.mail?`<button class="btn" id="sm-mail">📧 招待メールを送信する</button>`:""}
+   <button class="btn sub" id="sm-link">🔗 招待リンクを発行してコピー</button>
+   <button class="btn sm sub" id="sm-cancel">キャンセル</button></div>`;
+ }
+ h+=`<p class="muted">${staffs.length}名が登録・うち${linkedCount}名がアプリ連携済み</p>
+  <input type="text" id="smq" placeholder="🔍 名前で絞り込み" style="margin:4px 0 8px">`;
+ staffs.forEach((s,i)=>{
   const lk=linked[String(s.staffId)];
-  h+=`<div class="row" style="cursor:default"><span><b>${esc(s.name)}</b>${s.classification?` <span class="badge b">${esc(s.classification)}</span>`:""}<br><span class="muted">スタッフID: ${esc(s.staffId)}${s.kana?" ／ "+esc(s.kana):""}${lk?" ／ "+esc(uname(lk)):""}</span></span><span>${lk?'<span class="badge g">アプリ連携済</span>':'<span class="badge">アプリ未連携</span>'}</span></div>`;
+  h+=`<div class="row" data-smrow="${esc((s.name||"")+(s.kana||""))}" style="cursor:default"><span><b>${esc(s.name)}</b>${s.classification?` <span class="badge b">${esc(s.classification)}</span>`:""}<br><span class="muted">スタッフID: ${esc(s.staffId)}${s.kana?" ／ "+esc(s.kana):""}${s.mail?" ／ 📧":""}${lk?" ／ "+esc(uname(lk)):""}</span></span><span>${lk?'<span class="badge g">アプリ連携済</span>':`<button class="btn sm" data-smlink="${i}" style="margin:0">連携する</button>`}</span></div>`;
  });
- if(!r.staffs.length)h+=`<p class="muted">まだスタッフが登録されていません</p>`;
+ if(!staffs.length)h+=`<p class="muted">まだスタッフが登録されていません</p>`;
  return h;
+}
+// v1.7: スマレジスタッフへの招待発行（メール送信 or リンクコピー）
+async function smaregiInviteDo(sendEmail){
+ if(!smRole){toast("役職を選んでください",true);return}
+ const btn=$(sendEmail?"sm-mail":"sm-link");if(btn){btn.disabled=true;btn.textContent="処理中..."}
+ try{
+  const {data:{session}}=await sb.auth.getSession();
+  const res=await fetch(SUPA_URL+"/functions/v1/smaregi-sync",{
+   method:"POST",
+   headers:{Authorization:"Bearer "+(session?session.access_token:SUPA_KEY),apikey:SUPA_KEY,"Content-Type":"application/json"},
+   body:JSON.stringify({action:"invite",staff_id:smSel.staffId,role:smRole,store_ids:smStores,days:+$("sm-days").value,send_email:sendEmail})});
+  const r=await res.json();
+  if(!r||!r.ok){toast("エラー: "+String((r&&(typeof r.error==="string"?r.error:JSON.stringify(r.error)))||"不明"),true);if(btn){btn.disabled=false;btn.textContent=sendEmail?"📧 招待メールを送信する":"🔗 招待リンクを発行してコピー"}return}
+  if(sendEmail&&r.emailed)smResult={msg:r.mail+" に招待メールを送信しました",url:r.url};
+  else if(sendEmail)smResult={msg:"招待リンクは発行しましたが、メール送信に失敗しました（"+String(r.email_error||"不明")+"）。リンクを本人に送ってください",url:r.url};
+  else{smResult={msg:"招待リンクを発行しました。LINE等で本人に送ってください",url:r.url};copyText(r.url)}
+  smSel=null;render();
+ }catch(e){toast("エラー: "+e,true);if(btn){btn.disabled=false}}
 }
 
 async function adminInviteView(){
@@ -733,7 +860,7 @@ async function adminEditView(){
    フリガナ: ${esc(prof.name_kana||"—")}<br>生年月日: ${prof.birth_date||"—"}<br>電話: ${esc(prof.phone||"—")}<br>
    住所: ${esc([prof.postal_code,prof.address].filter(Boolean).join(" ")||"—")}<br>
    緊急連絡先: ${esc(prof.emergency_name||"—")}${prof.emergency_relation?`（${esc(prof.emergency_relation)}）`:""} ${esc(prof.emergency_phone||"")}<br>
-   入社日: ${prof.hire_date||"—"}<br>${prof.extra?Object.entries(prof.extra).map(([k,v])=>`${esc(k)}: ${esc(v)}<br>`).join(""):""}スマレジ連携: ${smaregi}</p>
+   入社日: ${prof.hire_date||"—"}<br>${prof.extra?Object.entries(prof.extra).map(([k,v])=>Array.isArray(v)?`${esc(k)}: `+v.map((u,x)=>`<a href="${esc(u)}" target="_blank">写真${x+1}</a>`).join(" ")+"<br>":`${esc(k)}: ${esc(v)}<br>`).join(""):""}スマレジ連携: ${smaregi}</p>
    ${prof.smaregi_sync_status!=="synced"?'<button class="btn sm" id="eu-smaregi" style="margin-top:10px">スマレジに再同期する</button>':""}</div>`;
  }
  h+=`<div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
@@ -789,7 +916,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">チャット・タスク・多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v1.6</p>`;
+  <p class="muted center" style="margin-top:16px">v1.7</p>`;
  return h;
 }
 function settingsJoinView(){
@@ -811,7 +938,7 @@ function settingsJoinView(){
     <span class="chip" data-jcdel="${i}" style="color:var(--red)">削除</span></div>
    <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
     <select class="inp" data-jctype="${i}" style="width:auto;margin:0">${Object.entries(JC_TYPES).map(([t,n])=>`<option value="${t}" ${(c.type||"text")===t?"selected":""}>${n}</option>`).join("")}</select>
-    <input type="text" data-jcopts="${i}" value="${esc((c.opts||[]).join("、"))}" placeholder="選択肢（「、」区切り）" style="flex:1;margin:0;font-size:13px;display:${(c.type||"text")==="text"?"none":""}">
+    <input type="text" data-jcopts="${i}" value="${esc((c.opts||[]).join("、"))}" placeholder="選択肢（「、」区切り）" style="flex:1;margin:0;font-size:13px;display:${JC_NOOPT.includes(c.type||"text")?"none":""}">
    </div></div>`).join("")+
   `<button class="btn sm sub" id="jc-add">＋ 項目を追加</button></div>
   <button class="btn" id="jf-save">保存する</button>`;
@@ -831,7 +958,7 @@ async function saveJoin(){
  collectJoinDom();
  cfgJoin.custom=cfgJoin.custom.filter(c=>c.label);
  for(const c of cfgJoin.custom){
-  if(c.type!=="text"&&(!c.opts||!c.opts.length)){toast(`「${c.label}」に選択肢を入力してください（「、」区切り）`,true);return}
+  if(!JC_NOOPT.includes(c.type||"text")&&(!c.opts||!c.opts.length)){toast(`「${c.label}」に選択肢を入力してください（「、」区切り）`,true);return}
  }
  JOIN_STD.forEach(([k])=>{if(cfgJoin.fields[k].req)cfgJoin.fields[k].on=true});
  $("jf-save").disabled=true;
@@ -907,7 +1034,7 @@ async function resetFmt(){
 }
 
 // ===== イベント =====
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";render()});
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;render()});
 function bindPage(){
  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=()=>{page=el.dataset.nav;detail=null;editId=null;render()});
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
@@ -953,7 +1080,7 @@ function bindPage(){
  // 管理画面
  if($("adnew"))$("adnew").onclick=()=>{adminMode="new";nuRole=null;nuStores=[];lastIssued=null;render()};
  if($("adinvite"))$("adinvite").onclick=()=>{adminMode="invite";ivRole=null;ivStores=[];lastInvite=null;lastIssued=null;render()};
- if($("adsmaregi"))$("adsmaregi").onclick=()=>{adminMode="smaregi";lastIssued=null;lastInvite=null;render()};
+ if($("adsmaregi"))$("adsmaregi").onclick=()=>{adminMode="smaregi";lastIssued=null;lastInvite=null;smSel=null;smResult=null;smStaffsCache=null;render()};
  if($("adstores"))$("adstores").onclick=()=>{adminMode="stores";stList=null;stSmaregi=undefined;lastIssued=null;lastInvite=null;render()};
  document.querySelectorAll(".chip.st-act").forEach(c=>c.onclick=()=>{c.classList.toggle("on");c.textContent=c.classList.contains("on")?"営業中":"非表示"});
  document.querySelectorAll("[data-stup]").forEach(c=>c.onclick=()=>{collectStoresDom();const i=+c.dataset.stup;if(i>0){[stList[i-1],stList[i]]=[stList[i],stList[i-1]]}render()});
@@ -966,6 +1093,43 @@ function bindPage(){
   if(error)toast("エラー: "+error.message,true);
   render();
  });
+ // v1.7: ホーム通知タップ → 該当日報へ
+ document.querySelectorAll("[data-ntfgo]").forEach(b=>b.onclick=async()=>{
+  await sb.from("notifications").update({read_at:new Date().toISOString()}).eq("id",b.dataset.nid);
+  detail=b.dataset.ntfgo;page="list";render();
+ });
+ // v1.7: ホーム検索
+ document.querySelectorAll(".chip[data-hseg]").forEach(c=>c.onclick=()=>{seg=c.dataset.hseg;document.querySelectorAll(".chip[data-hseg]").forEach(x=>x.classList.toggle("on",x===c))});
+ const goSearch=()=>{searchQ=$("homeq").value.trim();detail=null;page="list";render()};
+ if($("homesearch"))$("homesearch").onclick=goSearch;
+ if($("homeq"))$("homeq").onkeydown=e=>{if(e.key==="Enter")goSearch()};
+ // v1.7: 一覧フィルター
+ if($("lq"))$("lq").onkeydown=e=>{if(e.key==="Enter"){searchQ=$("lq").value.trim();render()}};
+ if($("lrole"))$("lrole").onchange=()=>{fRole=$("lrole").value;if($("lq"))searchQ=$("lq").value.trim();render()};
+ if($("lstore"))$("lstore").onchange=()=>{fStore=$("lstore").value;if($("lq"))searchQ=$("lq").value.trim();render()};
+ if($("lclear"))$("lclear").onclick=()=>{searchQ="";fRole="";fStore="";render()};
+ // v1.7: 従業員リスト絞り込み
+ if($("auq"))$("auq").oninput=()=>{
+  const q=$("auq").value.trim().toLowerCase();
+  document.querySelectorAll(".row[data-au]").forEach(rw=>{rw.style.display=!q||rw.textContent.toLowerCase().includes(q)?"":"none"});
+ };
+ // v1.7: スマレジ一覧絞り込み＋連携する
+ if($("smq"))$("smq").oninput=()=>{
+  const q=$("smq").value.trim().toLowerCase();
+  document.querySelectorAll("[data-smrow]").forEach(rw=>{rw.style.display=!q||(rw.dataset.smrow+rw.textContent).toLowerCase().includes(q)?"":"none"});
+ };
+ document.querySelectorAll("[data-smlink]").forEach(b=>b.onclick=()=>{
+  smSel=smStaffsCache.staffs[+b.dataset.smlink];smResult=null;
+  const c=smSel.classification||"";
+  smRole=/(アルバイト|パート)/.test(c)?"AL":/(管理職|役員)/.test(c)?"HQ":"SHAIN";
+  smStores=[];render();
+ });
+ document.querySelectorAll(".chip.smrole").forEach(c=>c.onclick=()=>{smRole=c.dataset.r;document.querySelectorAll(".chip.smrole").forEach(x=>x.classList.remove("on"));c.classList.add("on")});
+ document.querySelectorAll(".chip.smstore").forEach(c=>c.onclick=()=>{const s=c.dataset.s;smStores=smStores.includes(s)?smStores.filter(x=>x!==s):smStores.concat([s]);c.classList.toggle("on")});
+ if($("sm-mail"))$("sm-mail").onclick=()=>smaregiInviteDo(true);
+ if($("sm-link"))$("sm-link").onclick=()=>smaregiInviteDo(false);
+ if($("sm-cancel"))$("sm-cancel").onclick=()=>{smSel=null;render()};
+ if($("sm-copy"))$("sm-copy").onclick=()=>copyText($("sm-url").value);
  if($("adback"))$("adback").onclick=()=>{adminMode="list";adminDetail=null;render()};
  // 設定カスタマイズ（v1.5）
  if($("set-join"))$("set-join").onclick=()=>{setMode="join";cfgJoin=joinCfg();render()};
@@ -976,7 +1140,7 @@ function bindPage(){
  if($("jc-add"))$("jc-add").onclick=()=>{collectJoinDom();cfgJoin.custom.push({label:"",req:false,type:"text",opts:[]});render()};
  document.querySelectorAll("select[data-jctype]").forEach(s=>s.onchange=()=>{ // 選択肢欄の表示切替
   const inp=document.querySelector(`input[data-jcopts="${s.dataset.jctype}"]`);
-  if(inp)inp.style.display=s.value==="text"?"none":"";
+  if(inp)inp.style.display=JC_NOOPT.includes(s.value)?"none":"";
  });
  if($("jf-save"))$("jf-save").onclick=saveJoin;
  document.querySelectorAll(".chip.fmtrole").forEach(c=>c.onclick=()=>{collectFmtDom();fmtRole=c.dataset.r;render()});

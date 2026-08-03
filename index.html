@@ -229,7 +229,19 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
 const fmtDate=s=>{if(!s)return"";const d=new Date(s+"T00:00:00");return (d.getMonth()+1)+"/"+d.getDate()+"("+"日月火水木金土"[d.getDay()]+")"};
 const isKennin=()=>me&&me.concurrent_role==="TENCHO";
+// v2.5.7 技術的なエラー文を分かりやすい日本語に変換
+function friendlyErr(s){
+ const t=String(s||"");
+ if(/row-level security|permission denied|insufficient privilege/i.test(t))return "権限がないため保存できませんでした。本部にお問い合わせください";
+ if(/duplicate key|already exists|unique constraint/i.test(t))return "同じ内容がすでに登録されています";
+ if(/Failed to fetch|NetworkError|network|timeout/i.test(t))return "通信エラーです。電波の良い場所でもう一度お試しください";
+ if(/JWT|token is expired|invalid claim/i.test(t))return "ログインの有効期限が切れました。一度ログインし直してください";
+ if(/violates foreign key/i.test(t))return "関連するデータが見つかりませんでした。画面を再読み込みしてお試しください";
+ if(/value too long/i.test(t))return "入力が長すぎます。文字数を減らしてお試しください";
+ return t;
+}
 function toast(msg,isErr){
+ if(isErr)msg=friendlyErr(msg);
  let t=document.getElementById("toast");
  if(!t){t=document.createElement("div");t.id="toast";t.style.cssText="position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99;max-width:90%;padding:11px 18px;border-radius:10px;font-size:14px;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.25);transition:opacity .3s";document.body.appendChild(t)}
  t.style.background=isErr?"var(--red)":"var(--green)";t.textContent=msg;t.style.opacity="1";
@@ -1690,7 +1702,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.5.6</p>`;
+  <p class="muted center" style="margin-top:16px">v2.5.7</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====

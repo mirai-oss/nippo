@@ -226,7 +226,8 @@ let rcFForm="",rcFSrc="",rcFArea="",rcSort="new",rcCosts=null,rcHiredInfo=null,j
 let rcFStatus=""; // v2.5.6 選考ステータス絞り込み
 let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8
 let myProf=null,auRole="",auState="",auStore=""; // v2.6.0
-let ivSkipSm=false; // v2.6.1 招待発行時のスマレジ登録有無
+let ivSkipSm=false; // v2.6.1
+let teams=[],euTeam=null,lrList=null,lrEdit=null; // v2.6.2 チーム・日報Lark通知
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
@@ -568,6 +569,8 @@ async function loadMe(uid){
  if(!u){renderLogin("ユーザー情報を取得できませんでした。管理者にお問い合わせください。");await sb.auth.signOut();return}
  if(!u.is_active){renderLogin("このアカウントは無効化されています。本部までお問い合わせください。");await sb.auth.signOut();return}
  stores=st||[];
+ const [{data:tms}]=await Promise.all([sb.from("teams").select("id,name").order("name")]); // v2.6.2
+ teams=tms||[];
  const [{data:us},{data:as},{data:rfeat},{data:ufeat}]=await Promise.all([
   sb.from("user_stores").select("store_id").eq("user_id",uid),
   sb.from("app_settings").select("key,value"),
@@ -758,8 +761,31 @@ async function submitReport(){
   await sb.from("tasks").insert({title:taskText.slice(0,200),created_by:me.id,is_auto:true,source_report_id:rp.id});
  }
  await sb.from("report_drafts").delete().eq("user_id",me.id).eq("kind",writeKind);
+ if(!editId)try{await sb.rpc("notify_report_lark",{p_report:rp.id,p_body:reportToText(rp)})}catch(e){} // v2.6.2 Lark通知
  toast(editId?"修正を保存しました":(writeKind==="weekly"?"週報を提出しました":"日報を提出しました"));
  form={};editId=null;page="home";render();
+}
+// v2.6.2 日報・週報をLark用のテキストに整形
+function reportToText(rp){
+ const fmt=rp.kind==="weekly"?weeklyFmt():fmtAll(me.role);
+ const store=(me.stores[0]&&me.stores[0].name)||"";
+ let t=`📝 ${me.name}さん（${ROLE_NAME[me.role]||""}）の${rp.kind==="weekly"?"週報":"日報"}　${fmtDate(rp.report_date)}`;
+ if(store)t+=`\n🏪 ${store}`;
+ const seen={};
+ fmt.forEach(f=>{
+  if(seen[f.k])return;seen[f.k]=1;
+  const v=(rp.answers||{})[f.k];
+  if(v==null||v===""||(Array.isArray(v)&&!v.length))return;
+  let s;
+  if(f.type==="stars")s="★".repeat(+v||0)+"☆".repeat(Math.max(0,5-(+v||0)));
+  else if(f.type==="num")s=v+"点";
+  else if(f.type==="photo")s=`写真${(Array.isArray(v)?v.length:1)}枚`;
+  else if(Array.isArray(v))s=v.join("、");
+  else s=String(v);
+  s=s.trim();if(!s)return;
+  t+=`\n\n【${f.label}】\n${s.length>400?s.slice(0,400)+"…":s}`;
+ });
+ return t;
 }
 async function saveDraft(){
  collectForm();
@@ -1692,6 +1718,8 @@ async function adminEditView(){
    ${prof.smaregi_sync_status!=="synced"?'<button class="btn sm" id="eu-smaregi" style="margin-top:10px">スマレジに再同期する</button>':""}</div>`;
  }
  h+=`<div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
+ <div class="card"><h3>所属チーム</h3><span class="chip euteam ${!euTeam?"on":""}" data-t="">なし</span>${teams.map(t=>`<span class="chip euteam ${euTeam===t.id?"on":""}" data-t="${t.id}">${esc(t.name)}</span>`).join("")}
+  <p class="muted" style="margin:6px 0 0">チームを設定すると、日報のLark通知をチーム単位で振り分けられます</p></div>
  <div class="card"><h3>所属店舗（複数可）</h3>${stores.map(s=>`<span class="chip eustore ${euStores.includes(s.id)?"on":""}" data-s="${s.id}">${esc(s.name)}</span>`).join("")}</div>
  <button class="btn" id="eu-save">変更を保存する</button>
  <div class="card" style="margin-top:16px"><h3>パスワード再設定</h3>
@@ -1710,7 +1738,7 @@ async function adminSave(){
  const u=adminUsers.find(x=>x.id===adminDetail);
  if(u.id===me.id&&euRole!==me.role){toast("自分自身の役職は変更できません",true);return}
  $("eu-save").disabled=true;
- const {error}=await sb.from("users").update({role:euRole}).eq("id",u.id);
+ const {error}=await sb.from("users").update({role:euRole,team_id:euTeam}).eq("id",u.id);
  if(error){toast("保存エラー: "+error.message,true);$("eu-save").disabled=false;return}
  const {error:e2}=await sb.from("user_stores").delete().eq("user_id",u.id);
  if(!e2&&euStores.length){
@@ -1741,6 +1769,7 @@ async function settingsView(){
  if(isAdmin()&&larkUrl===null){const {data:s}=await sb.from("app_secrets").select("value").eq("key","lark_webhook").maybeSingle();larkUrl=(s&&s.value)||""} // v2.5.8
  if(setMode==="perm")return await settingsPermView(); // v2.4
  if(setMode==="apply")return await settingsApplyView(); // v2.5.8
+ if(setMode==="lark")return await settingsLarkView(); // v2.6.2
  if(myProf===null){const {data:p}=await sb.rpc("get_my_profile");myProf=p||{}} // v2.6.0
  let h=`<h2>設定</h2>
   <div class="card"><h3>👤 プロフィール</h3>
@@ -1772,7 +1801,10 @@ async function settingsView(){
    <p class="muted" style="margin:0">応募が入ったらLarkのグループに自動でお知らせします。Larkのグループに「カスタムボット」を追加して、表示されたWebhook URLを貼り付けてください。</p>
    <input type="text" id="lark-url" placeholder="https://open.larksuite.com/open-apis/bot/v2/hook/..." value="${esc(larkUrl||"")}">
    <button class="btn sm" id="lark-save">保存する</button>
-   <button class="btn sm sub" id="lark-test">テスト送信</button></div>`;
+   <button class="btn sm sub" id="lark-test">テスト送信</button>
+   <hr style="border:none;border-top:1px solid var(--line);margin:14px 0">
+   <p class="muted" style="margin:0">日報・週報の通知は、役職やチームごとに送り先を分けられます</p>
+   <button class="btn sm" id="lark-routes" style="margin-top:6px">📝 日報の通知先を設定する</button></div>`;
  }
  if(isAdmin()){ // v2.4 権限設定はCEO/HQのみ
   h+=`<div class="card"><h3>🔐 権限設定</h3>
@@ -1781,7 +1813,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.1</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.2</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -1914,6 +1946,61 @@ async function saveApplyForm(){
  const {error}=await sb.from("applicant_forms").upsert({key:applyKeyEdit,title:cur.title,fields:list,is_active:true,updated_by:me.id,updated_at:new Date().toISOString()});
  if(error){toast("保存エラー: "+error.message,true);$("ap-save").disabled=false;return}
  rcForms=null;toast("保存しました");render();
+}
+// ===== v2.6.2 日報のLark通知先 =====
+async function settingsLarkView(){
+ if(!lrList){const {data}=await sb.from("lark_routes").select("*").order("sort_order").order("created_at");lrList=data||[]}
+ const tName=id=>{const t=teams.find(x=>x.id===id);return t?t.name:""};
+ const sName=id=>{const s=stores.find(x=>x.id===id);return s?s.name:""};
+ let h=`<span class="back" id="setback">← 設定</span><h2>📝 日報の通知先（Lark）</h2>
+ <p class="muted" style="margin-top:-8px;font-size:13px">条件に当てはまる人が日報・週報を提出すると、その内容がLarkのグループに届きます。条件を「すべて」にすると全員が対象です。複数の設定に当てはまる場合は、そのすべてのグループに届きます。</p>`;
+ if(!lrList.length)h+=`<p class="muted center" style="margin:16px 0">まだ設定がありません。下の「＋ 通知先を追加」から作成してください。</p>`;
+ lrList.forEach(r=>{
+  const cond=[r.role?ROLE_NAME[r.role]:null,r.team_id?tName(r.team_id):null,r.store_id?sName(r.store_id):null].filter(Boolean);
+  h+=`<div class="card" style="padding:12px${r.is_active?"":";opacity:.55"}">
+   <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+    <b style="font-size:14px">${esc(r.name)}${r.is_active?"":" <span class='badge'>停止中</span>"}</b>
+    <span style="flex-shrink:0"><button class="btn sm sub" data-lredit="${r.id}" style="margin:0 4px 0 0">編集</button><button class="btn sm sub" data-lrtest="${r.id}" style="margin:0">テスト</button></span>
+   </div>
+   <p class="muted" style="margin:6px 0 0;font-size:12px">対象: ${cond.length?esc(cond.join(" ／ ")):"すべての人"}　種類: ${(r.kinds||[]).map(k=>k==="daily"?"日報":"週報").join("・")}</p></div>`;
+ });
+ h+=`<button class="btn sm sub" id="lr-add" style="margin-top:8px">＋ 通知先を追加</button>`;
+ if(lrEdit){
+  const r=lrEdit;
+  h+=`<div class="card" style="margin-top:14px;background:#f0f7ff"><h3>${r.id?"通知先の編集":"通知先の追加"}</h3>
+   <p class="muted" style="margin:0">名前（分かりやすい呼び名）</p>
+   <input type="text" id="lr-name" value="${esc(r.name||"")}" placeholder="例: チーム長の日報 → 経営グループ" style="margin-top:2px">
+   <p class="muted" style="margin:8px 0 0">Lark Webhook URL</p>
+   <input type="text" id="lr-url" value="${esc(r.webhook_url||"")}" placeholder="https://open.larksuite.com/open-apis/bot/v2/hook/..." style="margin-top:2px">
+   <p class="muted" style="margin:10px 0 4px">対象の役職</p>
+   <select class="inp" id="lr-role" style="margin:0"><option value="">すべての役職</option>${Object.entries(ROLE_NAME).map(([k,v])=>`<option value="${k}"${r.role===k?" selected":""}>${v}</option>`).join("")}</select>
+   <p class="muted" style="margin:8px 0 4px">対象のチーム</p>
+   <select class="inp" id="lr-team" style="margin:0"><option value="">すべてのチーム</option>${teams.map(t=>`<option value="${t.id}"${r.team_id===t.id?" selected":""}>${esc(t.name)}</option>`).join("")}</select>
+   <p class="muted" style="margin:8px 0 4px">対象の店舗</p>
+   <select class="inp" id="lr-store" style="margin:0"><option value="">すべての店舗</option>${stores.map(s=>`<option value="${s.id}"${r.store_id===s.id?" selected":""}>${esc(s.name)}</option>`).join("")}</select>
+   <p class="muted" style="margin:10px 0 4px">通知する種類</p>
+   <div><span class="chip lr-kind ${(r.kinds||["daily","weekly"]).includes("daily")?"on":""}" data-k="daily">日報</span><span class="chip lr-kind ${(r.kinds||["daily","weekly"]).includes("weekly")?"on":""}" data-k="weekly">週報</span></div>
+   <div style="margin-top:10px"><span class="chip lr-active ${r.is_active!==false?"on":""}">この設定を有効にする</span></div>
+   <button class="btn" id="lr-save" style="margin-top:10px">保存する</button>
+   <button class="btn sm sub" id="lr-cancel">キャンセル</button>
+   ${r.id?`<button class="btn sm sub" id="lr-del" style="color:var(--red);border-color:var(--red)">この通知先を削除</button>`:""}</div>`;
+ }
+ return h;
+}
+async function saveLarkRoute(){
+ const r=lrEdit;
+ const name=$("lr-name").value.trim(),url=$("lr-url").value.trim();
+ if(!name){toast("名前を入力してください",true);return}
+ if(!/^https?:\/\//.test(url)){toast("Webhook URLを正しく入力してください",true);return}
+ const kinds=[...document.querySelectorAll(".chip.lr-kind.on")].map(c=>c.dataset.k);
+ if(!kinds.length){toast("日報・週報のどちらかを選んでください",true);return}
+ const row={name,webhook_url:url,role:$("lr-role").value||null,team_id:$("lr-team").value||null,
+  store_id:$("lr-store").value||null,kinds,is_active:document.querySelector(".chip.lr-active").classList.contains("on"),updated_by:me.id};
+ if(r.id)row.id=r.id;
+ $("lr-save").disabled=true;
+ const {error}=await sb.from("lark_routes").upsert(row);
+ if(error){toast("保存エラー: "+error.message,true);$("lr-save").disabled=false;return}
+ lrList=null;lrEdit=null;toast("保存しました");render();
 }
 function settingsJoinView(){
  const cfg=cfgJoin;
@@ -2411,6 +2498,22 @@ function bindPage(){
   if(error){toast("保存エラー: "+error.message,true);return}
   larkUrl=url;toast(url?"Lark通知を設定しました":"Lark通知をオフにしました");
  };
+ if($("lark-routes"))$("lark-routes").onclick=()=>{setMode="lark";lrList=null;lrEdit=null;render()};
+ if($("lr-add"))$("lr-add").onclick=()=>{lrEdit={name:"",webhook_url:"",kinds:["daily","weekly"],is_active:true};render()};
+ if($("lr-cancel"))$("lr-cancel").onclick=()=>{lrEdit=null;render()};
+ document.querySelectorAll("[data-lredit]").forEach(b=>b.onclick=()=>{lrEdit={...(lrList||[]).find(x=>x.id===b.dataset.lredit)};render()});
+ document.querySelectorAll("[data-lrtest]").forEach(b=>b.onclick=async()=>{
+  b.disabled=true;const {data,error}=await sb.rpc("lark_route_test",{p_route:b.dataset.lrtest});b.disabled=false;
+  toast(error?"テスト失敗: "+error.message:String(data||"送信しました"),!!error);
+ });
+ document.querySelectorAll(".chip.lr-kind, .chip.lr-active").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
+ if($("lr-save"))$("lr-save").onclick=saveLarkRoute;
+ if($("lr-del"))$("lr-del").onclick=async()=>{
+  if(!confirm("この通知先を削除します。よろしいですか？"))return;
+  const {error}=await sb.from("lark_routes").delete().eq("id",lrEdit.id);
+  if(error){toast("削除エラー: "+error.message,true);return}
+  lrList=null;lrEdit=null;toast("削除しました");render();
+ };
  if($("lark-test"))$("lark-test").onclick=async()=>{
   $("lark-test").disabled=true;
   const {data,error}=await sb.rpc("lark_test");
@@ -2418,7 +2521,7 @@ function bindPage(){
   if(error){toast("テスト失敗: "+error.message,true);return}
   toast(String(data||"送信しました"));
  };
- if($("setback"))$("setback").onclick=()=>{setMode="main";permMatrix=null;permUserSel=null;permUserVals=null;cfgApply=null;render()};
+ if($("setback"))$("setback").onclick=()=>{setMode="main";permMatrix=null;permUserSel=null;permUserVals=null;cfgApply=null;lrEdit=null;render()};
  // v2.4 権限設定
  if($("set-perm"))$("set-perm").onclick=()=>{setMode="perm";permMatrix=null;permUserSel=null;permUserVals=null;render()};
  document.querySelectorAll(".chip[data-pf]").forEach(c=>c.onclick=()=>{
@@ -2482,12 +2585,13 @@ function bindPage(){
  document.querySelectorAll(".row[data-au]").forEach(rw=>rw.onclick=()=>{
   adminDetail=rw.dataset.au;adminMode="edit";
   const u=adminUsers.find(x=>x.id===adminDetail);
-  euRole=u?u.role:null;euStores=[...(adminStoresMap[adminDetail]||[])];
+  euRole=u?u.role:null;euStores=[...(adminStoresMap[adminDetail]||[])];euTeam=u?(u.team_id||null):null;
   lastIssued=null;render();
  });
  document.querySelectorAll(".chip.nurole").forEach(c=>c.onclick=()=>{nuRole=c.dataset.r;document.querySelectorAll(".chip.nurole").forEach(x=>x.classList.remove("on"));c.classList.add("on")});
  document.querySelectorAll(".chip.nustore").forEach(c=>c.onclick=()=>{const s=c.dataset.s;nuStores=nuStores.includes(s)?nuStores.filter(x=>x!==s):nuStores.concat([s]);c.classList.toggle("on")});
  document.querySelectorAll(".chip.eurole").forEach(c=>c.onclick=()=>{euRole=c.dataset.r;document.querySelectorAll(".chip.eurole").forEach(x=>x.classList.remove("on"));c.classList.add("on")});
+ document.querySelectorAll(".chip.euteam").forEach(c=>c.onclick=()=>{euTeam=c.dataset.t||null;document.querySelectorAll(".chip.euteam").forEach(x=>x.classList.remove("on"));c.classList.add("on")});
  document.querySelectorAll(".chip.eustore").forEach(c=>c.onclick=()=>{const s=c.dataset.s;euStores=euStores.includes(s)?euStores.filter(x=>x!==s):euStores.concat([s]);c.classList.toggle("on")});
  if($("nu-gen"))$("nu-gen").onclick=()=>{$("nu-pw").value=genPw()};
  if($("nu-submit"))$("nu-submit").onclick=adminCreate;

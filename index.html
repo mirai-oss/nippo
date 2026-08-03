@@ -110,6 +110,7 @@
   <button data-p="list"><i>📋</i>一覧</button>
   <button data-p="tasks"><i>✅</i>タスク<span class="ndot" id="taskdot" style="display:none"></span></button>
   <button data-p="chat"><i>💬</i>チャット<span class="ndot" id="chatdot" style="display:none"></span></button>
+  <button data-p="recruit" id="navrecruit" style="display:none"><i>📥</i>応募<span class="ndot" id="recruitdot" style="display:none"></span></button>
   <button data-p="admin" id="navadmin" style="display:none"><i>👥</i>管理<span class="ndot" id="admdot" style="display:none"></span></button>
   <button data-p="settings"><i>⚙️</i>設定</button>
 </nav>
@@ -218,6 +219,7 @@ let chatQ="",tskQ="",chatMeta={}; // v2.1 検索・メッセージ操作
 let chatReply=null,chatInvite=false,chatInviteSel=[]; // v2.2 返信・招待
 let permMatrix=null,permUserSel=null,permUserVals=null,permUsersCache=null; // v2.4 権限設定
 let rcList=null,rcSeg="active",rcQ="",rcDetail=null,rcForms=null,applyFormDef=null; // v2.5 応募者管理
+let rcFForm="",rcFSrc="",rcFArea="",rcSort="new",rcCosts=null,rcHiredInfo=null,joinSmSel=null,joinSmNo=false; // v2.5.2
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
@@ -335,8 +337,8 @@ async function renderJoin(){
    <input type="email" id="j-email" placeholder="メールアドレス（ログインIDになります）" autocomplete="username">
    <input type="password" id="j-pw" placeholder="パスワード（8文字以上・自分で決める）" autocomplete="new-password"></div>`;
  if(!smLinked)h+=`<div class="card" id="j-smwrap" style="display:none"><h3>🕐 スマレジ・タイムカード</h3>
-   <p class="muted" style="margin:0">すでにスマレジ・タイムカード（出勤打刻）に登録されている方は、自分の名前を選んでください。選ぶと打刻データと連携され、入社情報の入力は不要になります。</p>
-   <select class="inp" id="j-smid"></select></div>`;
+   <p class="muted" style="margin:0">すでにスマレジ・タイムカード（出勤打刻）に登録されている方は、上の氏名・フリガナを入力すると自動で照合されます。一致した場合だけ確認が表示されます。</p>
+   <div id="j-smmatch"></div></div>`;
  h+=`<div class="card"><h3>基本情報 <span class="req">必須</span></h3>
    <input type="text" id="j-name" placeholder="氏名（例: 山田 太郎）" value="${esc(info.smaregi_staff_name||info.applicant_name||"")}">
    <input type="text" id="j-kana" placeholder="フリガナ（例: ヤマダ タロウ）" value="${esc(info.smaregi_staff_kana||"")}">`;
@@ -373,6 +375,7 @@ async function renderJoin(){
  $("j-submit").onclick=doJoin;
  document.querySelectorAll(".chip[data-jmc]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
  cfg.custom.forEach((c,i)=>{if(c.type==="photo")renderJoinPhoto(i)});
+ joinSmSel=null;joinSmNo=false;
  if(!info.smaregi_staff_id)loadJoinSm();
 }
 // v1.7: 入社フォームの写真（ローカル保持→登録後にアップロード）
@@ -395,19 +398,36 @@ async function loadJoinSm(){
   joinSmStaffs=r.staffs;
   const w=$("j-smwrap");if(!w)return;
   w.style.display="";
-  $("j-smid").innerHTML=`<option value="">登録されていない／わからない</option>`+
-   r.staffs.map(s=>`<option value="${esc(s.staffId)}">${esc(s.name)}${s.kana?"（"+esc(s.kana)+"）":""}</option>`).join("");
-  $("j-smid").onchange=()=>{
-   const s=joinSmStaffs.find(x=>String(x.staffId)===$("j-smid").value);
-   if(s){if(!$("j-name").value.trim())$("j-name").value=s.name;if(!$("j-kana").value.trim()&&s.kana)$("j-kana").value=s.kana}
-   // v1.7.1: スマレジ登録済みを選んだら入社情報の入力を省略（アカウント登録のみ）
-   const on=!!s;
-   document.querySelectorAll("[data-joinsec]").forEach(d=>d.style.display=on?"none":"");
-   $("j-title").textContent=on?"アカウント登録":"入社登録フォーム";
-   $("j-submit").textContent=on?"アカウント登録する":"入社登録する";
-   $("j-foot").textContent=on?"すでにスマレジに登録済みのため、アカウント登録だけで完了します":"送信すると本部・スマレジタイムカードに登録されます";
-  };
+  // v2.5.2: 全員の名前一覧は表示せず、入力された氏名・フリガナと照合して一致した時だけ確認を出す
+  $("j-name").addEventListener("input",joinSmCheck);
+  $("j-kana").addEventListener("input",joinSmCheck);
+  joinSmCheck();
  }catch(e){}
+}
+const normJp=s=>String(s||"").replace(/[\s　]/g,"").replace(/[ぁ-ん]/g,c=>String.fromCharCode(c.charCodeAt(0)+96)).toLowerCase();
+function joinSmApply(on){
+ document.querySelectorAll("[data-joinsec]").forEach(d=>d.style.display=on?"none":"");
+ $("j-title").textContent=on?"アカウント登録":"入社登録フォーム";
+ $("j-submit").textContent=on?"アカウント登録する":"入社登録する";
+ $("j-foot").textContent=on?"すでにスマレジに登録済みのため、アカウント登録だけで完了します":"送信すると本部・スマレジタイムカードに登録されます";
+}
+function joinSmCheck(){
+ const box=$("j-smmatch");if(!box||!joinSmStaffs)return;
+ if(joinSmSel){
+  const s=joinSmStaffs.find(x=>String(x.staffId)===String(joinSmSel));
+  box.innerHTML=`<div class="info" style="margin:8px 0 0">✅ スマレジ・タイムカードの「${esc(s?s.name:"")}」さんとして連携します　<span style="color:var(--blue);cursor:pointer;text-decoration:underline" id="j-smoff">解除</span></div>`;
+  $("j-smoff").onclick=()=>{joinSmSel=null;joinSmApply(false);joinSmCheck()};
+  return;
+ }
+ if(joinSmNo){box.innerHTML="";return}
+ const n=normJp($("j-name").value),k=normJp($("j-kana").value);
+ const hit=(n||k)?joinSmStaffs.find(s=>(n&&normJp(s.name)===n)||(k&&s.kana&&normJp(s.kana)===k)):null;
+ if(!hit){box.innerHTML="";return}
+ box.innerHTML=`<div class="info" style="margin:8px 0 0">🕐 スマレジ・タイムカードに同じお名前の登録が見つかりました。ご本人ですか？<br>
+  <button class="btn sm" id="j-smyes" style="margin-top:6px">はい、連携する</button>
+  <button class="btn sm sub" id="j-smno" style="margin-top:6px">いいえ、別人です</button></div>`;
+ $("j-smyes").onclick=()=>{joinSmSel=String(hit.staffId);if(!$("j-name").value.trim())$("j-name").value=hit.name;if(!$("j-kana").value.trim()&&hit.kana)$("j-kana").value=hit.kana;joinSmApply(true);joinSmCheck()};
+ $("j-smno").onclick=()=>{joinSmNo=true;joinSmCheck()};
 }
 async function doJoin(){
  const val=id=>$(id)?$(id).value.trim():"";
@@ -415,7 +435,7 @@ async function doJoin(){
  if(!email||!pw||!name||!val("j-kana")){toast("メール・パスワード・氏名・フリガナは必須です",true);return}
  if(pw.length<8){toast("パスワードは8文字以上にしてください",true);return}
  // v1.7.1: スマレジ登録済み（紐付き招待 or プルダウン選択）はアカウント登録のみ
- const acctOnly=!!joinInfoCur.smaregi_staff_id||!!($("j-smid")&&$("j-smid").value);
+ const acctOnly=!!joinInfoCur.smaregi_staff_id||!!joinSmSel; // v2.5.2
  const F=joinCfgCur.fields;
  if(!acctOnly)for(const [k,label] of JOIN_STD){if(F[k].on&&F[k].req&&!val("j-"+k)){toast(`「${label}」は必須です`,true);return}}
  const extra={};let missing=null;
@@ -429,7 +449,7 @@ async function doJoin(){
   if(v)extra[c.label]=v;
  });
  if(missing){toast(`「${missing}」は必須です`,true);return}
- const smId=($("j-smid")&&$("j-smid").value)||null; // v1.7 本人選択のスマレジスタッフ
+ const smId=joinSmSel||null; // v2.5.2 照合で本人確認したスマレジスタッフ
  $("j-submit").disabled=true;$("j-submit").textContent="登録中...";
  const {error}=await sb.rpc("register_via_invite",{
   p_token:inviteToken,p_email:email,p_password:pw,p_name:name,
@@ -487,10 +507,11 @@ async function smaregiStaffs(){ // スマレジ登録済みスタッフ一覧を
 async function updateDots(){ // v1.7 未読通知バッジ（ホーム=自分宛／管理=入社通知）
  try{
   const {data:ns}=await sb.from("notifications").select("id,type").eq("recipient_id",me.id).is("read_at",null).limit(100);
-  const adm=(ns||[]).filter(n=>n.type==="join_registered"||n.type==="applicant_new").length; // v2.5 応募通知は管理バッジへ
-  const others=(ns||[]).length-adm;
+  const joins=(ns||[]).filter(n=>n.type==="join_registered").length;
+  const recs=(ns||[]).filter(n=>n.type==="applicant_new").length; // v2.5.2 応募通知は応募タブへ
+  const others=(ns||[]).length-joins-recs;
   const set=(el,n)=>{if(!el)return;if(n>0){el.textContent=n>99?"99+":n;el.style.display=""}else el.style.display="none"};
-  set($("homedot"),others);set($("admdot"),adm);
+  set($("homedot"),others);set($("admdot"),joins);set($("recruitdot"),recs);
   const {count:tn}=await sb.from("tasks").select("id",{count:"exact",head:true}).eq("assignee_id",me.id).eq("status","open"); // v1.8 自分担当の未完了タスク
   set($("taskdot"),tn||0);
   set($("chatdot"),await chatUnreadTotal()); // v1.9 チャット未読
@@ -556,7 +577,8 @@ async function render(){
  document.getElementById("nav").style.display="flex";
  document.body.classList.add("withnav");
  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.p===page||(page==="weekly"&&b.dataset.p==="write")));
- document.getElementById("navadmin").style.display=(can("staff_admin")||can("store_admin")||can("recruit"))?"":"none";
+ document.getElementById("navadmin").style.display=(can("staff_admin")||can("store_admin"))?"":"none";
+ document.getElementById("navrecruit").style.display=can("recruit")?"":"none"; // v2.5.2 応募は独立タブ
  updateDots();
  let body="";
  if(page==="home")body=await homeView();
@@ -566,6 +588,7 @@ async function render(){
  else if(page==="tasks")body=await tasksView();
  else if(page==="chat")body=await chatView();
  else if(page==="dash")body=await dashView();
+ else if(page==="recruit")body=await recruitView(); // v2.5.2
  else if(page==="admin")body=await adminView();
  else if(page==="settings")body=await settingsView();
  $("app").innerHTML=`<header><b>日報・週報システム</b><span style="font-size:12px">${esc(me.name)}（${ROLE_NAME[me.role]||""}）</span></header><main>${body}</main>`;
@@ -1129,8 +1152,7 @@ const isAdmin=()=>me&&(me.role==="CEO"||me.role==="HQ");
 const genPw=()=>{const c="abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";let p="";for(let i=0;i<10;i++)p+=c[Math.floor(Math.random()*c.length)];return p};
 
 async function adminView(){
- if(!can("staff_admin")&&!can("store_admin")&&!can("recruit"))return `<p class="muted">このページを表示する権限がありません。</p>`; // v2.4
- if(adminMode==="recruit")return await recruitView(); // v2.5
+ if(!can("staff_admin")&&!can("store_admin"))return `<p class="muted">このページを表示する権限がありません。</p>`; // v2.4
  if(adminMode==="new")return adminNewView();
  if(adminMode==="edit")return await adminEditView();
  if(adminMode==="invite")return await adminInviteView();
@@ -1154,7 +1176,6 @@ async function adminView(){
   <button class="btn sub" id="adnew">＋ 入社処理（本部が代理で発行）</button>
   <button class="btn sub" id="adsmaregi">📇 スマレジ登録スタッフ一覧</button>`;
  if(can("store_admin"))h+=`<button class="btn sub" id="adstores">🏪 店舗管理（追加・並び替え・スマレジ紐付け）</button>`;
- if(can("recruit"))h+=`<button class="btn sub" id="adrecruit">📥 応募者管理（面接・採用の進捗）</button>`; // v2.5
  if(can("staff_admin")){
   h+=`<p class="muted">${adminUsers.length}名（タップで役職・所属の変更）</p>
   <input type="text" id="auq" placeholder="🔍 氏名・メール・役職・店舗で絞り込み" style="margin:4px 0 8px">`;
@@ -1165,37 +1186,58 @@ async function adminView(){
  return h;
 }
 
-// ===== v2.5 応募者管理 =====
+// ===== v2.5 応募者管理（v2.5.2で独立タブ・フィルタ・CSV・費用対応） =====
 async function recruitView(){
- try{await sb.from("applicants").delete().in("status",["rejected","declined"]).lt("status_changed_at",new Date(Date.now()-365*864e5).toISOString());}catch(e){} // 1年経過分を自動削除
- try{await sb.from("notifications").update({read_at:new Date().toISOString()}).eq("recipient_id",me.id).eq("type","applicant_new").is("read_at",null);}catch(e){} // 応募通知を既読化
+ if(!can("recruit"))return `<p class="muted">このページを表示する権限がありません。</p>`;
+ try{await sb.from("applicants").delete().in("status",["rejected","declined"]).lt("status_changed_at",new Date(Date.now()-365*864e5).toISOString());}catch(e){}
+ try{await sb.from("notifications").update({read_at:new Date().toISOString()}).eq("recipient_id",me.id).eq("type","applicant_new").is("read_at",null);}catch(e){}
  if(!rcForms){const {data:f}=await sb.from("applicant_forms").select("*");rcForms=f||[]}
  const {data:as,error}=await sb.from("applicants").select("*").order("applied_at",{ascending:false}).limit(500);
- if(error)return `<span class="back" id="adback">← 管理</span><div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
+ if(error)return `<h2>📥 応募者管理</h2><div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
  rcList=as||[];
  await chatEnsureUsers();
  if(rcDetail)return recruitDetailView();
+ if(!rcCosts){const {data:c}=await sb.from("recruit_costs").select("*");rcCosts=c||[]}
+ if(!rcHiredInfo){ // 採用者の在籍情報
+  rcHiredInfo={users:[],profs:[]};
+  const hids=rcList.filter(a=>a.user_id).map(a=>a.user_id);
+  if(hids.length){
+   const [{data:hu},{data:hp}]=await Promise.all([
+    sb.from("users").select("id,is_active,deactivated_at").in("id",hids),
+    sb.from("employee_profiles").select("user_id,hire_date").in("user_id",hids)
+   ]);
+   rcHiredInfo={users:hu||[],profs:hp||[]};
+  }
+ }
  const q=rcQ.toLowerCase();
- const match=a=>!q||((a.name||"")+(a.phone||"")+(a.email||"")+(a.job_type||"")+(a.note||"")+JSON.stringify(a.answers||{})).toLowerCase().includes(q);
- const act=rcList.filter(a=>APPLICANT_ACTIVE.includes(a.status)&&match(a));
- const hired=rcList.filter(a=>a.status==="hired"&&match(a));
- const closed=rcList.filter(a=>(a.status==="rejected"||a.status==="declined")&&match(a));
- const baseUrl=location.origin+location.pathname;
- let h=`<span class="back" id="adback">← 管理</span><h2>📥 応募者管理</h2>`;
- h+=`<div class="card"><h3>🔗 応募フォームのURL</h3>
-  <p class="muted" style="margin:0 0 6px">Indeedの返信やLINEにこのリンクを貼ると、応募者の回答が自動でここに届きます</p>
-  <div class="row" style="cursor:default"><span>アルバイト用</span><button class="btn sm sub" data-rccopy="${esc(baseUrl)}?apply=al" style="flex-shrink:0">📋 コピー</button></div>
-  <div class="row" style="cursor:default;border-bottom:none"><span>社員用</span><button class="btn sm sub" data-rccopy="${esc(baseUrl)}?apply=shain" style="flex-shrink:0">📋 コピー</button></div></div>`;
- h+=`<div class="card"><h3>＋ 手動で追加（電話・紹介など）</h3>
-  <input type="text" id="rc-aname" placeholder="氏名">
-  <input type="text" id="rc-aphone" placeholder="電話番号">
-  <div style="display:flex;gap:8px;margin-top:6px">
-   <select class="inp" id="rc-aform" style="margin:0"><option value="al">アルバイト</option><option value="shain">社員</option></select>
-   <select class="inp" id="rc-asrc" style="margin:0">${Object.entries(APPLICANT_SOURCE).filter(([k])=>k!=="form").map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select>
-  </div>
-  <button class="btn sm" id="rc-addbtn">追加する</button></div>`;
+ const match=a=>{
+  if(q&&!(((a.name||"")+(a.phone||"")+(a.email||"")+(a.job_type||"")+(a.note||"")+JSON.stringify(a.answers||{})).toLowerCase().includes(q)))return false;
+  if(rcFForm==="none"){if(a.form_key)return false}
+  else if(rcFForm&&a.form_key!==rcFForm)return false;
+  if(rcFSrc&&a.source!==rcFSrc)return false;
+  if(rcFArea&&!(((a.job_type||"")+JSON.stringify(a.answers||{})).includes(rcFArea)))return false;
+  return true;
+ };
+ const sorter=(x,y)=>{
+  if(rcSort==="old")return x.applied_at<y.applied_at?-1:1;
+  if(rcSort==="interview")return (x.interview_at||"9999")<(y.interview_at||"9999")?-1:1;
+  if(rcSort==="name")return (x.name||"").localeCompare(y.name||"","ja");
+  if(rcSort==="status"){const ks=Object.keys(APPLICANT_STATUS);return ks.indexOf(x.status)-ks.indexOf(y.status)}
+  return x.applied_at>y.applied_at?-1:1;
+ };
+ const act=rcList.filter(a=>APPLICANT_ACTIVE.includes(a.status)&&match(a)).sort(sorter);
+ const hired=rcList.filter(a=>a.status==="hired"&&match(a)).sort(sorter);
+ const closed=rcList.filter(a=>(a.status==="rejected"||a.status==="declined")&&match(a)).sort(sorter);
+ const AREAS=["田町","三田","恵比寿","新橋","新横浜","川崎"];
+ let h=`<h2>📥 応募者管理</h2>`;
  h+=`<input type="text" id="rcq" placeholder="🔍 氏名・電話・回答内容で検索（Enter）" value="${esc(rcQ)}" style="margin:0 0 8px">`;
- if(rcQ)h+=`<p class="muted" style="margin:0 0 8px">「${esc(rcQ)}」の検索結果　<span style="color:var(--blue);cursor:pointer" id="rcqclear">✕ クリア</span></p>`;
+ h+=`<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+  <select class="inp" id="rc-fform" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">区分: 全て</option><option value="al"${rcFForm==="al"?" selected":""}>アルバイト</option><option value="shain"${rcFForm==="shain"?" selected":""}>社員</option><option value="none"${rcFForm==="none"?" selected":""}>未設定</option></select>
+  <select class="inp" id="rc-farea" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">エリア: 全て</option>${AREAS.map(a=>`<option${rcFArea===a?" selected":""}>${a}</option>`).join("")}</select>
+  <select class="inp" id="rc-fsrc" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">応募元: 全て</option>${Object.entries(APPLICANT_SOURCE).map(([k,v])=>`<option value="${k}"${rcFSrc===k?" selected":""}>${v}</option>`).join("")}</select>
+  <select class="inp" id="rc-sort" style="flex:1;min-width:120px;margin:0;font-size:13px;padding:8px"><option value="new"${rcSort==="new"?" selected":""}>並び: 新しい順</option><option value="old"${rcSort==="old"?" selected":""}>並び: 古い順</option><option value="interview"${rcSort==="interview"?" selected":""}>並び: 面接日が近い順</option><option value="name"${rcSort==="name"?" selected":""}>並び: 名前順</option><option value="status"${rcSort==="status"?" selected":""}>並び: ステータス順</option></select>
+ </div>`;
+ if(rcQ||rcFForm||rcFSrc||rcFArea)h+=`<p class="muted" style="margin:0 0 8px">絞り込み中: ${act.length+hired.length+closed.length}件　<span style="color:var(--blue);cursor:pointer" id="rcqclear">✕ 条件をクリア</span></p>`;
  h+=`<div class="seg"><div class="${rcSeg==="active"?"on":""}" data-rcseg="active">選考中 ${act.length}</div><div class="${rcSeg==="hired"?"on":""}" data-rcseg="hired">採用 ${hired.length}</div><div class="${rcSeg==="closed"?"on":""}" data-rcseg="closed">不採用・辞退 ${closed.length}</div></div>`;
  const list=rcSeg==="active"?act:rcSeg==="hired"?hired:closed;
  if(!list.length)h+=`<p class="muted center" style="margin-top:16px">該当する応募者はいません</p>`;
@@ -1207,26 +1249,75 @@ async function recruitView(){
   h+=`<div class="row" data-rca="${a.id}"><span><b>${esc(a.name)}</b> ${stBadge}${a.user_id?' <span class="badge g">入社済み</span>':""}<br>
    <span class="muted">${form?esc(form.title.replace("応募フォーム","")):esc(a.job_type||"")}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}${a.interview_at?`・面接 ${fmtDue(a.interview_at)}`:""}</span></span><span class="muted">›</span></div>`;
  });
- // 月別の集計（直近6ヶ月）
+ h+=`<button class="btn sm sub" id="rc-csv" style="margin-top:10px">📄 表示中の一覧をCSVダウンロード</button>`;
+ // 月別集計と単価
  const mkey=d=>{const x=new Date(d);return x.getFullYear()+"/"+(x.getMonth()+1)};
+ const cmap={};(rcCosts||[]).forEach(c=>{const d=new Date(c.month+"T00:00:00");cmap[d.getFullYear()+"/"+(d.getMonth()+1)]=+c.amount});
  const months=[];for(let i=5;i>=0;i--){const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-i);months.push(d.getFullYear()+"/"+(d.getMonth()+1))}
- h+=`<div class="card" style="margin-top:14px"><h3>📊 月別の採用状況</h3><div class="tblwrap"><table class="tbl">
-  <tr class="muted"><td>月</td><td>応募</td><td>面接</td><td>採用</td></tr>
+ const yen=n=>"¥"+Math.round(n).toLocaleString("ja-JP");
+ h+=`<div class="card" style="margin-top:14px"><h3>📊 月別の採用状況と単価</h3><div class="tblwrap"><table class="tbl" style="min-width:640px">
+  <tr class="muted"><td style="text-align:left">月</td><td>応募</td><td>面接</td><td>採用</td><td>面接率</td><td>採用率</td><td>費用</td><td>応募単価</td><td>面接単価</td><td>採用単価</td></tr>
   ${months.map(m=>{
    const ms=rcList.filter(a=>mkey(a.applied_at)===m);
-   return `<tr><td style="text-align:left">${m}</td><td>${ms.length}</td><td>${ms.filter(a=>["interviewed","hired"].includes(a.status)).length}</td><td>${ms.filter(a=>a.status==="hired").length}</td></tr>`;
+   const ap=ms.length,iv=ms.filter(a=>["interviewed","hired"].includes(a.status)).length,hi=ms.filter(a=>a.status==="hired").length;
+   const cost=cmap[m];
+   return `<tr><td style="text-align:left">${m}</td><td>${ap}</td><td>${iv}</td><td>${hi}</td><td>${ap?Math.round(iv/ap*100)+"%":"−"}</td><td>${ap?Math.round(hi/ap*100)+"%":"−"}</td><td>${cost!=null?yen(cost):"−"}</td><td>${cost!=null&&ap?yen(cost/ap):"−"}</td><td>${cost!=null&&iv?yen(cost/iv):"−"}</td><td>${cost!=null&&hi?yen(cost/hi):"−"}</td></tr>`;
   }).join("")}
- </table></div><p class="muted" style="margin-top:6px">不採用・辞退のデータは1年後に自動削除されます</p></div>`;
+ </table></div><p class="muted" style="margin-top:6px">面接=面接済み以降の人数 ／ 単価=その月の費用÷件数 ／ 費用は下の「求人費用」から入力</p></div>`;
+ // 採用者の定着・離職
+ const hiredAll=rcList.filter(a=>a.user_id);
+ if(hiredAll.length){
+  const uinfo=id=>(rcHiredInfo.users||[]).find(u=>u.id===id);
+  const hdate=id=>{const p=(rcHiredInfo.profs||[]).find(x=>x.user_id===id);return p&&p.hire_date?new Date(p.hire_date+"T00:00:00"):null};
+  const monthsBetween=(a,b)=>Math.max(0,Math.round((b-a)/(30.44*864e5)*10)/10);
+  const retired=hiredAll.filter(a=>{const u=uinfo(a.user_id);return u&&!u.is_active});
+  const tenures=retired.map(a=>{const u=uinfo(a.user_id),hd=hdate(a.user_id);return u&&u.deactivated_at&&hd?monthsBetween(hd,new Date(u.deactivated_at)):null}).filter(x=>x!=null);
+  h+=`<div class="card"><h3>🌱 採用者の定着</h3>
+   <p style="font-size:13px;margin:0">このアプリ経由の入社: <b>${hiredAll.length}名</b> ／ 退職: <b>${retired.length}名</b> ／ 離職率: <b>${Math.round(retired.length/hiredAll.length*100)}%</b>${tenures.length?` ／ 退職までの平均: <b>${(tenures.reduce((s,x)=>s+x,0)/tenures.length).toFixed(1)}ヶ月</b>`:""}</p>
+   ${retired.length?`<p class="muted" style="margin:6px 0 0">退職: ${retired.map(a=>{const u=uinfo(a.user_id),hd=hdate(a.user_id);const t=u&&u.deactivated_at&&hd?monthsBetween(hd,new Date(u.deactivated_at))+"ヶ月で退職":"期間不明";return esc(a.name)+"（"+t+"）"}).join("、")}</p>`:""}
+   <p class="muted" style="margin:6px 0 0">退職＝管理画面でアカウントを無効化した人（無効化した日を退職日として計算）</p></div>`;
+ }
+ // 求人費用の入力
+ const curMonth=(()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")})();
+ h+=`<div class="card"><h3>💰 求人費用（月別）</h3>
+  <p class="muted" style="margin:0">Indeedなどにかけた費用を入れると、上の表に単価（応募・面接・採用）が出ます</p>
+  <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+   <input type="month" class="inp" id="rc-cmonth" value="${curMonth}" style="flex:1.2;margin:0">
+   <input type="text" id="rc-camount" placeholder="金額（円）" inputmode="numeric" style="flex:1;margin:0">
+  </div>
+  <button class="btn sm" id="rc-csave">この月の費用を保存</button>
+  ${(rcCosts||[]).length?`<p class="muted" style="margin:8px 0 0">入力済み: ${(rcCosts||[]).slice().sort((a,b)=>a.month<b.month?1:-1).slice(0,6).map(c=>{const d=new Date(c.month+"T00:00:00");return d.getFullYear()+"/"+(d.getMonth()+1)+" ¥"+(+c.amount).toLocaleString("ja-JP")}).join("　")}</p>`:""}</div>`;
+ // 手動追加
+ h+=`<div class="card"><h3>＋ 手動で追加（電話・紹介など）</h3>
+  <input type="text" id="rc-aname" placeholder="氏名">
+  <input type="text" id="rc-aphone" placeholder="電話番号">
+  <div style="display:flex;gap:8px;margin-top:6px">
+   <select class="inp" id="rc-aform" style="margin:0"><option value="al">アルバイト</option><option value="shain">社員</option></select>
+   <select class="inp" id="rc-asrc" style="margin:0">${Object.entries(APPLICANT_SOURCE).filter(([k])=>k!=="form").map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select>
+  </div>
+  <button class="btn sm" id="rc-addbtn">追加する</button></div>`;
+ // フォームURL
+ const baseUrl=location.origin+location.pathname;
+ h+=`<div class="card"><h3>🔗 応募フォームのURL</h3>
+  <p class="muted" style="margin:0 0 6px">Indeedの返信やLINEにこのリンクを貼ると、応募者の回答が自動でここに届きます</p>
+  <div class="row" style="cursor:default"><span>アルバイト用</span><button class="btn sm sub" data-rccopy="${esc(baseUrl)}?apply=al" style="flex-shrink:0">📋 コピー</button></div>
+  <div class="row" style="cursor:default;border-bottom:none"><span>社員用</span><button class="btn sm sub" data-rccopy="${esc(baseUrl)}?apply=shain" style="flex-shrink:0">📋 コピー</button></div></div>`;
  return h;
 }
 function recruitDetailView(){
  const a=rcList.find(x=>x.id===rcDetail);
- if(!a){rcDetail=null;return `<span class="back" id="adback">← 管理</span><div class="alert">応募者が見つかりません</div>`}
+ if(!a){rcDetail=null;return `<span class="back" id="rcback">← 応募者一覧</span><div class="alert">応募者が見つかりません</div>`}
  const form=(rcForms||[]).find(f=>f.key===a.form_key);
  let h=`<span class="back" id="rcback">← 応募者一覧</span>
  <h2>${esc(a.name)} ${a.user_id?'<span class="badge g">入社済み</span>':""}</h2>
  <p class="muted" style="margin-top:-8px">${form?esc(form.title):esc(a.job_type||"")}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}<br>
  ${a.phone?`📞 <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>　`:""}${a.email?`✉️ ${esc(a.email)}`:""}</p>`;
+ h+=`<div class="card"><h3>✏️ 基本情報（タップで編集できます）</h3>
+  <input type="text" id="rc-ename" placeholder="氏名" value="${esc(a.name)}">
+  <input type="text" id="rc-ephone" placeholder="電話番号" value="${esc(a.phone||"")}">
+  <input type="email" id="rc-eemail" placeholder="メールアドレス" value="${esc(a.email||"")}">
+  <input type="text" id="rc-ejob" placeholder="希望職種・業務（例: ホール）" value="${esc(a.job_type||"")}">
+  <select class="inp" id="rc-eform"><option value="">区分: 未設定</option><option value="al"${a.form_key==="al"?" selected":""}>アルバイト</option><option value="shain"${a.form_key==="shain"?" selected":""}>社員</option></select></div>`;
  h+=`<div class="card"><h3>選考ステータス</h3>
   <div>${Object.entries(APPLICANT_STATUS).map(([k,v])=>`<span class="chip ${a.status===k?"on":""}" data-rcst="${k}">${v}</span>`).join("")}</div>
   <p class="muted" style="margin:8px 0 0">面接日時</p>
@@ -1255,7 +1346,7 @@ function recruitDetailView(){
  const seen={};
  if(form)(form.fields||[]).forEach(f=>{const v=(a.answers||{})[f.k];seen[f.k]=1;if(v==null||v==="")return;
   h+=`<p style="margin:8px 0 0;font-size:13px"><span class="muted">${esc(f.label)}</span><br>${esc(String(v)).replace(/\n/g,"<br>")}</p>`;});
- Object.entries(a.answers||{}).forEach(([k,v])=>{if(seen[k]||v==null||v==="")return;
+ Object.entries(a.answers||{}).forEach(([k,v])=>{if(seen[k]||v==null||v===""||String(k).startsWith("_"))return;
   h+=`<p style="margin:8px 0 0;font-size:13px"><span class="muted">${esc(k)}</span><br>${esc(String(v)).replace(/\n/g,"<br>")}</p>`;});
  if(!Object.keys(a.answers||{}).length)h+=`<p class="muted" style="margin:0">回答はありません（手動追加）</p>`;
  h+=`</div><button class="btn sub" id="rc-del" style="color:var(--red);border-color:var(--red)">この応募者を削除する</button>`;
@@ -1263,22 +1354,26 @@ function recruitDetailView(){
 }
 async function saveApplicant(){
  const a=rcList.find(x=>x.id===rcDetail);if(!a)return;
+ const name=$("rc-ename").value.trim();
+ if(!name){toast("氏名を入力してください",true);return}
  const stChip=document.querySelector(".chip[data-rcst].on");
  const st=stChip?stChip.dataset.rcst:a.status;
  const iv=$("rc-interview").value?new Date($("rc-interview").value).toISOString():null;
- const upd={status:st,interview_at:iv,assignee_id:$("rc-assignee").value||null,note:$("rc-note").value.trim()||null,updated_at:new Date().toISOString()};
+ const upd={name,phone:$("rc-ephone").value.trim()||null,email:$("rc-eemail").value.trim()||null,
+  job_type:$("rc-ejob").value.trim()||null,form_key:$("rc-eform").value||null,
+  status:st,interview_at:iv,assignee_id:$("rc-assignee").value||null,note:$("rc-note").value.trim()||null,updated_at:new Date().toISOString()};
  if(st!==a.status)upd.status_changed_at=new Date().toISOString();
  $("rc-save").disabled=true;
  const {error}=await sb.from("applicants").update(upd).eq("id",a.id);
  if(error){toast("保存エラー: "+error.message,true);$("rc-save").disabled=false;return}
- toast("保存しました");rcList=null;render();
+ toast("保存しました");rcList=null;rcHiredInfo=null;render();
 }
 async function hireApplicant(){
  const sel=[...document.querySelectorAll(".chip[data-rchst].on")].map(c=>c.dataset.rchst);
  $("rc-hire").disabled=true;
  const {data:tok,error}=await sb.rpc("hire_applicant",{p_applicant:rcDetail,p_role:$("rc-hrole").value,p_store_ids:sel});
  if(error){toast("発行エラー: "+error.message,true);$("rc-hire").disabled=false;return}
- toast("採用にして招待リンクを発行しました");rcList=null;render();
+ toast("採用にして招待リンクを発行しました");rcList=null;rcHiredInfo=null;render();
 }
 async function addApplicant(){
  const name=$("rc-aname").value.trim();
@@ -1286,7 +1381,26 @@ async function addApplicant(){
  $("rc-addbtn").disabled=true;
  const {error}=await sb.from("applicants").insert({name,phone:$("rc-aphone").value.trim()||null,form_key:$("rc-aform").value,source:$("rc-asrc").value,created_by:me.id});
  if(error){toast("追加エラー: "+error.message,true);$("rc-addbtn").disabled=false;return}
- toast("応募者を追加しました");rcList=null;render();
+ toast("応募者を追加しました");rcList=null;rcHiredInfo=null;render();
+}
+function exportRecruitCsv(){ // v2.5.2 表示中の一覧をCSVで保存（Excelで開ける）
+ const ids=[...document.querySelectorAll("[data-rca]")].map(el=>el.dataset.rca);
+ const list=ids.map(id=>(rcList||[]).find(a=>a.id===id)).filter(Boolean);
+ if(!list.length){toast("出力する行がありません",true);return}
+ const qc=v=>'"'+String(v??"").replace(/"/g,'""')+'"';
+ const head=["氏名","区分","応募元","ステータス","電話","メール","希望職種・求人","応募日","面接日時","担当","メモ"];
+ const rows=list.map(a=>[a.name,a.form_key==="al"?"アルバイト":a.form_key==="shain"?"社員":"",APPLICANT_SOURCE[a.source]||a.source,APPLICANT_STATUS[a.status]||a.status,a.phone||"",a.email||"",a.job_type||((a.answers||{})["求人"]||""),fmtDue(a.applied_at),a.interview_at?fmtDue(a.interview_at):"",taskUserName(a.assignee_id),(a.note||"").replace(/\r?\n/g," ")]);
+ const csv="\uFEFF"+[head].concat(rows).map(r=>r.map(qc).join(",")).join("\r\n");
+ const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+ const el=document.createElement("a");el.href=URL.createObjectURL(blob);el.download="応募者一覧_"+todayStr()+".csv";document.body.appendChild(el);el.click();el.remove();
+ toast("CSVをダウンロードしました");
+}
+async function saveRecruitCost(){ // v2.5.2 月別の求人費用
+ const m=$("rc-cmonth").value;const amt=parseInt(String($("rc-camount").value).replace(/[^0-9]/g,""),10);
+ if(!m||isNaN(amt)){toast("月と金額を入力してください",true);return}
+ const {error}=await sb.from("recruit_costs").upsert({month:m+"-01",amount:amt,note:null,updated_by:me.id,updated_at:new Date().toISOString()});
+ if(error){toast("保存エラー: "+error.message,true);return}
+ toast("費用を保存しました");rcCosts=null;render();
 }
 
 // ===== 店舗マスタ管理（v1.6） =====
@@ -1511,7 +1625,7 @@ async function adminSetPw(){
 }
 async function adminToggle(){
  const u=adminUsers.find(x=>x.id===adminDetail);
- const {error}=await sb.from("users").update({is_active:!u.is_active}).eq("id",u.id);
+ const {error}=await sb.from("users").update({is_active:!u.is_active,deactivated_at:u.is_active?new Date().toISOString():null}).eq("id",u.id); // v2.5.2 無効化日=退職日として記録
  if(error){toast("エラー: "+error.message,true);return}
  toast(u.is_active?"アカウントを無効化しました":"アカウントを再有効化しました");
  adminMode="list";render();
@@ -1539,7 +1653,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.5</p>`;
+  <p class="muted center" style="margin-top:16px">v2.5.2</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -1723,7 +1837,7 @@ async function resetFmt(){
 }
 
 // ===== イベント =====
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";chatReply=null;chatInvite=false;chatInviteSel=[];render()});
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";chatReply=null;chatInvite=false;chatInviteSel=[];rcDetail=null;render()});
 function bindPage(){
  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=()=>{page=el.dataset.nav;detail=null;editId=null;render()});
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
@@ -2003,13 +2117,15 @@ function bindPage(){
  if($("adsmaregi"))$("adsmaregi").onclick=()=>{adminMode="smaregi";lastIssued=null;lastInvite=null;smSel=null;smResult=null;smStaffsCache=null;render()};
  if($("adstores"))$("adstores").onclick=()=>{adminMode="stores";stList=null;stSmaregi=undefined;lastIssued=null;lastInvite=null;render()};
  // v2.5 応募者管理
- if($("adrecruit"))$("adrecruit").onclick=()=>{adminMode="recruit";rcDetail=null;rcList=null;render()};
  if($("rcback"))$("rcback").onclick=()=>{rcDetail=null;render()};
  document.querySelectorAll("[data-rca]").forEach(el=>el.onclick=()=>{rcDetail=el.dataset.rca;render()});
  document.querySelectorAll("[data-rcseg]").forEach(el=>el.onclick=()=>{rcSeg=el.dataset.rcseg;render()});
  document.querySelectorAll("[data-rccopy]").forEach(el=>el.onclick=e=>{e.stopPropagation();copyText(el.dataset.rccopy)});
  if($("rcq"))$("rcq").onkeydown=e=>{if(e.key==="Enter"){rcQ=$("rcq").value.trim();render()}};
- if($("rcqclear"))$("rcqclear").onclick=()=>{rcQ="";render()};
+ if($("rcqclear"))$("rcqclear").onclick=()=>{rcQ="";rcFForm="";rcFSrc="";rcFArea="";render()};
+ ["rc-fform","rc-fsrc","rc-farea","rc-sort"].forEach(fid=>{if($(fid))$(fid).onchange=()=>{rcFForm=$("rc-fform").value;rcFSrc=$("rc-fsrc").value;rcFArea=$("rc-farea").value;rcSort=$("rc-sort").value;render()}});
+ if($("rc-csv"))$("rc-csv").onclick=exportRecruitCsv;
+ if($("rc-csave"))$("rc-csave").onclick=saveRecruitCost;
  document.querySelectorAll(".chip[data-rcst]").forEach(c=>c.onclick=()=>{
   document.querySelectorAll(".chip[data-rcst]").forEach(x=>x.classList.remove("on"));c.classList.add("on");
  });
@@ -2021,7 +2137,7 @@ function bindPage(){
   if(!confirm("この応募者のデータを完全に削除します。よろしいですか？"))return;
   const {error}=await sb.from("applicants").delete().eq("id",rcDetail);
   if(error){toast("削除エラー: "+error.message,true);return}
-  toast("削除しました");rcDetail=null;rcList=null;render();
+  toast("削除しました");rcDetail=null;rcList=null;rcHiredInfo=null;render();
  };
  document.querySelectorAll(".chip.st-act").forEach(c=>c.onclick=()=>{c.classList.toggle("on");c.textContent=c.classList.contains("on")?"営業中":"非表示"});
  document.querySelectorAll("[data-stup]").forEach(c=>c.onclick=()=>{collectStoresDom();const i=+c.dataset.stup;if(i>0){[stList[i-1],stList[i]]=[stList[i],stList[i-1]]}render()});

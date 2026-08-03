@@ -228,6 +228,18 @@ let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8
 let myProf=null,auRole="",auState="",auStore=""; // v2.6.0
 let ivSkipSm=false; // v2.6.1
 let teams=[],euTeam=null,lrList=null,lrEdit=null; // v2.6.2 チーム・日報Lark通知
+// v2.6.3 Lark通知のイベント（この動きがあったら通知する）
+const LARK_EVENTS={
+ report_daily:"日報が提出された",
+ report_weekly:"週報が提出された",
+ applicant_new:"応募が入った",
+ join_registered:"入社登録が完了した",
+ task_assigned:"タスクが割り当てられた",
+ report_comment:"日報にコメントがついた",
+ report_like:"日報にいいねがついた",
+ chat_message:"チャットで名前が呼ばれた"
+};
+const LARK_PERSON_EVENTS=["report_daily","report_weekly","join_registered","task_assigned","report_comment","report_like","chat_message"];
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
@@ -1803,8 +1815,8 @@ async function settingsView(){
    <button class="btn sm" id="lark-save">保存する</button>
    <button class="btn sm sub" id="lark-test">テスト送信</button>
    <hr style="border:none;border-top:1px solid var(--line);margin:14px 0">
-   <p class="muted" style="margin:0">日報・週報の通知は、役職やチームごとに送り先を分けられます</p>
-   <button class="btn sm" id="lark-routes" style="margin-top:6px">📝 日報の通知先を設定する</button></div>`;
+   <p class="muted" style="margin:0">日報・応募・入社登録など、<b>どの動きをどのグループに通知するか</b>を細かく設定できます</p>
+   <button class="btn sm" id="lark-routes" style="margin-top:6px">🔔 通知先を設定する</button></div>`;
  }
  if(isAdmin()){ // v2.4 権限設定はCEO/HQのみ
   h+=`<div class="card"><h3>🔐 権限設定</h3>
@@ -1813,7 +1825,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.2</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.3</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -1952,17 +1964,19 @@ async function settingsLarkView(){
  if(!lrList){const {data}=await sb.from("lark_routes").select("*").order("sort_order").order("created_at");lrList=data||[]}
  const tName=id=>{const t=teams.find(x=>x.id===id);return t?t.name:""};
  const sName=id=>{const s=stores.find(x=>x.id===id);return s?s.name:""};
- let h=`<span class="back" id="setback">← 設定</span><h2>📝 日報の通知先（Lark）</h2>
- <p class="muted" style="margin-top:-8px;font-size:13px">条件に当てはまる人が日報・週報を提出すると、その内容がLarkのグループに届きます。条件を「すべて」にすると全員が対象です。複数の設定に当てはまる場合は、そのすべてのグループに届きます。</p>`;
+ let h=`<span class="back" id="setback">← 設定</span><h2>🔔 Lark通知の設定</h2>
+ <p class="muted" style="margin-top:-8px;font-size:13px">「どの動きがあったら」「誰が対象のとき」「どのグループに送るか」を組み合わせて登録します。条件を「すべて」にすると全員が対象です。複数の設定に当てはまる場合は、そのすべてのグループに届きます。</p>`;
  if(!lrList.length)h+=`<p class="muted center" style="margin:16px 0">まだ設定がありません。下の「＋ 通知先を追加」から作成してください。</p>`;
  lrList.forEach(r=>{
   const cond=[r.role?ROLE_NAME[r.role]:null,r.team_id?tName(r.team_id):null,r.store_id?sName(r.store_id):null].filter(Boolean);
+  const evs=(r.events||[]).map(e=>LARK_EVENTS[e]||e);
   h+=`<div class="card" style="padding:12px${r.is_active?"":";opacity:.55"}">
    <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
     <b style="font-size:14px">${esc(r.name)}${r.is_active?"":" <span class='badge'>停止中</span>"}</b>
     <span style="flex-shrink:0"><button class="btn sm sub" data-lredit="${r.id}" style="margin:0 4px 0 0">編集</button><button class="btn sm sub" data-lrtest="${r.id}" style="margin:0">テスト</button></span>
    </div>
-   <p class="muted" style="margin:6px 0 0;font-size:12px">対象: ${cond.length?esc(cond.join(" ／ ")):"すべての人"}　種類: ${(r.kinds||[]).map(k=>k==="daily"?"日報":"週報").join("・")}</p></div>`;
+   <p style="margin:6px 0 0;font-size:12px">🔔 ${evs.length?esc(evs.join(" ／ ")):"（未設定）"}</p>
+   <p class="muted" style="margin:3px 0 0;font-size:12px">対象: ${cond.length?esc(cond.join(" ／ ")):"すべての人"}</p></div>`;
  });
  h+=`<button class="btn sm sub" id="lr-add" style="margin-top:8px">＋ 通知先を追加</button>`;
  if(lrEdit){
@@ -1972,14 +1986,14 @@ async function settingsLarkView(){
    <input type="text" id="lr-name" value="${esc(r.name||"")}" placeholder="例: チーム長の日報 → 経営グループ" style="margin-top:2px">
    <p class="muted" style="margin:8px 0 0">Lark Webhook URL</p>
    <input type="text" id="lr-url" value="${esc(r.webhook_url||"")}" placeholder="https://open.larksuite.com/open-apis/bot/v2/hook/..." style="margin-top:2px">
-   <p class="muted" style="margin:10px 0 4px">対象の役職</p>
+   <p class="muted" style="margin:10px 0 4px">🔔 通知する動き（複数選べます）</p>
+   <div>${Object.entries(LARK_EVENTS).map(([k,v])=>`<span class="chip lr-ev ${(r.events||[]).includes(k)?"on":""}" data-e="${k}" style="font-size:12px">${v}</span>`).join("")}</div>
+   <p class="muted" style="margin:10px 0 4px">対象の役職<span style="font-size:11px">（応募の通知では条件は使われません）</span></p>
    <select class="inp" id="lr-role" style="margin:0"><option value="">すべての役職</option>${Object.entries(ROLE_NAME).map(([k,v])=>`<option value="${k}"${r.role===k?" selected":""}>${v}</option>`).join("")}</select>
    <p class="muted" style="margin:8px 0 4px">対象のチーム</p>
    <select class="inp" id="lr-team" style="margin:0"><option value="">すべてのチーム</option>${teams.map(t=>`<option value="${t.id}"${r.team_id===t.id?" selected":""}>${esc(t.name)}</option>`).join("")}</select>
    <p class="muted" style="margin:8px 0 4px">対象の店舗</p>
    <select class="inp" id="lr-store" style="margin:0"><option value="">すべての店舗</option>${stores.map(s=>`<option value="${s.id}"${r.store_id===s.id?" selected":""}>${esc(s.name)}</option>`).join("")}</select>
-   <p class="muted" style="margin:10px 0 4px">通知する種類</p>
-   <div><span class="chip lr-kind ${(r.kinds||["daily","weekly"]).includes("daily")?"on":""}" data-k="daily">日報</span><span class="chip lr-kind ${(r.kinds||["daily","weekly"]).includes("weekly")?"on":""}" data-k="weekly">週報</span></div>
    <div style="margin-top:10px"><span class="chip lr-active ${r.is_active!==false?"on":""}">この設定を有効にする</span></div>
    <button class="btn" id="lr-save" style="margin-top:10px">保存する</button>
    <button class="btn sm sub" id="lr-cancel">キャンセル</button>
@@ -1992,10 +2006,11 @@ async function saveLarkRoute(){
  const name=$("lr-name").value.trim(),url=$("lr-url").value.trim();
  if(!name){toast("名前を入力してください",true);return}
  if(!/^https?:\/\//.test(url)){toast("Webhook URLを正しく入力してください",true);return}
- const kinds=[...document.querySelectorAll(".chip.lr-kind.on")].map(c=>c.dataset.k);
- if(!kinds.length){toast("日報・週報のどちらかを選んでください",true);return}
+ const events=[...document.querySelectorAll(".chip.lr-ev.on")].map(c=>c.dataset.e);
+ if(!events.length){toast("通知する動きを1つ以上選んでください",true);return}
  const row={name,webhook_url:url,role:$("lr-role").value||null,team_id:$("lr-team").value||null,
-  store_id:$("lr-store").value||null,kinds,is_active:document.querySelector(".chip.lr-active").classList.contains("on"),updated_by:me.id};
+  store_id:$("lr-store").value||null,events,kinds:events.filter(e=>e.startsWith("report_")).map(e=>e.replace("report_","")),
+  is_active:document.querySelector(".chip.lr-active").classList.contains("on"),updated_by:me.id};
  if(r.id)row.id=r.id;
  $("lr-save").disabled=true;
  const {error}=await sb.from("lark_routes").upsert(row);
@@ -2499,14 +2514,14 @@ function bindPage(){
   larkUrl=url;toast(url?"Lark通知を設定しました":"Lark通知をオフにしました");
  };
  if($("lark-routes"))$("lark-routes").onclick=()=>{setMode="lark";lrList=null;lrEdit=null;render()};
- if($("lr-add"))$("lr-add").onclick=()=>{lrEdit={name:"",webhook_url:"",kinds:["daily","weekly"],is_active:true};render()};
+ if($("lr-add"))$("lr-add").onclick=()=>{lrEdit={name:"",webhook_url:"",events:["report_daily"],is_active:true};render()};
  if($("lr-cancel"))$("lr-cancel").onclick=()=>{lrEdit=null;render()};
  document.querySelectorAll("[data-lredit]").forEach(b=>b.onclick=()=>{lrEdit={...(lrList||[]).find(x=>x.id===b.dataset.lredit)};render()});
  document.querySelectorAll("[data-lrtest]").forEach(b=>b.onclick=async()=>{
   b.disabled=true;const {data,error}=await sb.rpc("lark_route_test",{p_route:b.dataset.lrtest});b.disabled=false;
   toast(error?"テスト失敗: "+error.message:String(data||"送信しました"),!!error);
  });
- document.querySelectorAll(".chip.lr-kind, .chip.lr-active").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
+ document.querySelectorAll(".chip.lr-ev, .chip.lr-active").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
  if($("lr-save"))$("lr-save").onclick=saveLarkRoute;
  if($("lr-del"))$("lr-del").onclick=async()=>{
   if(!confirm("この通知先を削除します。よろしいですか？"))return;

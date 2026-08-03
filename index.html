@@ -123,6 +123,32 @@ const sb=window.supabase.createClient(SUPA_URL,SUPA_KEY);
 
 // ===== フォーマット定義（プロトタイプ準拠） =====
 const ROLE_NAME={AL:"アルバイト",SHAIN:"社員",TENCHO:"店長",TEAM:"チーム長",HQ:"本部",CEO:"社長"};
+// ===== v2.4 機能権限 =====
+const FEATURES={
+ staff_admin:"従業員管理（招待・入社処理・編集）",
+ store_admin:"店舗管理",
+ format_config:"フォーマット設定（日報・入社フォーム）",
+ dash:"利用ダッシュボード閲覧",
+ recruit:"採用担当（応募者管理）※次バージョンから",
+ evaluate:"評価者（従業員評価）※次バージョンから",
+ kpi_config:"KPI・評価設定 ※次バージョンから"
+};
+const FEATURE_DEFAULTS={ // DB未設定時のフォールバック（v2.3までの動作と同じ）
+ staff_admin:["CEO","HQ"],
+ store_admin:["CEO","HQ"],
+ format_config:["CEO"],
+ dash:["TENCHO","TEAM","SHAIN","HQ","CEO"],
+ recruit:["CEO","HQ"],
+ evaluate:["CEO","HQ","TEAM","TENCHO"],
+ kpi_config:["CEO","HQ"]
+};
+const ROLES_ALL=Object.keys(ROLE_NAME);
+const can=f=>{
+ if(!me)return false;
+ if(me.role==="CEO")return true; // 社長は常に全機能
+ const v=me.features?me.features[f]:null;
+ return v!=null?v:(FEATURE_DEFAULTS[f]||[]).includes(me.role);
+};
 const FORMATS={
  AL:[
   {k:"work",label:"今日の担当業務",type:"multi",opts:["ホール","キッチン","レジ","仕込み","洗い場","清掃","その他"],req:true},
@@ -186,6 +212,7 @@ let chatRoom=null,chatNew=null,chatSeg="all",chatFiles=[],chatGm=[],chatDraft=""
 let dashPeriod="d7",dashMetric="rate"; // v2.0 ダッシュボード
 let chatQ="",tskQ="",chatMeta={}; // v2.1 検索・メッセージ操作
 let chatReply=null,chatInvite=false,chatInviteSel=[]; // v2.2 返信・招待
+let permMatrix=null,permUserSel=null,permUserVals=null,permUsersCache=null; // v2.4 権限設定
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
@@ -423,13 +450,16 @@ async function loadMe(uid){
  if(!u){renderLogin("ユーザー情報を取得できませんでした。管理者にお問い合わせください。");await sb.auth.signOut();return}
  if(!u.is_active){renderLogin("このアカウントは無効化されています。本部までお問い合わせください。");await sb.auth.signOut();return}
  stores=st||[];
- const [{data:us},{data:as}]=await Promise.all([
+ const [{data:us},{data:as},{data:rfeat},{data:ufeat}]=await Promise.all([
   sb.from("user_stores").select("store_id").eq("user_id",uid),
-  sb.from("app_settings").select("key,value")
+  sb.from("app_settings").select("key,value"),
+  sb.from("role_features").select("feature,allowed").eq("role",u.role),   // v2.4
+  sb.from("user_features").select("feature,allowed").eq("user_id",uid)    // v2.4 個人設定が役職より優先
  ]);
  const myIds=(us||[]).map(x=>x.store_id);
  appSettings={};(as||[]).forEach(r=>appSettings[r.key]=r.value);
- me={...u,stores:stores.filter(s=>myIds.includes(s.id))};
+ const fmap={};(rfeat||[]).forEach(x=>fmap[x.feature]=x.allowed);(ufeat||[]).forEach(x=>fmap[x.feature]=x.allowed);
+ me={...u,stores:stores.filter(s=>myIds.includes(s.id)),features:fmap};
  page="home";await render();
 }
 
@@ -465,7 +495,7 @@ async function render(){
  document.getElementById("nav").style.display="flex";
  document.body.classList.add("withnav");
  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.p===page||(page==="weekly"&&b.dataset.p==="write")));
- document.getElementById("navadmin").style.display=isAdmin()?"":"none";
+ document.getElementById("navadmin").style.display=(can("staff_admin")||can("store_admin"))?"":"none";
  updateDots();
  let body="";
  if(page==="home")body=await homeView();
@@ -512,7 +542,7 @@ async function homeView(){
    :`<div class="card"><h3>週報</h3><p class="muted">火曜までに提出</p><button class="btn sub" id="goweekly">週報を書く</button></div>`;
  }
  h+=`<div class="card" id="gofb" style="cursor:pointer"><h3>📋 日報・週報を見る</h3><p class="muted">閲覧できる日報・週報: ${count??0}件</p></div>`;
- if(["TENCHO","TEAM","SHAIN","HQ","CEO"].includes(me.role))h+=`<div class="card" id="godash" style="cursor:pointer"><h3>📈 利用ダッシュボード</h3><p class="muted">提出率・提出漏れ・FB数・いいね・チャット利用状況</p></div>`; // v2.0
+ if(can("dash"))h+=`<div class="card" id="godash" style="cursor:pointer"><h3>📈 利用ダッシュボード</h3><p class="muted">提出率・提出漏れ・FB数・いいね・チャット利用状況</p></div>`; // v2.0（v2.4で機能権限化）
  h+=`<div class="card"><h3>🔍 検索</h3>
   <input type="text" id="homeq" placeholder="フリーワード（内容・氏名・店舗など）" value="${esc(searchQ)}" style="margin-top:0">
   <div style="margin-top:6px"><span class="chip ${seg==="daily"?"on":""}" data-hseg="daily">日報</span><span class="chip ${seg==="weekly"?"on":""}" data-hseg="weekly">週報</span></div>
@@ -908,6 +938,7 @@ function dashRange(){ // [開始Date, 終了Date]
  return [new Date(now.getTime()-(dashPeriod==="d7"?7:30)*864e5),now];
 }
 async function dashView(){
+ if(!can("dash"))return `<span class="back" data-nav="home">← ホーム</span><p class="muted">このページを表示する権限がありません。</p>`; // v2.4
  await chatEnsureUsers();
  const [t0,t1]=dashRange();
  const dayN=Math.max(1,Math.round((t1-t0)/864e5));
@@ -1037,7 +1068,7 @@ const isAdmin=()=>me&&(me.role==="CEO"||me.role==="HQ");
 const genPw=()=>{const c="abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";let p="";for(let i=0;i<10;i++)p+=c[Math.floor(Math.random()*c.length)];return p};
 
 async function adminView(){
- if(!isAdmin())return `<p class="muted">このページを表示する権限がありません。</p>`;
+ if(!can("staff_admin")&&!can("store_admin"))return `<p class="muted">このページを表示する権限がありません。</p>`; // v2.4
  if(adminMode==="new")return adminNewView();
  if(adminMode==="edit")return await adminEditView();
  if(adminMode==="invite")return await adminInviteView();
@@ -1057,15 +1088,17 @@ async function adminView(){
  let h=`<h2>従業員管理</h2>`;
  (ntfs||[]).forEach(n=>{h+=`<div class="info" style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><span>🔔 ${esc((n.body_i18n&&n.body_i18n.ja)||"")}<br><span class="muted">${new Date(n.created_at).toLocaleString("ja-JP")}</span></span><button class="btn sm sub" data-ntfread="${n.id}" style="flex-shrink:0">既読</button></div>`});
  if(lastIssued){h+=`<div class="info">✅ <b>${esc(lastIssued.name)}</b>さんのアカウントを発行しました。<br>ログインID: <b>${esc(lastIssued.email)}</b><br>初期パスワード: <b>${esc(lastIssued.pw)}</b><br>※この情報を本人に伝えてください（再表示されません）</div>`}
- h+=`<button class="btn" id="adinvite">🔗 招待リンクを発行（入社者が自分で登録）</button>
+ if(can("staff_admin"))h+=`<button class="btn" id="adinvite">🔗 招待リンクを発行（入社者が自分で登録）</button>
   <button class="btn sub" id="adnew">＋ 入社処理（本部が代理で発行）</button>
-  <button class="btn sub" id="adsmaregi">📇 スマレジ登録スタッフ一覧</button>
-  <button class="btn sub" id="adstores">🏪 店舗管理（追加・並び替え・スマレジ紐付け）</button>
-  <p class="muted">${adminUsers.length}名（タップで役職・所属の変更）</p>
+  <button class="btn sub" id="adsmaregi">📇 スマレジ登録スタッフ一覧</button>`;
+ if(can("store_admin"))h+=`<button class="btn sub" id="adstores">🏪 店舗管理（追加・並び替え・スマレジ紐付け）</button>`;
+ if(can("staff_admin")){
+  h+=`<p class="muted">${adminUsers.length}名（タップで役職・所属の変更）</p>
   <input type="text" id="auq" placeholder="🔍 氏名・メール・役職・店舗で絞り込み" style="margin:4px 0 8px">`;
- adminUsers.forEach(u=>{
-  h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">無効</span>'}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}</span></span><span class="muted">›</span></div>`;
- });
+  adminUsers.forEach(u=>{
+   h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">無効</span>'}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}</span></span><span class="muted">›</span></div>`;
+  });
+ }
  return h;
 }
 
@@ -1301,20 +1334,92 @@ async function adminToggle(){
 async function settingsView(){
  if(setMode==="join")return settingsJoinView();
  if(setMode==="fmt")return settingsFmtView();
+ if(setMode==="perm")return await settingsPermView(); // v2.4
  let h=`<h2>設定</h2>
   <div class="card"><h3>プロフィール</h3>
    <p style="font-size:14px">${esc(me.name)}（${ROLE_NAME[me.role]||""}${isKennin()?"・店長兼任":""}）<br>
    <span class="muted">${esc(me.email)}</span><br>
    <span class="muted">所属: ${me.stores.map(s=>esc(s.name)).join("・")||"なし"}</span></p></div>`;
- if(me.role==="CEO"){
-  h+=`<div class="card"><h3>🛠 カスタマイズ（社長のみ）</h3>
+ if(can("format_config")){
+  h+=`<div class="card"><h3>🛠 カスタマイズ</h3>
    <button class="btn sm" id="set-join" style="margin-bottom:8px">入社フォームの項目設定</button>
    <button class="btn sm" id="set-fmt">日報・週報の項目設定</button></div>`;
  }
+ if(isAdmin()){ // v2.4 権限設定はCEO/HQのみ
+  h+=`<div class="card"><h3>🔐 権限設定</h3>
+   <p class="muted" style="margin:0 0 8px">役職ごとに使える機能と、特定の人だけの例外を設定できます</p>
+   <button class="btn sm" id="set-perm">権限設定を開く</button></div>`;
+ }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.2</p>`;
+  <p class="muted center" style="margin-top:16px">v2.4</p>`;
  return h;
+}
+// ===== v2.4 権限設定画面 =====
+async function settingsPermView(){
+ if(!permMatrix){
+  const [{data:rf},{data:us}]=await Promise.all([
+   sb.from("role_features").select("role,feature,allowed"),
+   sb.from("users").select("id,name,role").eq("is_active",true).order("name")
+  ]);
+  permMatrix={};
+  Object.keys(FEATURES).forEach(f=>{permMatrix[f]={};ROLES_ALL.forEach(r=>{
+   const hit=(rf||[]).find(x=>x.feature===f&&x.role===r);
+   permMatrix[f][r]=r==="CEO"?true:(hit?hit.allowed:(FEATURE_DEFAULTS[f]||[]).includes(r));
+  })});
+  permUsersCache=us||[];
+ }
+ let h=`<span class="back" id="setback">← 設定</span><h2>🔐 権限設定</h2>
+ <p class="muted" style="margin-top:-8px;font-size:13px">○＝使える ／ −＝使えない。タップで切り替え、最後に保存してください。社長は常にすべての機能を使えます。</p>
+ <div class="card"><h3>役職ごとの機能</h3><div class="tblwrap"><table class="tbl" style="min-width:560px">
+ <tr class="muted"><td style="text-align:left">機能</td>${ROLES_ALL.map(r=>`<td style="text-align:center">${ROLE_NAME[r]}</td>`).join("")}</tr>
+ ${Object.entries(FEATURES).map(([f,label])=>`<tr><td style="text-align:left;font-size:12px">${label}</td>${ROLES_ALL.map(r=>`<td style="text-align:center"><span class="chip ${permMatrix[f][r]?"on":""}" data-pf="${f}" data-pr="${r}" style="font-size:11px;padding:2px 9px;margin:1px${r==="CEO"?";opacity:.5;pointer-events:none":""}">${permMatrix[f][r]?"○":"−"}</span></td>`).join("")}</tr>`).join("")}
+ </table></div></div>`;
+ h+=`<div class="card"><h3>個人ごとの例外設定</h3>
+ <p class="muted" style="margin:0">特定の人にだけ機能を追加（または禁止）できます。役職の設定より優先されます。</p>
+ <select class="inp" id="pu-user"><option value="">人を選んでください</option>${(permUsersCache||[]).filter(u=>u.role!=="CEO").map(u=>`<option value="${u.id}" ${permUserSel===u.id?"selected":""}>${esc(u.name)}（${ROLE_NAME[u.role]||""}）</option>`).join("")}</select>`;
+ if(permUserSel&&permUserVals){
+  const pu=(permUsersCache||[]).find(u=>u.id===permUserSel);
+  if(pu)h+=Object.entries(FEATURES).map(([f,label])=>{
+   const v=permUserVals[f];
+   return `<div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+    <span style="flex:1;font-size:13px">${label}<br><span class="muted">役職の設定: ${permMatrix[f][pu.role]?"○ 使える":"− 使えない"}</span></span>
+    <select class="inp" data-puf="${f}" style="width:auto;margin:0;font-size:13px">
+     <option value="" ${v==null?"selected":""}>役職どおり</option>
+     <option value="1" ${v===true?"selected":""}>この人は使える</option>
+     <option value="0" ${v===false?"selected":""}>この人は使えない</option>
+    </select></div>`;
+  }).join("");
+ }
+ h+=`</div><button class="btn" id="perm-save">この内容で保存する</button>`;
+ return h;
+}
+function collectPermDom(){
+ document.querySelectorAll(".chip[data-pf]").forEach(c=>{permMatrix[c.dataset.pf][c.dataset.pr]=c.dataset.pr==="CEO"?true:c.classList.contains("on")});
+}
+async function savePerm(){
+ collectPermDom();
+ $("perm-save").disabled=true;
+ const rows=[];Object.keys(FEATURES).forEach(f=>ROLES_ALL.forEach(r=>rows.push({role:r,feature:f,allowed:!!permMatrix[f][r],updated_by:me.id})));
+ const {error}=await sb.from("role_features").upsert(rows);
+ if(error){toast("保存エラー: "+error.message,true);$("perm-save").disabled=false;return}
+ if(permUserSel){
+  const ups=[],dels=[];
+  document.querySelectorAll("select[data-puf]").forEach(s=>{
+   if(s.value==="")dels.push(s.dataset.puf);
+   else ups.push({user_id:permUserSel,feature:s.dataset.puf,allowed:s.value==="1",updated_by:me.id});
+  });
+  if(dels.length)await sb.from("user_features").delete().eq("user_id",permUserSel).in("feature",dels);
+  if(ups.length){const {error:e2}=await sb.from("user_features").upsert(ups);if(e2){toast("保存エラー: "+e2.message,true);$("perm-save").disabled=false;return}}
+ }
+ const [{data:rf2},{data:uf2}]=await Promise.all([ // 自分の権限を再読込
+  sb.from("role_features").select("feature,allowed").eq("role",me.role),
+  sb.from("user_features").select("feature,allowed").eq("user_id",me.id)
+ ]);
+ const fmap={};(rf2||[]).forEach(x=>fmap[x.feature]=x.allowed);(uf2||[]).forEach(x=>fmap[x.feature]=x.allowed);
+ me.features=fmap;
+ toast("権限を保存しました");
+ setMode="main";permMatrix=null;permUserSel=null;permUserVals=null;render();
 }
 function settingsJoinView(){
  const cfg=cfgJoin;
@@ -1762,7 +1867,23 @@ function bindPage(){
  // 設定カスタマイズ（v1.5）
  if($("set-join"))$("set-join").onclick=()=>{setMode="join";cfgJoin=joinCfg();render()};
  if($("set-fmt"))$("set-fmt").onclick=()=>{setMode="fmt";cfgFmts=JSON.parse(JSON.stringify(appSettings.formats||{}));render()};
- if($("setback"))$("setback").onclick=()=>{setMode="main";render()};
+ if($("setback"))$("setback").onclick=()=>{setMode="main";permMatrix=null;permUserSel=null;permUserVals=null;render()};
+ // v2.4 権限設定
+ if($("set-perm"))$("set-perm").onclick=()=>{setMode="perm";permMatrix=null;permUserSel=null;permUserVals=null;render()};
+ document.querySelectorAll(".chip[data-pf]").forEach(c=>c.onclick=()=>{
+  if(c.dataset.pr==="CEO")return;
+  c.classList.toggle("on");c.textContent=c.classList.contains("on")?"○":"−";
+ });
+ if($("pu-user"))$("pu-user").onchange=async()=>{
+  collectPermDom(); // 編集途中のマトリクスを保持
+  permUserSel=$("pu-user").value||null;permUserVals=null;
+  if(permUserSel){
+   const {data:uf}=await sb.from("user_features").select("feature,allowed").eq("user_id",permUserSel);
+   permUserVals={};(uf||[]).forEach(x=>permUserVals[x.feature]=x.allowed);
+  }
+  render();
+ };
+ if($("perm-save"))$("perm-save").onclick=savePerm;
  document.querySelectorAll(".chip.jf-on,.chip.jf-req,.chip.jc-req,.chip.f-req").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
  document.querySelectorAll("[data-jcdel]").forEach(c=>c.onclick=()=>{collectJoinDom();cfgJoin.custom.splice(+c.dataset.jcdel,1);render()});
  if($("jc-add"))$("jc-add").onclick=()=>{collectJoinDom();cfgJoin.custom.push({label:"",req:false,type:"text",opts:[]});render()};

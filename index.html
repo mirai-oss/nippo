@@ -223,6 +223,7 @@ let chatReply=null,chatInvite=false,chatInviteSel=[]; // v2.2 返信・招待
 let permMatrix=null,permUserSel=null,permUserVals=null,permUsersCache=null; // v2.4 権限設定
 let rcList=null,rcSeg="active",rcQ="",rcDetail=null,rcForms=null,applyFormDef=null; // v2.5 応募者管理
 let rcFForm="",rcFSrc="",rcFArea="",rcSort="new",rcCosts=null,rcHiredInfo=null,joinSmSel=null,joinSmNo=false; // v2.5.2
+let rcFStatus=""; // v2.5.6 選考ステータス絞り込み
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
@@ -1213,7 +1214,7 @@ async function recruitView(){
   }
  }
  const q=rcQ.toLowerCase();
- const match=a=>{
+ const matchBase=a=>{
   if(q&&!(((a.name||"")+(a.phone||"")+(a.email||"")+(a.job_type||"")+(a.note||"")+JSON.stringify(a.answers||{})).toLowerCase().includes(q)))return false;
   if(rcFForm==="none"){if(a.form_key)return false}
   else if(rcFForm&&a.form_key!==rcFForm)return false;
@@ -1221,6 +1222,8 @@ async function recruitView(){
   if(rcFArea&&!((rcAreaOf(a)+" "+(a.job_type||"")+JSON.stringify(a.answers||{})).includes(rcFArea)))return false;
   return true;
  };
+ const match=a=>matchBase(a)&&(!rcFStatus||a.status===rcFStatus); // v2.5.6
+ const stCount={};Object.keys(APPLICANT_STATUS).forEach(k=>{stCount[k]=rcList.filter(a=>matchBase(a)&&a.status===k).length});
  const sorter=(x,y)=>{
   if(rcSort==="old")return x.applied_at<y.applied_at?-1:1;
   if(rcSort==="interview")return (x.interview_at||"9999")<(y.interview_at||"9999")?-1:1;
@@ -1236,12 +1239,13 @@ async function recruitView(){
  let h=`<h2>📥 応募者管理</h2>`;
  h+=`<input type="text" id="rcq" placeholder="🔍 氏名・電話・回答内容で検索（Enter）" value="${esc(rcQ)}" style="margin:0 0 8px">`;
  h+=`<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+  <select class="inp" id="rc-fstatus" style="flex:1;min-width:120px;margin:0;font-size:13px;padding:8px;${rcFStatus?`border-color:${APPLICANT_COLOR[rcFStatus]};color:${APPLICANT_COLOR[rcFStatus]};font-weight:600`:""}"><option value="">状況: 全て</option>${Object.entries(APPLICANT_STATUS).map(([k,v])=>`<option value="${k}"${rcFStatus===k?" selected":""}>${v}（${stCount[k]}）</option>`).join("")}</select>
   <select class="inp" id="rc-fform" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">区分: 全て</option><option value="al"${rcFForm==="al"?" selected":""}>アルバイト</option><option value="shain"${rcFForm==="shain"?" selected":""}>社員</option><option value="none"${rcFForm==="none"?" selected":""}>未設定</option></select>
   <select class="inp" id="rc-farea" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">エリア: 全て</option>${AREAS.map(a=>`<option${rcFArea===a?" selected":""}>${a}</option>`).join("")}</select>
   <select class="inp" id="rc-fsrc" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">応募元: 全て</option>${Object.entries(APPLICANT_SOURCE).map(([k,v])=>`<option value="${k}"${rcFSrc===k?" selected":""}>${v}</option>`).join("")}</select>
   <select class="inp" id="rc-sort" style="flex:1;min-width:120px;margin:0;font-size:13px;padding:8px"><option value="new"${rcSort==="new"?" selected":""}>並び: 新しい順</option><option value="old"${rcSort==="old"?" selected":""}>並び: 古い順</option><option value="interview"${rcSort==="interview"?" selected":""}>並び: 面接日が近い順</option><option value="name"${rcSort==="name"?" selected":""}>並び: 名前順</option><option value="status"${rcSort==="status"?" selected":""}>並び: ステータス順</option></select>
  </div>`;
- if(rcQ||rcFForm||rcFSrc||rcFArea)h+=`<p class="muted" style="margin:0 0 8px">絞り込み中: ${act.length+hired.length+closed.length}件　<span style="color:var(--blue);cursor:pointer" id="rcqclear">✕ 条件をクリア</span></p>`;
+ if(rcQ||rcFForm||rcFSrc||rcFArea||rcFStatus)h+=`<p class="muted" style="margin:0 0 8px">絞り込み中: ${act.length+hired.length+closed.length}件　<span style="color:var(--blue);cursor:pointer" id="rcqclear">✕ 条件をクリア</span></p>`;
  h+=`<div class="seg"><div class="${rcSeg==="active"?"on":""}" data-rcseg="active">選考中 ${act.length}</div><div class="${rcSeg==="hired"?"on":""}" data-rcseg="hired">採用 ${hired.length}</div><div class="${rcSeg==="closed"?"on":""}" data-rcseg="closed">不採用・辞退 ${closed.length}</div></div>`;
  const list=rcSeg==="active"?act:rcSeg==="hired"?hired:closed;
  if(!list.length)h+=`<p class="muted center" style="margin-top:16px">該当する応募者はいません</p>`;
@@ -1272,7 +1276,7 @@ async function recruitView(){
   });
   return rows.length?rows.reduce((s,c)=>s+(+c.amount),0):null;
  };
- const filtLabel=(rcFArea||rcFForm||rcFSrc||rcQ)?`絞り込みで再計算中${rcFArea?"・"+esc(rcFArea):""}${rcFForm==="al"?"・アルバイト":rcFForm==="shain"?"・社員":""}`:"全体";
+ const filtLabel=(rcFArea||rcFForm||rcFSrc||rcQ||rcFStatus)?`絞り込みで再計算中${rcFArea?"・"+esc(rcFArea):""}${rcFForm==="al"?"・アルバイト":rcFForm==="shain"?"・社員":""}${rcFStatus?"・"+APPLICANT_STATUS[rcFStatus]:""}`:"全体";
  rcStatRows=[["月","応募","面接","採用","面接率","採用率","費用","応募単価","面接単価","採用単価"]];
  months.forEach(m=>{
   const ms=fAll.filter(a=>mkey(a.applied_at)===m);
@@ -1686,7 +1690,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.5.5</p>`;
+  <p class="muted center" style="margin-top:16px">v2.5.6</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2152,11 +2156,17 @@ function bindPage(){
  // v2.5 応募者管理
  if($("rcback"))$("rcback").onclick=()=>{rcDetail=null;render()};
  document.querySelectorAll("[data-rca]").forEach(el=>el.onclick=()=>{rcDetail=el.dataset.rca;render()});
- document.querySelectorAll("[data-rcseg]").forEach(el=>el.onclick=()=>{rcSeg=el.dataset.rcseg;render()});
+ document.querySelectorAll("[data-rcseg]").forEach(el=>el.onclick=()=>{rcSeg=el.dataset.rcseg;if(rcFStatus&&rcSegOf(rcFStatus)!==rcSeg)rcFStatus="";render()});
  document.querySelectorAll("[data-rccopy]").forEach(el=>el.onclick=e=>{e.stopPropagation();copyText(el.dataset.rccopy)});
  if($("rcq"))$("rcq").onkeydown=e=>{if(e.key==="Enter"){rcQ=$("rcq").value.trim();render()}};
- if($("rcqclear"))$("rcqclear").onclick=()=>{rcQ="";rcFForm="";rcFSrc="";rcFArea="";render()};
- ["rc-fform","rc-fsrc","rc-farea","rc-sort"].forEach(fid=>{if($(fid))$(fid).onchange=()=>{rcFForm=$("rc-fform").value;rcFSrc=$("rc-fsrc").value;rcFArea=$("rc-farea").value;rcSort=$("rc-sort").value;render()}});
+ if($("rcqclear"))$("rcqclear").onclick=()=>{rcQ="";rcFForm="";rcFSrc="";rcFArea="";rcFStatus="";render()};
+ const rcSegOf=st=>st==="hired"?"hired":(st==="rejected"||st==="declined")?"closed":"active"; // v2.5.6
+ ["rc-fform","rc-fsrc","rc-farea","rc-sort","rc-fstatus"].forEach(fid=>{if($(fid))$(fid).onchange=()=>{
+  rcFForm=$("rc-fform").value;rcFSrc=$("rc-fsrc").value;rcFArea=$("rc-farea").value;rcSort=$("rc-sort").value;
+  rcFStatus=$("rc-fstatus")?$("rc-fstatus").value:"";
+  if(rcFStatus)rcSeg=rcSegOf(rcFStatus); // 選んだ状況が入っているタブへ自動で移動
+  render();
+ }});
  if($("rc-csv"))$("rc-csv").onclick=exportRecruitCsv;
  if($("rc-statcsv"))$("rc-statcsv").onclick=exportStatsCsv;
  if($("rc-csave"))$("rc-csave").onclick=saveRecruitCost;
@@ -2314,6 +2324,10 @@ function bindPage(){
   editId=detail;detail=null;page=r&&r.kind==="weekly"?"weekly":"write";render();
  };
 }
+
+// v2.5.6 未読バッジの自動更新（新しい応募・通知を画面を切り替えなくても反映）
+setInterval(()=>{if(me&&document.getElementById("nav").style.display!=="none")updateDots()},60000);
+document.addEventListener("visibilitychange",()=>{if(!document.hidden&&me)updateDots()});
 
 // セッション切れ対応
 sb.auth.onAuthStateChange((ev)=>{if(ev==="SIGNED_OUT"){me=null;renderLogin()}});

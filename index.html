@@ -1192,7 +1192,7 @@ async function recruitView(){
  try{await sb.from("applicants").delete().in("status",["rejected","declined"]).lt("status_changed_at",new Date(Date.now()-365*864e5).toISOString());}catch(e){}
  try{await sb.from("notifications").update({read_at:new Date().toISOString()}).eq("recipient_id",me.id).eq("type","applicant_new").is("read_at",null);}catch(e){}
  if(!rcForms){const {data:f}=await sb.from("applicant_forms").select("*");rcForms=f||[]}
- const {data:as,error}=await sb.from("applicants").select("*").order("applied_at",{ascending:false}).limit(500);
+ const {data:as,error}=await sb.from("applicants").select("*").order("applied_at",{ascending:false}).limit(1000); // v2.5.3 移行データ対応で上限拡大
  if(error)return `<h2>📥 応募者管理</h2><div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
  rcList=as||[];
  await chatEnsureUsers();

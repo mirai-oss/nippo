@@ -242,7 +242,10 @@ const LARK_EVENTS={
 const LARK_PERSON_EVENTS=["report_daily","report_weekly","join_registered","task_assigned","report_comment","report_like","chat_message"];
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
+// v2.6.4 業務日: 日本時間の朝6時を境にした日付（JST -6時間 = UTC +3時間の日付）
+// 例) 日本時間 8/4 5:00 → 8/3 ／ 8/4 6:00 → 8/4 ／ 8/5 1:00 → 8/4
+const todayStr=()=>new Date(Date.now()+3*3600e3).toISOString().slice(0,10);
+const isEarlyMorning=()=>{const h=new Date(Date.now()+9*3600e3).getUTCHours();return h<6};
 const fmtDate=s=>{if(!s)return"";const d=new Date(s+"T00:00:00");return (d.getMonth()+1)+"/"+d.getDate()+"("+"日月火水木金土"[d.getDay()]+")"};
 const isKennin=()=>me&&me.concurrent_role==="TENCHO";
 // v2.5.7 技術的なエラー文を分かりやすい日本語に変換
@@ -698,6 +701,7 @@ async function writeView(kind){
   form=(d&&d.answers)||{};
  }else form={...er.answers};
  let h=`<span class="back" data-nav="home">← ホーム</span><h2>${kind==="weekly"?"週報":"日報"} ${fmtDate(todayStr())}${er?"（修正）":""}</h2>`;
+ if(isEarlyMorning())h+=`<div class="info" style="margin-top:-4px">🌙 深夜のご入力ありがとうございます。朝6時までは<b>前日（${fmtDate(todayStr())}）の日報</b>として受け付けます。</div>`;
  fmt.forEach(f=>{
   h+=`<div class="card"><h3>${esc(f.label)} ${f.req?'<span class="req">必須</span>':""}</h3>`;
   const v=form[f.k];
@@ -1825,7 +1829,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.3</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.4</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====

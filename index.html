@@ -138,6 +138,8 @@ const FEATURES={
 const APPLICANT_STATUS={new:"新規",contacted:"連絡済み",interview_set:"面接設定",interviewed:"面接済み",hired:"採用",rejected:"不採用",declined:"辞退"};
 const APPLICANT_ACTIVE=["new","contacted","interview_set","interviewed"];
 const APPLICANT_SOURCE={form:"フォーム",indeed:"Indeed",manual:"手動",csv:"CSV",referral:"紹介"};
+const rcAreaOf=a=>{const an=(a&&a.answers)||{};if(an["勤務地"])return String(an["勤務地"]);if(an["area1"])return String(an["area1"]);const k=Object.keys(an).find(x=>x.includes("希望エリア"));return k?String(an[k]):""}; // v2.5.4 店舗・エリア
+let rcStatRows=null; // v2.5.4 集計CSV用
 const FEATURE_DEFAULTS={ // DB未設定時のフォールバック（v2.3までの動作と同じ）
  staff_admin:["CEO","HQ"],
  store_admin:["CEO","HQ"],
@@ -1215,7 +1217,7 @@ async function recruitView(){
   if(rcFForm==="none"){if(a.form_key)return false}
   else if(rcFForm&&a.form_key!==rcFForm)return false;
   if(rcFSrc&&a.source!==rcFSrc)return false;
-  if(rcFArea&&!(((a.job_type||"")+JSON.stringify(a.answers||{})).includes(rcFArea)))return false;
+  if(rcFArea&&!((rcAreaOf(a)+" "+(a.job_type||"")+JSON.stringify(a.answers||{})).includes(rcFArea)))return false;
   return true;
  };
  const sorter=(x,y)=>{
@@ -1228,7 +1230,8 @@ async function recruitView(){
  const act=rcList.filter(a=>APPLICANT_ACTIVE.includes(a.status)&&match(a)).sort(sorter);
  const hired=rcList.filter(a=>a.status==="hired"&&match(a)).sort(sorter);
  const closed=rcList.filter(a=>(a.status==="rejected"||a.status==="declined")&&match(a)).sort(sorter);
- const AREAS=["田町","三田","恵比寿","新橋","新横浜","川崎"];
+ const fAll=rcList.filter(match); // v2.5.4 集計は絞り込み条件に連動
+ const AREAS=(()=>{const base=["恵比寿","本店","川崎","新横浜","田町","三田","新橋","芝"];const found={};rcList.forEach(a=>{const v=rcAreaOf(a).split("、")[0].split(",")[0].trim();if(v&&v.length<=12)found[v]=(found[v]||0)+1});const extra=Object.keys(found).filter(v=>!base.includes(v)).sort((x,y)=>found[y]-found[x]).slice(0,8);return base.concat(extra)})();
  let h=`<h2>📥 応募者管理</h2>`;
  h+=`<input type="text" id="rcq" placeholder="🔍 氏名・電話・回答内容で検索（Enter）" value="${esc(rcQ)}" style="margin:0 0 8px">`;
  h+=`<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
@@ -1247,25 +1250,39 @@ async function recruitView(){
    :`<span class="badge b">${APPLICANT_STATUS[a.status]}</span>`;
   const form=(rcForms||[]).find(f=>f.key===a.form_key);
   h+=`<div class="row" data-rca="${a.id}"><span><b>${esc(a.name)}</b> ${stBadge}${a.user_id?' <span class="badge g">入社済み</span>':""}<br>
-   <span class="muted">${form?esc(form.title.replace("応募フォーム","")):esc(a.job_type||"")}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}${a.interview_at?`・面接 ${fmtDue(a.interview_at)}`:""}</span></span><span class="muted">›</span></div>`;
+   <span class="muted">${form?esc(form.title.replace("応募フォーム","")):esc(a.job_type||"")}${rcAreaOf(a)?"・🏪"+esc(rcAreaOf(a).split("、")[0].split(",")[0].slice(0,10)):""}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}${a.interview_at?`・面接 ${fmtDue(a.interview_at)}`:""}</span></span><span class="muted">›</span></div>`;
  });
  h+=`<button class="btn sm sub" id="rc-csv" style="margin-top:10px">📄 表示中の一覧をCSVダウンロード</button>`;
  // 月別集計と単価
  const mkey=d=>{const x=new Date(d);return x.getFullYear()+"/"+(x.getMonth()+1)};
- const cmap={};(rcCosts||[]).forEach(c=>{const d=new Date(c.month+"T00:00:00");cmap[d.getFullYear()+"/"+(d.getMonth()+1)]=+c.amount});
  const months=[];for(let i=5;i>=0;i--){const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-i);months.push(d.getFullYear()+"/"+(d.getMonth()+1))}
- const yen=n=>"¥"+Math.round(n).toLocaleString("ja-JP");
- h+=`<div class="card" style="margin-top:14px"><h3>📊 月別の採用状況と単価</h3><div class="tblwrap"><table class="tbl" style="min-width:640px">
-  <tr class="muted"><td style="text-align:left">月</td><td>応募</td><td>面接</td><td>採用</td><td>面接率</td><td>採用率</td><td>費用</td><td>応募単価</td><td>面接単価</td><td>採用単価</td></tr>
-  ${months.map(m=>{
-   const ms=rcList.filter(a=>mkey(a.applied_at)===m);
-   const ap=ms.length,iv=ms.filter(a=>["interviewed","hired"].includes(a.status)).length,hi=ms.filter(a=>a.status==="hired").length;
-   const cost=cmap[m];
-   return `<tr><td style="text-align:left">${m}</td><td>${ap}</td><td>${iv}</td><td>${hi}</td><td>${ap?Math.round(iv/ap*100)+"%":"−"}</td><td>${ap?Math.round(hi/ap*100)+"%":"−"}</td><td>${cost!=null?yen(cost):"−"}</td><td>${cost!=null&&ap?yen(cost/ap):"−"}</td><td>${cost!=null&&iv?yen(cost/iv):"−"}</td><td>${cost!=null&&hi?yen(cost/hi):"−"}</td></tr>`;
-  }).join("")}
- </table></div><p class="muted" style="margin-top:6px">面接=面接済み以降の人数 ／ 単価=その月の費用÷件数 ／ 費用は下の「求人費用」から入力</p></div>`;
+ const costFor=m=>{ // 絞り込み条件に合う費用の合計（該当入力がなければ null）
+  const rows=(rcCosts||[]).filter(c=>{
+   const d=new Date(c.month+"T00:00:00");
+   if(d.getFullYear()+"/"+(d.getMonth()+1)!==m)return false;
+   if(rcFArea&&(c.area||"")!==rcFArea)return false;
+   if((rcFForm==="al"||rcFForm==="shain")&&(c.form_key||"")!==rcFForm)return false;
+   return true;
+  });
+  return rows.length?rows.reduce((s,c)=>s+(+c.amount),0):null;
+ };
+ const filtLabel=(rcFArea||rcFForm||rcFSrc||rcQ)?`絞り込みで再計算中${rcFArea?"・"+esc(rcFArea):""}${rcFForm==="al"?"・アルバイト":rcFForm==="shain"?"・社員":""}`:"全体";
+ rcStatRows=[["月","応募","面接","採用","面接率","採用率","費用","応募単価","面接単価","採用単価"]];
+ months.forEach(m=>{
+  const ms=fAll.filter(a=>mkey(a.applied_at)===m);
+  const ap=ms.length,iv=ms.filter(a=>["interviewed","hired"].includes(a.status)).length,hi=ms.filter(a=>a.status==="hired").length;
+  const cost=costFor(m);
+  rcStatRows.push([m,ap,iv,hi,ap?Math.round(iv/ap*100)+"%":"−",ap?Math.round(hi/ap*100)+"%":"−",cost!=null?cost:"−",cost!=null&&ap?Math.round(cost/ap):"−",cost!=null&&iv?Math.round(cost/iv):"−",cost!=null&&hi?Math.round(cost/hi):"−"]);
+ });
+ const yenCell=(c,i)=>i>=6&&c!=="−"?"¥"+(+c).toLocaleString("ja-JP"):c;
+ h+=`<div class="card" style="margin-top:14px"><h3>📊 月別の採用状況と単価 <span class="muted" style="font-weight:400;font-size:11px">（${filtLabel}）</span></h3><div class="tblwrap"><table class="tbl" style="min-width:640px">
+  <tr class="muted">${rcStatRows[0].map((c,i)=>`<td${i===0?' style="text-align:left"':""}>${c}</td>`).join("")}</tr>
+  ${rcStatRows.slice(1).map(r=>`<tr>${r.map((c,i)=>`<td${i===0?' style="text-align:left"':""}>${yenCell(c,i)}</td>`).join("")}</tr>`).join("")}
+ </table></div>
+ <button class="btn sm sub" id="rc-statcsv" style="margin-top:8px">📄 この集計をCSVダウンロード</button>
+ <p class="muted" style="margin-top:6px">上の絞り込み（区分・エリアなど）に連動して再計算 ／ 費用は同じ条件で入力された分だけを合計 ／ 面接=面接済み以降の人数</p></div>`;
  // 採用者の定着・離職
- const hiredAll=rcList.filter(a=>a.user_id);
+ const hiredAll=fAll.filter(a=>a.user_id); // v2.5.4 絞り込み連動
  if(hiredAll.length){
   const uinfo=id=>(rcHiredInfo.users||[]).find(u=>u.id===id);
   const hdate=id=>{const p=(rcHiredInfo.profs||[]).find(x=>x.user_id===id);return p&&p.hire_date?new Date(p.hire_date+"T00:00:00"):null};
@@ -1279,14 +1296,16 @@ async function recruitView(){
  }
  // 求人費用の入力
  const curMonth=(()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")})();
- h+=`<div class="card"><h3>💰 求人費用（月別）</h3>
-  <p class="muted" style="margin:0">Indeedなどにかけた費用を入れると、上の表に単価（応募・面接・採用）が出ます</p>
-  <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
-   <input type="month" class="inp" id="rc-cmonth" value="${curMonth}" style="flex:1.2;margin:0">
-   <input type="text" id="rc-camount" placeholder="金額（円）" inputmode="numeric" style="flex:1;margin:0">
+ h+=`<div class="card"><h3>💰 求人費用（月別・店舗別・区分別）</h3>
+  <p class="muted" style="margin:0">「全体・共通」でざっくり入れてもOK、店舗や区分ごとに分けてもOK。上の表は絞り込み条件と同じ条件で入力した費用を使って単価を出します（全体と内訳の両方を入れると合算されるので、どちらかに統一がおすすめ）</p>
+  <div style="display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap">
+   <input type="month" class="inp" id="rc-cmonth" value="${curMonth}" style="flex:1.2;min-width:130px;margin:0">
+   <select class="inp" id="rc-carea" style="flex:1;min-width:96px;margin:0;font-size:13px"><option value="">全体</option>${AREAS.map(x=>`<option>${esc(x)}</option>`).join("")}</select>
+   <select class="inp" id="rc-cform" style="flex:1;min-width:96px;margin:0;font-size:13px"><option value="">共通</option><option value="al">アルバイト</option><option value="shain">社員</option></select>
   </div>
-  <button class="btn sm" id="rc-csave">この月の費用を保存</button>
-  ${(rcCosts||[]).length?`<p class="muted" style="margin:8px 0 0">入力済み: ${(rcCosts||[]).slice().sort((a,b)=>a.month<b.month?1:-1).slice(0,6).map(c=>{const d=new Date(c.month+"T00:00:00");return d.getFullYear()+"/"+(d.getMonth()+1)+" ¥"+(+c.amount).toLocaleString("ja-JP")}).join("　")}</p>`:""}</div>`;
+  <input type="text" id="rc-camount" placeholder="金額（円）" inputmode="numeric">
+  <button class="btn sm" id="rc-csave">この条件の費用を保存</button>
+  ${(rcCosts||[]).length?`<p class="muted" style="margin:8px 0 0">入力済み: ${(rcCosts||[]).slice().sort((a,b)=>(b.month+(b.area||""))<(a.month+(a.area||""))?-1:1).slice(0,10).map(c=>{const d=new Date(c.month+"T00:00:00");return d.getFullYear()+"/"+(d.getMonth()+1)+" "+esc(c.area||"全体")+(c.form_key==="al"?"・アルバイト":c.form_key==="shain"?"・社員":"")+" ¥"+(+c.amount).toLocaleString("ja-JP")}).join("　／　")}</p>`:""}</div>`;
  // 手動追加
  h+=`<div class="card"><h3>＋ 手動で追加（電話・紹介など）</h3>
   <input type="text" id="rc-aname" placeholder="氏名">
@@ -1388,17 +1407,25 @@ function exportRecruitCsv(){ // v2.5.2 表示中の一覧をCSVで保存（Excel
  const list=ids.map(id=>(rcList||[]).find(a=>a.id===id)).filter(Boolean);
  if(!list.length){toast("出力する行がありません",true);return}
  const qc=v=>'"'+String(v??"").replace(/"/g,'""')+'"';
- const head=["氏名","区分","応募元","ステータス","電話","メール","希望職種・求人","応募日","面接日時","担当","メモ"];
- const rows=list.map(a=>[a.name,a.form_key==="al"?"アルバイト":a.form_key==="shain"?"社員":"",APPLICANT_SOURCE[a.source]||a.source,APPLICANT_STATUS[a.status]||a.status,a.phone||"",a.email||"",a.job_type||((a.answers||{})["求人"]||""),fmtDue(a.applied_at),a.interview_at?fmtDue(a.interview_at):"",taskUserName(a.assignee_id),(a.note||"").replace(/\r?\n/g," ")]);
+ const head=["氏名","区分","店舗・エリア","応募元","ステータス","電話","メール","希望職種・求人","応募日","面接日時","担当","メモ"];
+ const rows=list.map(a=>[a.name,a.form_key==="al"?"アルバイト":a.form_key==="shain"?"社員":"",rcAreaOf(a),APPLICANT_SOURCE[a.source]||a.source,APPLICANT_STATUS[a.status]||a.status,a.phone||"",a.email||"",a.job_type||((a.answers||{})["求人"]||""),fmtDue(a.applied_at),a.interview_at?fmtDue(a.interview_at):"",taskUserName(a.assignee_id),(a.note||"").replace(/\r?\n/g," ")]);
  const csv="\uFEFF"+[head].concat(rows).map(r=>r.map(qc).join(",")).join("\r\n");
  const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
  const el=document.createElement("a");el.href=URL.createObjectURL(blob);el.download="応募者一覧_"+todayStr()+".csv";document.body.appendChild(el);el.click();el.remove();
  toast("CSVをダウンロードしました");
 }
+function exportStatsCsv(){ // v2.5.4 月別集計のCSV
+ if(!rcStatRows){toast("集計がありません",true);return}
+ const qc=v=>'"'+String(v??"").replace(/"/g,'""')+'"';
+ const csv="\uFEFF"+rcStatRows.map(r=>r.map(qc).join(",")).join("\r\n");
+ const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+ const el=document.createElement("a");el.href=URL.createObjectURL(blob);el.download="採用集計_"+todayStr()+".csv";document.body.appendChild(el);el.click();el.remove();
+ toast("集計CSVをダウンロードしました");
+}
 async function saveRecruitCost(){ // v2.5.2 月別の求人費用
  const m=$("rc-cmonth").value;const amt=parseInt(String($("rc-camount").value).replace(/[^0-9]/g,""),10);
  if(!m||isNaN(amt)){toast("月と金額を入力してください",true);return}
- const {error}=await sb.from("recruit_costs").upsert({month:m+"-01",amount:amt,note:null,updated_by:me.id,updated_at:new Date().toISOString()});
+ const {error}=await sb.from("recruit_costs").upsert({month:m+"-01",area:$("rc-carea").value||"",form_key:$("rc-cform").value||"",amount:amt,note:null,updated_by:me.id,updated_at:new Date().toISOString()},{onConflict:"month,area,form_key"});
  if(error){toast("保存エラー: "+error.message,true);return}
  toast("費用を保存しました");rcCosts=null;render();
 }
@@ -1653,7 +1680,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.5.2</p>`;
+  <p class="muted center" style="margin-top:16px">v2.5.4</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2125,6 +2152,7 @@ function bindPage(){
  if($("rcqclear"))$("rcqclear").onclick=()=>{rcQ="";rcFForm="";rcFSrc="";rcFArea="";render()};
  ["rc-fform","rc-fsrc","rc-farea","rc-sort"].forEach(fid=>{if($(fid))$(fid).onchange=()=>{rcFForm=$("rc-fform").value;rcFSrc=$("rc-fsrc").value;rcFArea=$("rc-farea").value;rcSort=$("rc-sort").value;render()}});
  if($("rc-csv"))$("rc-csv").onclick=exportRecruitCsv;
+ if($("rc-statcsv"))$("rc-statcsv").onclick=exportStatsCsv;
  if($("rc-csave"))$("rc-csave").onclick=saveRecruitCost;
  document.querySelectorAll(".chip[data-rcst]").forEach(c=>c.onclick=()=>{
   document.querySelectorAll(".chip[data-rcst]").forEach(x=>x.classList.remove("on"));c.classList.add("on");

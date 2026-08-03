@@ -137,6 +137,7 @@ const FEATURES={
 // ===== v2.5 応募者管理 =====
 const APPLICANT_STATUS={new:"新規",contacted:"連絡済み",interview_set:"面接設定",interviewed:"面接済み",hired:"採用",rejected:"不採用",declined:"辞退"};
 const APPLICANT_ACTIVE=["new","contacted","interview_set","interviewed"];
+const APPLICANT_COLOR={new:"#2b6cb0",contacted:"#0e7490",interview_set:"#7c3aed",interviewed:"#d97706",hired:"#1e8e5a",rejected:"#c0392b",declined:"#6b7280"}; // v2.5.5 一目で分かる色分け
 const APPLICANT_SOURCE={form:"フォーム",indeed:"Indeed",manual:"手動",csv:"CSV",referral:"紹介"};
 const rcAreaOf=a=>{const an=(a&&a.answers)||{};if(an["勤務地"])return String(an["勤務地"]);if(an["area1"])return String(an["area1"]);const k=Object.keys(an).find(x=>x.includes("希望エリア"));return k?String(an[k]):""}; // v2.5.4 店舗・エリア
 let rcStatRows=null; // v2.5.4 集計CSV用
@@ -1245,9 +1246,7 @@ async function recruitView(){
  const list=rcSeg==="active"?act:rcSeg==="hired"?hired:closed;
  if(!list.length)h+=`<p class="muted center" style="margin-top:16px">該当する応募者はいません</p>`;
  list.forEach(a=>{
-  const stBadge=a.status==="hired"?`<span class="badge g">${APPLICANT_STATUS[a.status]}</span>`
-   :a.status==="rejected"||a.status==="declined"?`<span class="badge">${APPLICANT_STATUS[a.status]}</span>`
-   :`<span class="badge b">${APPLICANT_STATUS[a.status]}</span>`;
+  const stBadge=`<span class="badge" style="background:${APPLICANT_COLOR[a.status]||"#2b6cb0"}">${APPLICANT_STATUS[a.status]||a.status}</span>`;
   const form=(rcForms||[]).find(f=>f.key===a.form_key);
   h+=`<div class="row" data-rca="${a.id}"><span><b>${esc(a.name)}</b> ${stBadge}${a.user_id?' <span class="badge g">入社済み</span>':""}<br>
    <span class="muted">${form?esc(form.title.replace("応募フォーム","")):esc(a.job_type||"")}${rcAreaOf(a)?"・🏪"+esc(rcAreaOf(a).split("、")[0].split(",")[0].slice(0,10)):""}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}${a.interview_at?`・面接 ${fmtDue(a.interview_at)}`:""}</span></span><span class="muted">›</span></div>`;
@@ -1255,7 +1254,14 @@ async function recruitView(){
  h+=`<button class="btn sm sub" id="rc-csv" style="margin-top:10px">📄 表示中の一覧をCSVダウンロード</button>`;
  // 月別集計と単価
  const mkey=d=>{const x=new Date(d);return x.getFullYear()+"/"+(x.getMonth()+1)};
- const months=[];for(let i=5;i>=0;i--){const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-i);months.push(d.getFullYear()+"/"+(d.getMonth()+1))}
+ const months=(()=>{ // 全期間（データの最初の月〜今月）。表は直近6ヶ月、CSVは全期間
+  let d0=null;fAll.forEach(a=>{const d=new Date(a.applied_at);if(!d0||d<d0)d0=d});
+  const end=new Date();end.setDate(1);
+  const cur=d0?new Date(d0.getFullYear(),d0.getMonth(),1):new Date(end);
+  const arr=[];let guard=0;
+  while(cur<=end&&guard++<120){arr.push(cur.getFullYear()+"/"+(cur.getMonth()+1));cur.setMonth(cur.getMonth()+1)}
+  return arr.length?arr:[end.getFullYear()+"/"+(end.getMonth()+1)];
+ })();
  const costFor=m=>{ // 絞り込み条件に合う費用の合計（該当入力がなければ null）
   const rows=(rcCosts||[]).filter(c=>{
    const d=new Date(c.month+"T00:00:00");
@@ -1277,10 +1283,10 @@ async function recruitView(){
  const yenCell=(c,i)=>i>=6&&c!=="−"?"¥"+(+c).toLocaleString("ja-JP"):c;
  h+=`<div class="card" style="margin-top:14px"><h3>📊 月別の採用状況と単価 <span class="muted" style="font-weight:400;font-size:11px">（${filtLabel}）</span></h3><div class="tblwrap"><table class="tbl" style="min-width:640px">
   <tr class="muted">${rcStatRows[0].map((c,i)=>`<td${i===0?' style="text-align:left"':""}>${c}</td>`).join("")}</tr>
-  ${rcStatRows.slice(1).map(r=>`<tr>${r.map((c,i)=>`<td${i===0?' style="text-align:left"':""}>${yenCell(c,i)}</td>`).join("")}</tr>`).join("")}
+  ${rcStatRows.slice(1).slice(-6).map(r=>`<tr>${r.map((c,i)=>`<td${i===0?' style="text-align:left"':""}>${yenCell(c,i)}</td>`).join("")}</tr>`).join("")}
  </table></div>
  <button class="btn sm sub" id="rc-statcsv" style="margin-top:8px">📄 この集計をCSVダウンロード</button>
- <p class="muted" style="margin-top:6px">上の絞り込み（区分・エリアなど）に連動して再計算 ／ 費用は同じ条件で入力された分だけを合計 ／ 面接=面接済み以降の人数</p></div>`;
+ <p class="muted" style="margin-top:6px">表は直近6ヶ月・<b>CSVは全期間（${months.length}ヶ月分）</b> ／ 絞り込みに連動して再計算 ／ 費用は同条件で入力した分のみ合計</p></div>`;
  // 採用者の定着・離職
  const hiredAll=fAll.filter(a=>a.user_id); // v2.5.4 絞り込み連動
  if(hiredAll.length){
@@ -1338,7 +1344,7 @@ function recruitDetailView(){
   <input type="text" id="rc-ejob" placeholder="希望職種・業務（例: ホール）" value="${esc(a.job_type||"")}">
   <select class="inp" id="rc-eform"><option value="">区分: 未設定</option><option value="al"${a.form_key==="al"?" selected":""}>アルバイト</option><option value="shain"${a.form_key==="shain"?" selected":""}>社員</option></select></div>`;
  h+=`<div class="card"><h3>選考ステータス</h3>
-  <div>${Object.entries(APPLICANT_STATUS).map(([k,v])=>`<span class="chip ${a.status===k?"on":""}" data-rcst="${k}">${v}</span>`).join("")}</div>
+  <div>${Object.entries(APPLICANT_STATUS).map(([k,v])=>`<span class="chip ${a.status===k?"on":""}" data-rcst="${k}" style="border-color:${APPLICANT_COLOR[k]};${a.status===k?`background:${APPLICANT_COLOR[k]};color:#fff`:`color:${APPLICANT_COLOR[k]}`}">${v}</span>`).join("")}</div>
   <p class="muted" style="margin:8px 0 0">面接日時</p>
   <input type="datetime-local" class="inp" id="rc-interview" value="${a.interview_at?new Date(new Date(a.interview_at).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):""}">
   <p class="muted" style="margin:8px 0 0">担当者</p>
@@ -1680,7 +1686,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.5.4</p>`;
+  <p class="muted center" style="margin-top:16px">v2.5.5</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2155,7 +2161,8 @@ function bindPage(){
  if($("rc-statcsv"))$("rc-statcsv").onclick=exportStatsCsv;
  if($("rc-csave"))$("rc-csave").onclick=saveRecruitCost;
  document.querySelectorAll(".chip[data-rcst]").forEach(c=>c.onclick=()=>{
-  document.querySelectorAll(".chip[data-rcst]").forEach(x=>x.classList.remove("on"));c.classList.add("on");
+  document.querySelectorAll(".chip[data-rcst]").forEach(x=>{x.classList.remove("on");x.style.background="";x.style.color=APPLICANT_COLOR[x.dataset.rcst]});
+  c.classList.add("on");c.style.background=APPLICANT_COLOR[c.dataset.rcst];c.style.color="#fff";
  });
  document.querySelectorAll(".chip[data-rchst]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
  if($("rc-save"))$("rc-save").onclick=saveApplicant;

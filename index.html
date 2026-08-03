@@ -2,13 +2,13 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>鳥一代グループ 日報・週報システム</title>
 <style>
   :root{--blue:#2b6cb0;--bg:#f2f4f7;--line:#dde3ea;--red:#c0392b;--green:#1e8e5a}
   *{box-sizing:border-box}
   body{font-family:-apple-system,"Hiragino Sans",sans-serif;background:var(--bg);margin:0;color:#2d3340;font-size:15px}
-  .app{max-width:480px;margin:0 auto;min-height:100vh;background:#fff;padding-bottom:80px}
+  .app{max-width:480px;margin:0 auto;min-height:100vh;background:#fff;padding-bottom:calc(80px + env(safe-area-inset-bottom))}
   header{position:sticky;top:0;background:var(--blue);color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;z-index:10}
   header b{font-size:15px}
   main{padding:16px}
@@ -22,11 +22,13 @@
   .chip.on{background:var(--blue);color:#fff}
   .stars span{font-size:26px;color:#ccc;cursor:pointer;margin-right:4px}
   .stars span.on{color:#e8b400}
-  textarea,input[type=text],input[type=email],input[type=password],input[type=date],select.inp{width:100%;border:1px solid #bbb;border-radius:8px;padding:10px;font-size:15px;margin-top:6px;font-family:inherit}
+  textarea,input[type=text],input[type=email],input[type=password],input[type=date],input[type=datetime-local],select.inp{width:100%;border:1px solid #bbb;border-radius:8px;padding:10px;font-size:16px;margin-top:6px;font-family:inherit;background:#fff;color:inherit}
   .alert{background:#fdecec;color:var(--red);border-radius:8px;padding:10px;font-size:13px;margin-bottom:10px}
   .tbl{width:100%;font-size:13px;border-collapse:collapse}
   .tbl td{padding:5px 0;border-bottom:1px solid #f0f2f5}
   .tbl td:last-child{text-align:right}
+  .tblwrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .tblwrap .tbl{min-width:430px}
   .crow{display:flex;gap:10px;align-items:center;padding:10px 4px;border-bottom:1px solid #f0f2f5;cursor:pointer}
   .cava{width:38px;height:38px;border-radius:50%;font-size:18px;display:flex;align-items:center;justify-content:center;background:#eef3fa;flex-shrink:0}
   .cava.sm{width:28px;height:28px;font-size:12px;background:#8fb6dd;color:#fff;align-self:flex-end}
@@ -35,18 +37,19 @@
   .cdate span{background:#e8ecf2;border-radius:10px;padding:2px 10px;font-size:11px;color:#67707e}
   .cbwrap{display:flex;gap:6px;margin:8px 0}
   .cbwrap.mine{flex-direction:row-reverse}
-  .cb{background:#fff;border:1px solid #e3e7ee;border-radius:14px 14px 14px 4px;padding:8px 11px;font-size:14px;text-align:left;word-break:break-word}
+  .cb{background:#fff;border:1px solid #e3e7ee;border-radius:14px 14px 14px 4px;padding:8px 11px;font-size:14px;text-align:left;word-break:break-word;max-width:100%}
   .cbwrap.mine .cb{background:#d9edff;border-color:#c9e2f6;border-radius:14px 14px 4px 14px}
   .cact{margin:3px 0 0;display:none}
-  .cquote{border-left:3px solid #9db8d4;background:#eef2f7;color:#5a6675;font-size:11px;padding:3px 8px;border-radius:6px;margin-bottom:4px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cquote{border-left:3px solid #9db8d4;background:#eef2f7;color:#5a6675;font-size:11px;padding:3px 8px;border-radius:6px;margin-bottom:4px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
   .cact button{border:1px solid #d5dbe3;background:#fff;border-radius:8px;font-size:11px;padding:3px 8px;margin:0 4px 0 0;cursor:pointer}
   .info{background:#eaf3fd;color:#1a5c9e;border-radius:8px;padding:10px;font-size:13px;margin-bottom:10px}
   .muted{color:#8a93a2;font-size:12px}
-  .row{display:flex;justify-content:space-between;align-items:center;padding:11px 4px;border-bottom:1px solid #f0f2f5;cursor:pointer;font-size:14px}
+  .row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:11px 4px;border-bottom:1px solid #f0f2f5;cursor:pointer;font-size:14px}
+  .row>span:first-child{min-width:0;word-break:break-word}
   .badge{background:var(--red);color:#fff;border-radius:10px;font-size:11px;padding:2px 8px}
   .badge.g{background:var(--green)}
   .badge.b{background:var(--blue)}
-  nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--line);display:flex;max-width:480px;margin:0 auto}
+  nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--line);display:flex;max-width:480px;margin:0 auto;padding-bottom:env(safe-area-inset-bottom)}
   nav button{flex:1;border:none;background:none;padding:10px 0 14px;font-size:11px;color:#8a93a2;cursor:pointer}
   nav button.on{color:var(--blue);font-weight:600}
   nav button i{display:block;font-size:20px;font-style:normal}
@@ -74,6 +77,16 @@
   .fhandle{cursor:grab;color:#8a93a2;font-size:18px;padding:0 6px;user-select:none}
   .fnum{display:inline-block;background:#eaf3fd;color:var(--blue);border-radius:6px;font-size:12px;padding:2px 8px;font-weight:600}
   .fcard.dragover{outline:2px solid var(--blue);outline-offset:-2px}
+  /* レスポンシブ: 小さいスマホ（〜379px）はナビ文字を少し縮小 */
+  @media(max-width:379px){
+   nav button{font-size:10px}
+   nav button i{font-size:18px}
+   main{padding:14px 12px}
+  }
+  /* レスポンシブ: タブレット・中間幅（600〜899px）は本体を少し広く */
+  @media(min-width:600px) and (max-width:899px){
+   .app,nav{max-width:640px}
+  }
   /* v1.6 PC 2カラムレイアウト */
   @media(min-width:900px){
    body.withnav .app{max-width:940px;margin:0 0 0 calc(max(0px, 50vw - 590px) + 240px);border-left:1px solid var(--line);border-right:1px solid var(--line);padding-bottom:24px}
@@ -857,7 +870,7 @@ async function chatRoomView(){
   const readers=mine?others.filter(x=>x.last_read_at>=m.created_at):[];
   const tm=String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
   h+=`<div class="cbwrap${mine?" mine":""}">${ava}
-   <div style="max-width:78%;text-align:${mine?"right":"left"}">
+   <div style="max-width:min(78%,540px);text-align:${mine?"right":"left"}">
     ${mine?"":`<span class="muted" style="font-size:11px">${esc(taskUserName(m.sender_id))}</span><br>`}
     <div class="cb" style="display:inline-block">${qh}${taskFileHtml(m.files)}${m.body?esc(m.body).replace(/\n/g,"<br>"):""}</div>
     <div style="font-size:12px;margin-top:1px">
@@ -936,10 +949,10 @@ async function dashView(){
   <b style="font-size:14px">${v}${unit}</b></div>`;
  });
  h+=`<p class="muted" style="margin-top:8px">日報提出率＝提出数÷期間日数</p></div>`;
- h+=`<div class="card"><h3>メンバー別の利用状況（${DPERIODS[dashPeriod]}）</h3><table class="tbl">
+ h+=`<div class="card"><h3>メンバー別の利用状況（${DPERIODS[dashPeriod]}）</h3><div class="tblwrap"><table class="tbl">
  <tr class="muted"><td>名前</td><td>日報</td><td>率</td><td>今日</td><td>FB</td><td>❤️</td><td>💬</td></tr>
  ${rows.slice().sort((a,b)=>(b.rep+b.fb+b.like+b.msg)-(a.rep+a.fb+a.like+a.msg)).map(r=>`<tr><td style="text-align:left">${esc(r.u.name)}</td><td>${r.rep}</td><td>${r.rate}%</td><td>${r.today?"✅":'<span style="color:var(--red)">未</span>'}</td><td>${r.fb}</td><td>${r.like}</td><td>${r.msg}</td></tr>`).join("")}
- </table><p class="muted" style="margin-top:8px">FB=書いたコメント数 ／ ❤️=もらったいいね数 ／ 💬=チャット発言数</p></div>`;
+ </table></div><p class="muted" style="margin-top:8px">FB=書いたコメント数 ／ ❤️=もらったいいね数 ／ 💬=チャット発言数</p></div>`;
  return h;
 }
 

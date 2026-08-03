@@ -224,6 +224,7 @@ let permMatrix=null,permUserSel=null,permUserVals=null,permUsersCache=null; // v
 let rcList=null,rcSeg="active",rcQ="",rcDetail=null,rcForms=null,applyFormDef=null; // v2.5 応募者管理
 let rcFForm="",rcFSrc="",rcFArea="",rcSort="new",rcCosts=null,rcHiredInfo=null,joinSmSel=null,joinSmNo=false; // v2.5.2
 let rcFStatus=""; // v2.5.6 選考ステータス絞り込み
+let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8 期間絞り込み・応募フォーム編集・Lark
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
@@ -1232,6 +1233,7 @@ async function recruitView(){
   else if(rcFForm&&a.form_key!==rcFForm)return false;
   if(rcFSrc&&a.source!==rcFSrc)return false;
   if(rcFArea&&!((rcAreaOf(a)+" "+(a.job_type||"")+JSON.stringify(a.answers||{})).includes(rcFArea)))return false;
+  if(rcFrom||rcTo){const ym=(a.applied_at||"").slice(0,7);if(rcFrom&&ym<rcFrom)return false;if(rcTo&&ym>rcTo)return false} // v2.5.8 期間
   return true;
  };
  const match=a=>matchBase(a)&&(!rcFStatus||a.status===rcFStatus); // v2.5.6
@@ -1256,8 +1258,15 @@ async function recruitView(){
   <select class="inp" id="rc-farea" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">エリア: 全て</option>${AREAS.map(a=>`<option${rcFArea===a?" selected":""}>${a}</option>`).join("")}</select>
   <select class="inp" id="rc-fsrc" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">応募元: 全て</option>${Object.entries(APPLICANT_SOURCE).map(([k,v])=>`<option value="${k}"${rcFSrc===k?" selected":""}>${v}</option>`).join("")}</select>
   <select class="inp" id="rc-sort" style="flex:1;min-width:120px;margin:0;font-size:13px;padding:8px"><option value="new"${rcSort==="new"?" selected":""}>並び: 新しい順</option><option value="old"${rcSort==="old"?" selected":""}>並び: 古い順</option><option value="interview"${rcSort==="interview"?" selected":""}>並び: 面接日が近い順</option><option value="name"${rcSort==="name"?" selected":""}>並び: 名前順</option><option value="status"${rcSort==="status"?" selected":""}>並び: ステータス順</option></select>
+ </div>
+ <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+  <span class="muted" style="font-size:12px;flex-shrink:0">📅 期間</span>
+  <input type="month" class="inp" id="rc-from" value="${esc(rcFrom)}" style="flex:1;min-width:120px;margin:0;font-size:13px;padding:6px">
+  <span class="muted" style="font-size:12px">〜</span>
+  <input type="month" class="inp" id="rc-to" value="${esc(rcTo)}" style="flex:1;min-width:120px;margin:0;font-size:13px;padding:6px">
+  ${(rcFrom||rcTo)?`<span class="chip" id="rc-perclear" style="font-size:11px;padding:3px 9px">✕ 期間解除</span>`:""}
  </div>`;
- if(rcQ||rcFForm||rcFSrc||rcFArea||rcFStatus)h+=`<p class="muted" style="margin:0 0 8px">絞り込み中: ${act.length+hired.length+closed.length}件　<span style="color:var(--blue);cursor:pointer" id="rcqclear">✕ 条件をクリア</span></p>`;
+ if(rcQ||rcFForm||rcFSrc||rcFArea||rcFStatus||rcFrom||rcTo)h+=`<p class="muted" style="margin:0 0 8px">絞り込み中: ${act.length+hired.length+closed.length}件　<span style="color:var(--blue);cursor:pointer" id="rcqclear">✕ 条件をクリア</span></p>`;
  h+=`<div class="seg"><div class="${rcSeg==="active"?"on":""}" data-rcseg="active">選考中 ${act.length}</div><div class="${rcSeg==="hired"?"on":""}" data-rcseg="hired">採用 ${hired.length}</div><div class="${rcSeg==="closed"?"on":""}" data-rcseg="closed">不採用・辞退 ${closed.length}</div></div>`;
  const list=rcSeg==="active"?act:rcSeg==="hired"?hired:closed;
  if(!list.length)h+=`<p class="muted center" style="margin-top:16px">該当する応募者はいません</p>`;
@@ -1270,10 +1279,10 @@ async function recruitView(){
  h+=`<button class="btn sm sub" id="rc-csv" style="margin-top:10px">📄 表示中の一覧をCSVダウンロード</button>`;
  // 月別集計と単価
  const mkey=d=>{const x=new Date(d);return x.getFullYear()+"/"+(x.getMonth()+1)};
- const months=(()=>{ // 全期間（データの最初の月〜今月）。表は直近6ヶ月、CSVは全期間
+ const months=(()=>{ // 期間指定があればその範囲、なければ全期間（表は直近6ヶ月、CSVは全期間）
   let d0=null;fAll.forEach(a=>{const d=new Date(a.applied_at);if(!d0||d<d0)d0=d});
-  const end=new Date();end.setDate(1);
-  const cur=d0?new Date(d0.getFullYear(),d0.getMonth(),1):new Date(end);
+  const end=rcTo?new Date(+rcTo.slice(0,4),+rcTo.slice(5,7)-1,1):(()=>{const e=new Date();e.setDate(1);return e})();
+  const cur=rcFrom?new Date(+rcFrom.slice(0,4),+rcFrom.slice(5,7)-1,1):(d0?new Date(d0.getFullYear(),d0.getMonth(),1):new Date(end));
   const arr=[];let guard=0;
   while(cur<=end&&guard++<120){arr.push(cur.getFullYear()+"/"+(cur.getMonth()+1));cur.setMonth(cur.getMonth()+1)}
   return arr.length?arr:[end.getFullYear()+"/"+(end.getMonth()+1)];
@@ -1288,7 +1297,7 @@ async function recruitView(){
   });
   return rows.length?rows.reduce((s,c)=>s+(+c.amount),0):null;
  };
- const filtLabel=(rcFArea||rcFForm||rcFSrc||rcQ||rcFStatus)?`絞り込みで再計算中${rcFArea?"・"+esc(rcFArea):""}${rcFForm==="al"?"・アルバイト":rcFForm==="shain"?"・社員":""}${rcFStatus?"・"+APPLICANT_STATUS[rcFStatus]:""}`:"全体";
+ const filtLabel=(rcFArea||rcFForm||rcFSrc||rcQ||rcFStatus||rcFrom||rcTo)?`絞り込みで再計算中${rcFArea?"・"+esc(rcFArea):""}${rcFForm==="al"?"・アルバイト":rcFForm==="shain"?"・社員":""}${rcFStatus?"・"+APPLICANT_STATUS[rcFStatus]:""}${(rcFrom||rcTo)?"・"+(rcFrom||"最初")+"〜"+(rcTo||"今月"):""}`:"全体";
  rcStatRows=[["月","応募","面接","採用","面接率","採用率","費用","応募単価","面接単価","採用単価"]];
  months.forEach(m=>{
   const ms=fAll.filter(a=>mkey(a.applied_at)===m);
@@ -1302,7 +1311,7 @@ async function recruitView(){
   ${rcStatRows.slice(1).slice(-6).map(r=>`<tr>${r.map((c,i)=>`<td${i===0?' style="text-align:left"':""}>${yenCell(c,i)}</td>`).join("")}</tr>`).join("")}
  </table></div>
  <button class="btn sm sub" id="rc-statcsv" style="margin-top:8px">📄 この集計をCSVダウンロード</button>
- <p class="muted" style="margin-top:6px">表は直近6ヶ月・<b>CSVは全期間（${months.length}ヶ月分）</b> ／ 絞り込みに連動して再計算 ／ 費用は同条件で入力した分のみ合計</p></div>`;
+ <p class="muted" style="margin-top:6px">表は直近6ヶ月・<b>CSVは${(rcFrom||rcTo)?"指定期間":"全期間"}（${months.length}ヶ月分）</b> ／ 絞り込みに連動して再計算 ／ 費用は同条件で入力した分のみ合計</p></div>`;
  // 採用者の定着・離職
  const hiredAll=fAll.filter(a=>a.user_id); // v2.5.4 絞り込み連動
  if(hiredAll.length){
@@ -1684,7 +1693,9 @@ async function adminToggle(){
 async function settingsView(){
  if(setMode==="join")return settingsJoinView();
  if(setMode==="fmt")return settingsFmtView();
+ if(isAdmin()&&larkUrl===null){const {data:s}=await sb.from("app_secrets").select("value").eq("key","lark_webhook").maybeSingle();larkUrl=(s&&s.value)||""} // v2.5.8
  if(setMode==="perm")return await settingsPermView(); // v2.4
+ if(setMode==="apply")return await settingsApplyView(); // v2.5.8
  let h=`<h2>設定</h2>
   <div class="card"><h3>プロフィール</h3>
    <p style="font-size:14px">${esc(me.name)}（${ROLE_NAME[me.role]||""}${isKennin()?"・店長兼任":""}）<br>
@@ -1693,7 +1704,15 @@ async function settingsView(){
  if(can("format_config")){
   h+=`<div class="card"><h3>🛠 カスタマイズ</h3>
    <button class="btn sm" id="set-join" style="margin-bottom:8px">入社フォームの項目設定</button>
-   <button class="btn sm" id="set-fmt">日報・週報の項目設定</button></div>`;
+   <button class="btn sm" id="set-fmt" style="margin-bottom:8px">日報・週報の項目設定</button>
+   <button class="btn sm" id="set-apply">応募フォームの項目設定</button></div>`;
+ }
+ if(isAdmin()){ // v2.5.8 Lark通知
+  h+=`<div class="card"><h3>🔔 Lark通知</h3>
+   <p class="muted" style="margin:0">応募が入ったらLarkのグループに自動でお知らせします。Larkのグループに「カスタムボット」を追加して、表示されたWebhook URLを貼り付けてください。</p>
+   <input type="text" id="lark-url" placeholder="https://open.larksuite.com/open-apis/bot/v2/hook/..." value="${esc(larkUrl||"")}">
+   <button class="btn sm" id="lark-save">保存する</button>
+   <button class="btn sm sub" id="lark-test">テスト送信</button></div>`;
  }
  if(isAdmin()){ // v2.4 権限設定はCEO/HQのみ
   h+=`<div class="card"><h3>🔐 権限設定</h3>
@@ -1702,7 +1721,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.5.7</p>`;
+  <p class="muted center" style="margin-top:16px">v2.5.8</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -1770,6 +1789,71 @@ async function savePerm(){
  me.features=fmap;
  toast("権限を保存しました");
  setMode="main";permMatrix=null;permUserSel=null;permUserVals=null;render();
+}
+// ===== v2.5.8 応募フォームの項目設定 =====
+const APPLY_TYPES={text:"記入式（自由記述）",pull:"プルダウン",radio:"ラジオボタン（1つ選ぶ）",multi:"複数選択",check:"チェックリスト"};
+const APPLY_OPT_TYPES=["pull","radio","multi","check"];
+async function settingsApplyView(){
+ if(!cfgApply){
+  const {data:f}=await sb.from("applicant_forms").select("*");
+  cfgApply={};(f||[]).forEach(x=>cfgApply[x.key]={title:x.title,fields:JSON.parse(JSON.stringify(x.fields||[]))});
+  if(!cfgApply.al)cfgApply.al={title:"アルバイト応募フォーム",fields:[]};
+  if(!cfgApply.shain)cfgApply.shain={title:"社員応募フォーム",fields:[]};
+ }
+ const cur=cfgApply[applyKeyEdit];
+ const baseUrl=location.origin+location.pathname;
+ let h=`<span class="back" id="setback">← 設定</span><h2>応募フォームの項目設定</h2>
+ <p class="muted" style="margin-top:-8px;font-size:13px">応募者が入力する質問を自由に変更できます。氏名・電話番号・メールは常に先頭に表示されます。</p>
+ <div class="card" style="padding:12px">
+  <span class="chip applyrole ${applyKeyEdit==="al"?"on":""}" data-ak="al">アルバイト用</span>
+  <span class="chip applyrole ${applyKeyEdit==="shain"?"on":""}" data-ak="shain">社員用</span>
+  <p class="muted" style="margin:8px 0 0;font-size:11px;word-break:break-all">🔗 ${esc(baseUrl)}?apply=${applyKeyEdit}</p>
+  <button class="btn sm sub" data-rccopy="${esc(baseUrl)}?apply=${applyKeyEdit}" style="margin-top:6px">📋 このフォームのURLをコピー</button>
+ </div>
+ <div class="card" style="padding:12px"><h3>フォームの見出し</h3>
+  <input type="text" id="ap-title" value="${esc(cur.title)}" placeholder="例: アルバイト応募フォーム" style="margin:0"></div>`;
+ h+=`<p class="muted" style="font-size:12px">↑↓ で並び替えできます。</p>`;
+ h+=cur.fields.map((f,i)=>`<div class="card" style="padding:12px">
+  <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
+   <span class="fnum">${i+1}</span>
+   <input type="text" data-aplabel="${i}" value="${esc(f.label||"")}" placeholder="質問文（例: 希望シフト）" style="flex:1;margin:0">
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+   <select class="inp" data-aptype="${i}" style="width:auto;margin:0">${Object.entries(APPLY_TYPES).map(([t,n])=>`<option value="${t}" ${(f.type||"text")===t?"selected":""}>${n}</option>`).join("")}</select>
+   <span class="chip ap-req ${f.req?"on":""}" data-i="${i}">必須</span>
+   <span class="chip" data-apup="${i}">↑</span><span class="chip" data-apdn="${i}">↓</span>
+   <span class="chip" data-apdel="${i}" style="color:var(--red)">削除</span></div>
+  <input type="text" data-apopts="${i}" value="${esc((f.opts||[]).join("、"))}" placeholder="選択肢を「、」区切りで入力（例: ホール、キッチン、どちらでも）" style="margin:8px 0 0;font-size:13px;display:${APPLY_OPT_TYPES.includes(f.type||"text")?"":"none"}">
+  </div>`).join("");
+ h+=`<button class="btn sm sub" id="ap-add">＋ 質問を追加</button>
+  <button class="btn" id="ap-save" style="margin-top:12px">この内容で保存する</button>
+  <p class="muted center" style="margin-top:8px">保存すると、次に応募フォームを開いた人から新しい質問が表示されます</p>`;
+ return h;
+}
+function collectApplyDom(){
+ const cur=cfgApply[applyKeyEdit];
+ if($("ap-title"))cur.title=$("ap-title").value.trim()||cur.title;
+ document.querySelectorAll("input[data-aplabel]").forEach(inp=>cur.fields[+inp.dataset.aplabel].label=inp.value.trim());
+ document.querySelectorAll("select[data-aptype]").forEach(s=>cur.fields[+s.dataset.aptype].type=s.value);
+ document.querySelectorAll("input[data-apopts]").forEach(inp=>{
+  const v=inp.value.trim();cur.fields[+inp.dataset.apopts].opts=v?v.split(/[、,]/).map(x=>x.trim()).filter(Boolean):[];
+ });
+ document.querySelectorAll(".chip.ap-req").forEach(c=>cur.fields[+c.dataset.i].req=c.classList.contains("on"));
+}
+async function saveApplyForm(){
+ collectApplyDom();
+ const cur=cfgApply[applyKeyEdit];
+ const list=cur.fields.filter(f=>f.label);
+ for(const [i,f] of list.entries()){
+  if(!f.k)f.k="q"+i+Date.now().toString(36);
+  if(APPLY_OPT_TYPES.includes(f.type||"text")&&(!f.opts||!f.opts.length)){
+   toast(`「${f.label}」に選択肢を入力してください（「、」区切り）`,true);return}
+ }
+ cur.fields=list;
+ $("ap-save").disabled=true;
+ const {error}=await sb.from("applicant_forms").upsert({key:applyKeyEdit,title:cur.title,fields:list,is_active:true,updated_by:me.id,updated_at:new Date().toISOString()});
+ if(error){toast("保存エラー: "+error.message,true);$("ap-save").disabled=false;return}
+ rcForms=null;toast("保存しました");render();
 }
 function settingsJoinView(){
  const cfg=cfgJoin;
@@ -2171,7 +2255,9 @@ function bindPage(){
  document.querySelectorAll("[data-rcseg]").forEach(el=>el.onclick=()=>{rcSeg=el.dataset.rcseg;if(rcFStatus&&rcSegOf(rcFStatus)!==rcSeg)rcFStatus="";render()});
  document.querySelectorAll("[data-rccopy]").forEach(el=>el.onclick=e=>{e.stopPropagation();copyText(el.dataset.rccopy)});
  if($("rcq"))$("rcq").onkeydown=e=>{if(e.key==="Enter"){rcQ=$("rcq").value.trim();render()}};
- if($("rcqclear"))$("rcqclear").onclick=()=>{rcQ="";rcFForm="";rcFSrc="";rcFArea="";rcFStatus="";render()};
+ if($("rcqclear"))$("rcqclear").onclick=()=>{rcQ="";rcFForm="";rcFSrc="";rcFArea="";rcFStatus="";rcFrom="";rcTo="";render()};
+ if($("rc-perclear"))$("rc-perclear").onclick=()=>{rcFrom="";rcTo="";render()};
+ ["rc-from","rc-to"].forEach(id=>{if($(id))$(id).onchange=()=>{rcFrom=$("rc-from").value;rcTo=$("rc-to").value;render()}});
  const rcSegOf=st=>st==="hired"?"hired":(st==="rejected"||st==="declined")?"closed":"active"; // v2.5.6
  ["rc-fform","rc-fsrc","rc-farea","rc-sort","rc-fstatus"].forEach(fid=>{if($(fid))$(fid).onchange=()=>{
   rcFForm=$("rc-fform").value;rcFSrc=$("rc-fsrc").value;rcFArea=$("rc-farea").value;rcSort=$("rc-sort").value;
@@ -2248,7 +2334,31 @@ function bindPage(){
  // 設定カスタマイズ（v1.5）
  if($("set-join"))$("set-join").onclick=()=>{setMode="join";cfgJoin=joinCfg();render()};
  if($("set-fmt"))$("set-fmt").onclick=()=>{setMode="fmt";cfgFmts=JSON.parse(JSON.stringify(appSettings.formats||{}));render()};
- if($("setback"))$("setback").onclick=()=>{setMode="main";permMatrix=null;permUserSel=null;permUserVals=null;render()};
+ // v2.5.8 応募フォームの項目設定
+ if($("set-apply"))$("set-apply").onclick=()=>{setMode="apply";cfgApply=null;applyKeyEdit="al";render()};
+ document.querySelectorAll(".chip.applyrole").forEach(c=>c.onclick=()=>{collectApplyDom();applyKeyEdit=c.dataset.ak;render()});
+ document.querySelectorAll("[data-apup]").forEach(c=>c.onclick=()=>{collectApplyDom();const l=cfgApply[applyKeyEdit].fields,i=+c.dataset.apup;if(i>0){[l[i-1],l[i]]=[l[i],l[i-1]]}render()});
+ document.querySelectorAll("[data-apdn]").forEach(c=>c.onclick=()=>{collectApplyDom();const l=cfgApply[applyKeyEdit].fields,i=+c.dataset.apdn;if(i<l.length-1){[l[i+1],l[i]]=[l[i],l[i+1]]}render()});
+ document.querySelectorAll("[data-apdel]").forEach(c=>c.onclick=()=>{collectApplyDom();cfgApply[applyKeyEdit].fields.splice(+c.dataset.apdel,1);render()});
+ document.querySelectorAll(".chip.ap-req").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
+ document.querySelectorAll("select[data-aptype]").forEach(s=>s.onchange=()=>{collectApplyDom();render()});
+ if($("ap-add"))$("ap-add").onclick=()=>{collectApplyDom();cfgApply[applyKeyEdit].fields.push({k:"",label:"",type:"text",req:false,opts:[]});render()};
+ if($("ap-save"))$("ap-save").onclick=saveApplyForm;
+ // v2.5.8 Lark通知
+ if($("lark-save"))$("lark-save").onclick=async()=>{
+  const url=$("lark-url").value.trim();
+  const {error}=await sb.from("app_secrets").upsert({key:"lark_webhook",value:url,updated_by:me.id,updated_at:new Date().toISOString()});
+  if(error){toast("保存エラー: "+error.message,true);return}
+  larkUrl=url;toast(url?"Lark通知を設定しました":"Lark通知をオフにしました");
+ };
+ if($("lark-test"))$("lark-test").onclick=async()=>{
+  $("lark-test").disabled=true;
+  const {data,error}=await sb.rpc("lark_test");
+  $("lark-test").disabled=false;
+  if(error){toast("テスト失敗: "+error.message,true);return}
+  toast(String(data||"送信しました"));
+ };
+ if($("setback"))$("setback").onclick=()=>{setMode="main";permMatrix=null;permUserSel=null;permUserVals=null;cfgApply=null;render()};
  // v2.4 権限設定
  if($("set-perm"))$("set-perm").onclick=()=>{setMode="perm";permMatrix=null;permUserSel=null;permUserVals=null;render()};
  document.querySelectorAll(".chip[data-pf]").forEach(c=>c.onclick=()=>{

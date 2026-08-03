@@ -224,7 +224,8 @@ let permMatrix=null,permUserSel=null,permUserVals=null,permUsersCache=null; // v
 let rcList=null,rcSeg="active",rcQ="",rcDetail=null,rcForms=null,applyFormDef=null; // v2.5 応募者管理
 let rcFForm="",rcFSrc="",rcFArea="",rcSort="new",rcCosts=null,rcHiredInfo=null,joinSmSel=null,joinSmNo=false; // v2.5.2
 let rcFStatus=""; // v2.5.6 選考ステータス絞り込み
-let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8 期間絞り込み・応募フォーム編集・Lark
+let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8
+let myProf=null,auRole="",auState="",auStore=""; // v2.6.0 プロフィール編集・従業員絞り込み
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
@@ -1194,10 +1195,24 @@ async function adminView(){
   <button class="btn sub" id="adsmaregi">📇 スマレジ登録スタッフ一覧</button>`;
  if(can("store_admin"))h+=`<button class="btn sub" id="adstores">🏪 店舗管理（追加・並び替え・スマレジ紐付け）</button>`;
  if(can("staff_admin")){
-  h+=`<p class="muted">${adminUsers.length}名（タップで役職・所属の変更）</p>
-  <input type="text" id="auq" placeholder="🔍 氏名・メール・役職・店舗で絞り込み" style="margin:4px 0 8px">`;
-  adminUsers.forEach(u=>{
-   h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">無効</span>'}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}</span></span><span class="muted">›</span></div>`;
+  const shown=adminUsers.filter(u=>{
+   if(auRole&&u.role!==auRole)return false;
+   if(auState==="active"&&!u.is_active)return false;
+   if(auState==="inactive"&&u.is_active)return false;
+   if(auStore&&!(adminStoresMap[u.id]||[]).includes(auStore))return false;
+   return true;
+  });
+  h+=`<p class="muted">${shown.length}名${shown.length!==adminUsers.length?`（全${adminUsers.length}名中）`:""}（タップで役職・所属の変更）</p>
+  <input type="text" id="auq" placeholder="🔍 氏名・メール・役職・店舗で絞り込み" style="margin:4px 0 8px">
+  <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+   <select class="inp" id="au-role" style="flex:1;min-width:100px;margin:0;font-size:13px;padding:8px"><option value="">役職: 全て</option>${Object.entries(ROLE_NAME).map(([r,n])=>`<option value="${r}"${auRole===r?" selected":""}>${n}</option>`).join("")}</select>
+   <select class="inp" id="au-state" style="flex:1;min-width:110px;margin:0;font-size:13px;padding:8px"><option value="">状態: 全て</option><option value="active"${auState==="active"?" selected":""}>在籍中のみ</option><option value="inactive"${auState==="inactive"?" selected":""}>退職・無効のみ</option></select>
+   <select class="inp" id="au-store" style="flex:1;min-width:110px;margin:0;font-size:13px;padding:8px"><option value="">店舗: 全て</option>${stores.map(s=>`<option value="${s.id}"${auStore===s.id?" selected":""}>${esc(s.name)}</option>`).join("")}</select>
+   ${(auRole||auState||auStore)?`<span class="chip" id="au-clear" style="font-size:11px;padding:4px 10px">✕ 解除</span>`:""}
+  </div>`;
+  if(!shown.length)h+=`<p class="muted center" style="margin-top:16px">該当する従業員はいません</p>`;
+  shown.forEach(u=>{
+   h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">退職・無効</span>'}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}${(!u.is_active&&u.deactivated_at)?" ／ 退職 "+fmtDue(u.deactivated_at):""}</span></span><span class="muted">›</span></div>`;
   });
  }
  return h;
@@ -1658,7 +1673,13 @@ async function adminEditView(){
  <div class="card" style="margin-top:16px"><h3>パスワード再設定</h3>
   <input type="text" id="eu-pw" placeholder="新しいパスワード（8文字以上）">
   <button class="btn sm" id="eu-setpw">再設定する</button></div>`;
- if(u.id!==me.id)h+=`<button class="btn sub" id="eu-toggle" style="color:var(--red);border-color:var(--red)">${u.is_active?"アカウントを無効化する（退職処理）":"アカウントを再有効化する"}</button>`;
+ if(u.id!==me.id){
+  h+=`<button class="btn sub" id="eu-toggle" style="color:var(--red);border-color:var(--red)">${u.is_active?"アカウントを無効化する（退職処理）":"アカウントを再有効化する"}</button>`;
+  if(me.role==="CEO")h+=`<div class="card" style="margin-top:16px;background:#fff6f6;border-color:#f3c9c9"><h3 style="color:var(--red)">⚠️ 完全に削除する</h3>
+   <p class="muted" style="margin:0">アカウントと本人が書いた日報・タスク・チャットがすべて消え、元に戻せません。<br>
+   退職した方は「無効化」で十分です（記録が残り、離職率の集計にも使えます）。<b>誤って登録した方だけ</b>この操作をお使いください。</p>
+   <button class="btn sm sub" id="eu-del" style="color:var(--red);border-color:var(--red);margin-top:8px">完全に削除する</button></div>`;
+ }
  return h;
 }
 async function adminSave(){
@@ -1686,7 +1707,7 @@ async function adminToggle(){
  const {error}=await sb.from("users").update({is_active:!u.is_active,deactivated_at:u.is_active?new Date().toISOString():null}).eq("id",u.id); // v2.5.2 無効化日=退職日として記録
  if(error){toast("エラー: "+error.message,true);return}
  toast(u.is_active?"アカウントを無効化しました":"アカウントを再有効化しました");
- adminMode="list";render();
+ adminMode="list";adminUsers=null;render();
 }
 
 // ===== 設定 =====
@@ -1696,11 +1717,26 @@ async function settingsView(){
  if(isAdmin()&&larkUrl===null){const {data:s}=await sb.from("app_secrets").select("value").eq("key","lark_webhook").maybeSingle();larkUrl=(s&&s.value)||""} // v2.5.8
  if(setMode==="perm")return await settingsPermView(); // v2.4
  if(setMode==="apply")return await settingsApplyView(); // v2.5.8
+ if(myProf===null){const {data:p}=await sb.rpc("get_my_profile");myProf=p||{}} // v2.6.0
  let h=`<h2>設定</h2>
-  <div class="card"><h3>プロフィール</h3>
-   <p style="font-size:14px">${esc(me.name)}（${ROLE_NAME[me.role]||""}${isKennin()?"・店長兼任":""}）<br>
-   <span class="muted">${esc(me.email)}</span><br>
-   <span class="muted">所属: ${me.stores.map(s=>esc(s.name)).join("・")||"なし"}</span></p></div>`;
+  <div class="card"><h3>👤 プロフィール</h3>
+   <p class="muted" style="margin:0">${esc(me.email)}／${ROLE_NAME[me.role]||""}${isKennin()?"・店長兼任":""}／所属: ${me.stores.map(s=>esc(s.name)).join("・")||"なし"}<br>
+   ※メールアドレス・役職・所属の変更は本部にご依頼ください</p>
+   <p class="muted" style="margin:10px 0 0">氏名</p><input type="text" id="pf-name" value="${esc(me.name)}" style="margin-top:2px">
+   <p class="muted" style="margin:8px 0 0">フリガナ</p><input type="text" id="pf-kana" value="${esc(myProf.name_kana||"")}" style="margin-top:2px">
+   <p class="muted" style="margin:8px 0 0">電話番号</p><input type="text" id="pf-phone" value="${esc(myProf.phone||"")}" style="margin-top:2px">
+   <p class="muted" style="margin:8px 0 0">郵便番号・住所</p>
+   <input type="text" id="pf-zip" value="${esc(myProf.postal_code||"")}" placeholder="郵便番号" style="margin-top:2px">
+   <input type="text" id="pf-addr" value="${esc(myProf.address||"")}" placeholder="住所">
+   <p class="muted" style="margin:8px 0 0">緊急連絡先</p>
+   <input type="text" id="pf-ename" value="${esc(myProf.emergency_name||"")}" placeholder="氏名" style="margin-top:2px">
+   <input type="text" id="pf-erel" value="${esc(myProf.emergency_relation||"")}" placeholder="続柄（例: 父）">
+   <input type="text" id="pf-ephone" value="${esc(myProf.emergency_phone||"")}" placeholder="電話番号">
+   <button class="btn sm" id="pf-save">プロフィールを保存</button></div>
+  <div class="card"><h3>🔑 パスワードの変更</h3>
+   <input type="password" id="pf-pw" placeholder="新しいパスワード（8文字以上）" autocomplete="new-password">
+   <input type="password" id="pf-pw2" placeholder="確認のためもう一度" autocomplete="new-password">
+   <button class="btn sm" id="pf-pwsave">パスワードを変更</button></div>`;
  if(can("format_config")){
   h+=`<div class="card"><h3>🛠 カスタマイズ</h3>
    <button class="btn sm" id="set-join" style="margin-bottom:8px">入社フォームの項目設定</button>
@@ -1721,7 +1757,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.5.8</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.0</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2441,6 +2477,45 @@ function bindPage(){
   render();
  };
  if($("eu-toggle"))$("eu-toggle").onclick=adminToggle;
+ // v2.6.0 完全削除
+ if($("eu-del"))$("eu-del").onclick=async()=>{
+  const {data:info,error}=await sb.rpc("delete_user_completely",{p_user:adminDetail,p_confirm:false});
+  if(error){toast("エラー: "+error.message,true);return}
+  const n=[["日報",info.reports],["フィードバック",info.comments],["タスク",info.tasks],["タスクのコメント",info.task_comments],["チャット発言",info.messages],["添付ファイル",info.files]].filter(x=>x[1]>0);
+  const detail=n.length?"\n\n一緒に削除されるもの:\n"+n.map(x=>`・${x[0]} ${x[1]}件`).join("\n"):"\n\n（関連データはありません）";
+  if(!confirm(`${info.name}さんを完全に削除します。元に戻せません。${detail}\n\n本当に削除しますか？`))return;
+  if(n.length&&!confirm(`最終確認です。\n${info.name}さんの記録もすべて消えます。よろしいですか？`))return;
+  $("eu-del").disabled=true;
+  const {data:res,error:e2}=await sb.rpc("delete_user_completely",{p_user:adminDetail,p_confirm:true});
+  if(e2){toast("削除エラー: "+e2.message,true);$("eu-del").disabled=false;return}
+  toast(`${(res&&res.name)||""}さんを完全に削除しました`);
+  adminMode="list";adminDetail=null;adminUsers=null;render();
+ };
+ // v2.6.0 従業員の絞り込み
+ ["au-role","au-state","au-store"].forEach(id=>{if($(id))$(id).onchange=()=>{auRole=$("au-role").value;auState=$("au-state").value;auStore=$("au-store").value;render()}});
+ if($("au-clear"))$("au-clear").onclick=()=>{auRole="";auState="";auStore="";render()};
+ // v2.6.0 プロフィール
+ if($("pf-save"))$("pf-save").onclick=async()=>{
+  const name=$("pf-name").value.trim();
+  if(!name){toast("氏名を入力してください",true);return}
+  $("pf-save").disabled=true;
+  const {error}=await sb.rpc("update_my_profile",{p_name:name,p_name_kana:$("pf-kana").value.trim()||null,
+   p_phone:$("pf-phone").value.trim()||null,p_postal_code:$("pf-zip").value.trim()||null,p_address:$("pf-addr").value.trim()||null,
+   p_emergency_name:$("pf-ename").value.trim()||null,p_emergency_relation:$("pf-erel").value.trim()||null,p_emergency_phone:$("pf-ephone").value.trim()||null});
+  $("pf-save").disabled=false;
+  if(error){toast("保存エラー: "+error.message,true);return}
+  me.name=name;myProf=null;toast("プロフィールを保存しました");render();
+ };
+ if($("pf-pwsave"))$("pf-pwsave").onclick=async()=>{
+  const pw=$("pf-pw").value,pw2=$("pf-pw2").value;
+  if(pw.length<8){toast("パスワードは8文字以上にしてください",true);return}
+  if(pw!==pw2){toast("確認用のパスワードが一致しません",true);return}
+  $("pf-pwsave").disabled=true;
+  const {error}=await sb.auth.updateUser({password:pw});
+  $("pf-pwsave").disabled=false;
+  if(error){toast("変更エラー: "+error.message,true);return}
+  $("pf-pw").value="";$("pf-pw2").value="";toast("パスワードを変更しました");
+ };
  if($("editthis"))$("editthis").onclick=async()=>{
   const {data:r}=await sb.from("reports").select("kind").eq("id",detail).single();
   editId=detail;detail=null;page=r&&r.kind==="weekly"?"weekly":"write";render();

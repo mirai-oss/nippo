@@ -225,7 +225,8 @@ let rcList=null,rcSeg="active",rcQ="",rcDetail=null,rcForms=null,applyFormDef=nu
 let rcFForm="",rcFSrc="",rcFArea="",rcSort="new",rcCosts=null,rcHiredInfo=null,joinSmSel=null,joinSmNo=false; // v2.5.2
 let rcFStatus=""; // v2.5.6 選考ステータス絞り込み
 let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8
-let myProf=null,auRole="",auState="",auStore=""; // v2.6.0 プロフィール編集・従業員絞り込み
+let myProf=null,auRole="",auState="",auStore=""; // v2.6.0
+let ivSkipSm=false; // v2.6.1 招待発行時のスマレジ登録有無
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const todayStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
@@ -354,9 +355,14 @@ async function renderJoin(){
   <div class="card"><h3>ログイン情報 <span class="req">必須</span></h3>
    <input type="email" id="j-email" placeholder="メールアドレス（ログインIDになります）" autocomplete="username">
    <input type="password" id="j-pw" placeholder="パスワード（8文字以上・自分で決める）" autocomplete="new-password"></div>`;
- if(!smLinked)h+=`<div class="card" id="j-smwrap" style="display:none"><h3>🕐 スマレジ・タイムカード</h3>
-   <p class="muted" style="margin:0">すでにスマレジ・タイムカード（出勤打刻）に登録されている方は、上の氏名・フリガナを入力すると自動で照合されます。一致した場合だけ確認が表示されます。</p>
-   <div id="j-smmatch"></div></div>`;
+ const skipSm=!!info.skip_smaregi; // v2.6.1 招待側で「登録しない」が指定されている
+ if(!smLinked&&!skipSm)h+=`<div class="card"><h3>🕐 スマレジ・タイムカード（出勤打刻）</h3>
+   <label class="radio-row"><input type="radio" name="jsm" value="yes" checked>登録する（お店で働く方）</label>
+   <label class="radio-row"><input type="radio" name="jsm" value="no">登録しない（管理用アカウントなど）</label>
+   <div id="j-smwrap" style="display:none;margin-top:8px">
+    <p class="muted" style="margin:0">すでにスマレジ・タイムカードに登録されている方は、上の氏名・フリガナを入力すると自動で照合されます。一致した場合だけ確認が表示されます。</p>
+    <div id="j-smmatch"></div></div></div>`;
+ if(skipSm)h+=`<div class="info">🕐 このアカウントはスマレジ・タイムカードには登録されません（アプリのみのご利用です）</div>`;
  h+=`<div class="card"><h3>基本情報 <span class="req">必須</span></h3>
    <input type="text" id="j-name" placeholder="氏名（例: 山田 太郎）" value="${esc(info.smaregi_staff_name||info.applicant_name||"")}">
    <input type="text" id="j-kana" placeholder="フリガナ（例: ヤマダ タロウ）" value="${esc(info.smaregi_staff_kana||"")}">`;
@@ -394,7 +400,13 @@ async function renderJoin(){
  document.querySelectorAll(".chip[data-jmc]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
  cfg.custom.forEach((c,i)=>{if(c.type==="photo")renderJoinPhoto(i)});
  joinSmSel=null;joinSmNo=false;
- if(!info.smaregi_staff_id)loadJoinSm();
+ document.querySelectorAll('input[name="jsm"]').forEach(r=>r.onchange=()=>{
+  const on=document.querySelector('input[name="jsm"]:checked').value==="yes";
+  const w=$("j-smwrap");if(w)w.style.display=on&&joinSmStaffs?"":"none";
+  if(!on){joinSmSel=null;joinSmApply(false)}
+  joinSmCheck();
+ });
+ if(!info.smaregi_staff_id&&!skipSm)loadJoinSm();
 }
 // v1.7: 入社フォームの写真（ローカル保持→登録後にアップロード）
 function renderJoinPhoto(i){
@@ -415,7 +427,8 @@ async function loadJoinSm(){
   if(!r||!r.ok||!Array.isArray(r.staffs)||!r.staffs.length)return;
   joinSmStaffs=r.staffs;
   const w=$("j-smwrap");if(!w)return;
-  w.style.display="";
+  const sel=document.querySelector('input[name="jsm"]:checked');
+  w.style.display=(!sel||sel.value==="yes")?"":"none";
   // v2.5.2: 全員の名前一覧は表示せず、入力された氏名・フリガナと照合して一致した時だけ確認を出す
   $("j-name").addEventListener("input",joinSmCheck);
   $("j-kana").addEventListener("input",joinSmCheck);
@@ -431,6 +444,8 @@ function joinSmApply(on){
 }
 function joinSmCheck(){
  const box=$("j-smmatch");if(!box||!joinSmStaffs)return;
+ const sel=document.querySelector('input[name="jsm"]:checked');
+ if(sel&&sel.value==="no"){box.innerHTML="";return}
  if(joinSmSel){
   const s=joinSmStaffs.find(x=>String(x.staffId)===String(joinSmSel));
   box.innerHTML=`<div class="info" style="margin:8px 0 0">✅ スマレジ・タイムカードの「${esc(s?s.name:"")}」さんとして連携します　<span style="color:var(--blue);cursor:pointer;text-decoration:underline" id="j-smoff">解除</span></div>`;
@@ -499,7 +514,10 @@ async function doJoin(){
   if(Object.keys(extraPh).length)await sb.rpc("merge_profile_extra",{p_extra:extraPh});
  }catch(e){}
  const linked=smId||(joinInfoCur&&joinInfoCur.smaregi_staff_id);
- if(!linked)smaregiSync(data.user.id); // スマレジタイムカードへ自動登録（連携済みならスキップ）
+ const smSelRadio=document.querySelector('input[name="jsm"]:checked'); // v2.6.1
+ const smWanted=!(joinInfoCur&&joinInfoCur.skip_smaregi)&&!(smSelRadio&&smSelRadio.value==="no");
+ if(!linked&&smWanted)smaregiSync(data.user.id); // スマレジタイムカードへ自動登録
+ else if(!linked)try{await sb.rpc("set_my_smaregi_skip")}catch(e){}
  await loadMe(data.user.id);
 }
 async function smaregiSync(uid){ // スマレジ・タイムカードにスタッフ登録するEdge Functionを呼ぶ
@@ -1609,19 +1627,25 @@ async function adminInviteView(){
   <span class="muted">LINEやメールで本人に送ってください</span></div>`}
  h+=`<div class="card"><h3>役職 <span class="req">必須</span></h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip ivrole ${ivRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
  <div class="card"><h3>所属店舗（複数可・最初に選んだ店舗がメイン）</h3>${stores.map(s=>`<span class="chip ivstore ${ivStores.includes(s.id)?"on":""}" data-s="${s.id}">${esc(s.name)}</span>`).join("")}</div>
+ <div class="card"><h3>🕐 スマレジ・タイムカード</h3>
+  <label class="radio-row"><input type="radio" name="ivsm" value="no" ${ivSkipSm?"checked":""}>登録しない（アプリのみ・管理用アカウントなど）</label>
+  <label class="radio-row"><input type="radio" name="ivsm" value="yes" ${ivSkipSm?"":"checked"}>登録する（お店で働く方・出勤打刻あり）</label>
+  <p class="muted" style="margin:6px 0 0">「登録する」を選ぶと、本人の登録時にスマレジ・タイムカードへ自動登録されます</p></div>
  <div class="card"><h3>有効期限</h3><select class="inp" id="iv-days"><option value="7">7日間</option><option value="14">14日間</option><option value="30">30日間</option></select></div>
  <div class="card"><h3>メモ（任意・誰宛かなど）</h3><input type="text" id="iv-note" placeholder="例: 4月入社 佐藤さん"></div>
  <button class="btn" id="iv-submit">招待リンクを発行する</button>`;
  if(ivs&&ivs.length){
   h+=`<h3 style="margin-top:20px;font-size:14px">未使用の招待（${ivs.length}件）</h3>`;
-  ivs.forEach(v=>{h+=`<div class="row" style="cursor:default"><span><b>${ROLE_NAME[v.role]||v.role}</b>${v.note?` <span class="muted">${esc(v.note)}</span>`:""}<br><span class="muted">期限: ${new Date(v.expires_at).toLocaleDateString("ja-JP")}</span></span><span><button class="btn sm sub" data-ivcopy="${esc(v.token)}">コピー</button><button class="btn sm sub" data-ivdel="${v.id}" style="color:var(--red);border-color:var(--red)">削除</button></span></div>`});
+  ivs.forEach(v=>{h+=`<div class="row" style="cursor:default"><span><b>${ROLE_NAME[v.role]||v.role}</b>${v.note?` <span class="muted">${esc(v.note)}</span>`:""}<br><span class="muted">期限: ${new Date(v.expires_at).toLocaleDateString("ja-JP")}${v.skip_smaregi?" ／ 🕐スマレジ登録なし":""}</span></span><span><button class="btn sm sub" data-ivcopy="${esc(v.token)}">コピー</button><button class="btn sm sub" data-ivdel="${v.id}" style="color:var(--red);border-color:var(--red)">削除</button></span></div>`});
  }
  return h;
 }
 async function adminInviteCreate(){
  if(!ivRole){toast("役職を選んでください",true);return}
  $("iv-submit").disabled=true;
- const {data,error}=await sb.rpc("create_invite",{p_role:ivRole,p_store_ids:ivStores,p_days:+$("iv-days").value,p_note:$("iv-note").value.trim()||null});
+ const smNo=document.querySelector('input[name="ivsm"]:checked');
+ ivSkipSm=!!(smNo&&smNo.value==="no");
+ const {data,error}=await sb.rpc("create_invite",{p_role:ivRole,p_store_ids:ivStores,p_days:+$("iv-days").value,p_note:$("iv-note").value.trim()||null,p_skip_smaregi:ivSkipSm});
  if(error){toast("発行エラー: "+error.message,true);$("iv-submit").disabled=false;return}
  lastInvite=data;render();
 }
@@ -1757,7 +1781,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.0</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.1</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====

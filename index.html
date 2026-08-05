@@ -135,9 +135,9 @@ const FEATURES={
  kpi_config:"KPI・評価設定 ※次バージョンから"
 };
 // ===== v2.5 応募者管理 =====
-const APPLICANT_STATUS={new:"新規",contacted:"連絡済み",interview_set:"面接設定",interviewed:"面接済み",hired:"採用",retired:"退職",rejected:"不採用",declined:"辞退"};
+const APPLICANT_STATUS={new:"新規",contacted:"連絡済み",interview_set:"面接設定",interviewed:"面接済み",hired:"採用",retired:"退職",noshow:"バックレ",rejected:"不採用",declined:"辞退"};
 const APPLICANT_ACTIVE=["new","contacted","interview_set","interviewed"];
-const APPLICANT_COLOR={new:"#2b6cb0",contacted:"#0e7490",interview_set:"#7c3aed",interviewed:"#d97706",hired:"#1e8e5a",retired:"#7a5c3e",rejected:"#c0392b",declined:"#6b7280"}; // v2.5.5／v2.6.8で退職を追加
+const APPLICANT_COLOR={new:"#2b6cb0",contacted:"#0e7490",interview_set:"#7c3aed",interviewed:"#d97706",hired:"#1e8e5a",retired:"#7a5c3e",noshow:"#9a3412",rejected:"#c0392b",declined:"#6b7280"}; // v2.5.5／v2.6.8で退職／v2.6.17でバックレを追加
 const APPLICANT_SOURCE={form:"フォーム",indeed:"Indeed",manual:"手動",csv:"CSV",referral:"紹介"};
 // v2.6.6 生年月日から年齢を計算（年齢が直接入っていればそれを使う）
 function rcAge(a){
@@ -249,6 +249,13 @@ let chatReply=null,chatInvite=false,chatInviteSel=[]; // v2.2 返信・招待
 let permMatrix=null,permUserSel=null,permUserVals=null,permUsersCache=null; // v2.4 権限設定
 let rcList=null,rcSeg="active",rcQ="",rcDetail=null,rcForms=null,applyFormDef=null; // v2.5 応募者管理
 let rcJobs=false,rcJobList=null,rcMsgs=null; // v2.6.16 求人タイトルの登録／Indeedメッセージ
+// v2.6.17 一覧に出す店舗名。①店舗が決まっていればその名前 ②求人メールの店舗名から店舗を探す ③どちらも無ければ勤務地
+const rcStoreName=a=>{
+ if(a&&a.store_id){const s=(stores||[]).find(x=>x.id===a.store_id);if(s)return s.name}
+ const hint=String(((a||{}).answers||{})["店舗"]||"");
+ if(hint){const s=(stores||[]).find(x=>jobNorm(x.name)&&jobNorm(hint).includes(jobNorm(x.name)));return s?s.name:hint}
+ return rcAreaOf(a);
+};
 let rcFForm="",rcFSrc="",rcFArea="",rcSort="new",rcCosts=null,rcHiredInfo=null,joinSmSel=null,joinSmNo=false; // v2.5.2
 let rcFStatus=""; // v2.5.6 選考ステータス絞り込み
 let csvRows=null,csvBusy=false; // v2.6.5 CSV取り込み
@@ -1374,7 +1381,7 @@ async function recruitView(){
  };
  const act=rcList.filter(a=>APPLICANT_ACTIVE.includes(a.status)&&match(a)).sort(sorter);
  const hired=rcList.filter(a=>(a.status==="hired"||a.status==="retired")&&match(a)).sort(sorter);
- const closed=rcList.filter(a=>(a.status==="rejected"||a.status==="declined")&&match(a)).sort(sorter);
+ const closed=rcList.filter(a=>(a.status==="rejected"||a.status==="declined"||a.status==="noshow")&&match(a)).sort(sorter); // v2.6.17 バックレも「終了」側
  const fAll=rcList.filter(match); // v2.5.4 集計は絞り込み条件に連動
  const AREAS=(()=>{const base=["恵比寿","本店","川崎","新横浜","田町","三田","新橋","芝"];const found={};rcList.forEach(a=>{const v=rcAreaOf(a).split("、")[0].split(",")[0].trim();if(v&&v.length<=12)found[v]=(found[v]||0)+1});const extra=Object.keys(found).filter(v=>!base.includes(v)).sort((x,y)=>found[y]-found[x]).slice(0,8);return base.concat(extra)})();
  let h=`<h2>📥 応募者管理</h2>`;
@@ -1422,11 +1429,21 @@ async function recruitView(){
  const list=rcSeg==="active"?act:rcSeg==="hired"?hired:closed;
  if(!list.length)h+=`<p class="muted center" style="margin-top:16px">該当する応募者はいません</p>`;
  list.forEach(a=>{
-  const stBadge=`<span class="badge" style="background:${APPLICANT_COLOR[a.status]||"#2b6cb0"}">${APPLICANT_STATUS[a.status]||a.status}</span>`;
   const form=(rcForms||[]).find(f=>f.key===a.form_key);
   const fNew=rcFormNew(a),mNew=rcMsgNew(a); // v2.6.15 フォーム回答／v2.6.16 メッセージの新着
-  h+=`<div class="row" data-rca="${a.id}"${(fNew||mNew)?' style="background:#fff7ed"':""}><span><b>${rcNameAge(a)}</b> ${stBadge}${fNew?' <span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span>':""}${mNew?' <span class="badge" style="background:#0e7490">💬 メッセージが届きました</span>':""}${a.user_id?' <span class="badge g">入社済み</span>':""}<br>
-   <span class="muted">${form?esc(form.title.replace("応募フォーム","")):esc(a.job_type||"")}${rcAreaOf(a)?"・🏪"+esc(rcAreaOf(a).split("、")[0].split(",")[0].slice(0,10)):""}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}${a.interview_at?`・面接 ${fmtDue(a.interview_at)}`:""}</span></span><span class="muted">›</span></div>`;
+  const col=APPLICANT_COLOR[a.status]||"#2b6cb0";
+  // v2.6.17 ① 選考ステータスを一覧のままプルダウンで変えられる
+  const stSel=`<select data-rcst2="${a.id}" style="border:1.5px solid ${col};color:${col};background:#fff;border-radius:999px;font-size:11px;font-weight:700;padding:2px 2px 2px 7px;max-width:116px">${Object.entries(APPLICANT_STATUS).map(([k,v])=>`<option value="${k}"${a.status===k?" selected":""}>${v}</option>`).join("")}</select>`;
+  // v2.6.17 ② 面接設定・面接済みのときだけ、その場で面接日時を選べる
+  const ivIn=["interview_set","interviewed"].includes(a.status)
+   ?`<input type="datetime-local" data-rciv="${a.id}" value="${a.interview_at?new Date(new Date(a.interview_at).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):""}" style="font-size:11px;padding:2px 4px;border:1px solid var(--line);border-radius:6px;max-width:176px">`:"";
+  // v2.6.17 ⑤ 採用にすると招待リンクの発行→送信ができる
+  const invBtn=(a.status==="hired"&&!a.user_id)
+   ?(a.invite_token
+     ?`<button class="btn sm" data-rcsend="${a.id}" style="font-size:11px;padding:3px 8px;background:var(--green)">📤 リンクを送る</button>`
+     :`<button class="btn sm" data-rcissue="${a.id}" style="font-size:11px;padding:3px 8px">🔗 招待リンクを発行</button>`):"";
+  h+=`<div class="row" data-rca="${a.id}"${(fNew||mNew)?' style="background:#fff7ed"':""}><span><b>${rcNameAge(a)}</b> <span style="display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;vertical-align:middle">${stSel}${ivIn}${invBtn}${fNew?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span>':""}${mNew?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span>':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</span><br>
+   <span class="muted">${form?esc(form.title.replace("応募フォーム","")):esc(a.job_type||"")}${rcStoreName(a)?"・🏪"+esc(rcStoreName(a).split("、")[0].split(",")[0].slice(0,14)):""}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}${a.interview_at?`・面接 ${fmtDue(a.interview_at)}`:""}${a.updated_at?`・更新 ${fmtDue(a.updated_at)}`:""}</span></span><span class="muted">›</span></div>`;
  });
  h+=`<button class="btn sm sub" id="rc-csv" style="margin-top:10px">📄 表示中の一覧をCSVダウンロード</button>`;
  // 月別集計と単価
@@ -1450,21 +1467,22 @@ async function recruitView(){
   return rows.length?rows.reduce((s,c)=>s+(+c.amount),0):null;
  };
  const filtLabel=(rcFArea||rcFForm||rcFSrc||rcQ||rcFStatus||rcFrom||rcTo)?`絞り込みで再計算中${rcFArea?"・"+esc(rcFArea):""}${rcFForm==="al"?"・アルバイト":rcFForm==="shain"?"・社員":""}${rcFStatus?"・"+APPLICANT_STATUS[rcFStatus]:""}${(rcFrom||rcTo)?"・"+(rcFrom||"最初")+"〜"+(rcTo||"今月"):""}`:"全体";
- rcStatRows=[["月","応募","面接","採用","面接率","採用率(面接から)","費用","応募単価","面接単価","採用単価"]];
+ rcStatRows=[["月","応募","面接","採用","バックレ","面接率","採用率(面接から)","バックレ率(応募から)","費用","応募単価","面接単価","採用単価"]];
  months.forEach(m=>{
   const ms=fAll.filter(a=>mkey(a.applied_at)===m);
   const ap=ms.length,iv=ms.filter(a=>["interviewed","hired","retired"].includes(a.status)).length,hi=ms.filter(a=>["hired","retired"].includes(a.status)).length;
+  const ns=ms.filter(a=>a.status==="noshow").length; // v2.6.17 バックレは面接に数えない
   const cost=costFor(m);
-  // v2.6.15 採用率は「面接した人のうち何人採用できたか」に変更（分母＝面接数）
-  rcStatRows.push([m,ap,iv,hi,ap?Math.round(iv/ap*100)+"%":"−",iv?Math.round(hi/iv*100)+"%":"−",cost!=null?cost:"−",cost!=null&&ap?Math.round(cost/ap):"−",cost!=null&&iv?Math.round(cost/iv):"−",cost!=null&&hi?Math.round(cost/hi):"−"]);
+  // v2.6.15 採用率は「面接した人のうち何人採用できたか」（分母＝面接数）／v2.6.17 バックレ率は応募数が分母
+  rcStatRows.push([m,ap,iv,hi,ns,ap?Math.round(iv/ap*100)+"%":"−",iv?Math.round(hi/iv*100)+"%":"−",ap?Math.round(ns/ap*100)+"%":"−",cost!=null?cost:"−",cost!=null&&ap?Math.round(cost/ap):"−",cost!=null&&iv?Math.round(cost/iv):"−",cost!=null&&hi?Math.round(cost/hi):"−"]);
  });
- const yenCell=(c,i)=>i>=6&&c!=="−"?"¥"+(+c).toLocaleString("ja-JP"):c;
- h+=`<div class="card" style="margin-top:14px"><h3>📊 月別の採用状況と単価 <span class="muted" style="font-weight:400;font-size:11px">（${filtLabel}）</span></h3><div class="tblwrap"><table class="tbl" style="min-width:640px">
+ const yenCell=(c,i)=>i>=8&&c!=="−"?"¥"+(+c).toLocaleString("ja-JP"):c;
+ h+=`<div class="card" style="margin-top:14px"><h3>📊 月別の採用状況と単価 <span class="muted" style="font-weight:400;font-size:11px">（${filtLabel}）</span></h3><div class="tblwrap"><table class="tbl" style="min-width:780px">
   <tr class="muted">${rcStatRows[0].map((c,i)=>`<td${i===0?' style="text-align:left"':""}>${c}</td>`).join("")}</tr>
   ${rcStatRows.slice(1).slice(-6).map(r=>`<tr>${r.map((c,i)=>`<td${i===0?' style="text-align:left"':""}>${yenCell(c,i)}</td>`).join("")}</tr>`).join("")}
  </table></div>
  <button class="btn sm sub" id="rc-statcsv" style="margin-top:8px">📄 この集計をCSVダウンロード</button>
- <p class="muted" style="margin-top:6px">表は直近6ヶ月・<b>CSVは${(rcFrom||rcTo)?"指定期間":"全期間"}（${months.length}ヶ月分）</b> ／ 絞り込みに連動して再計算 ／ 費用は同条件で入力した分のみ合計<br>面接率＝面接÷応募　<b>採用率＝採用÷面接</b>（面接した人のうち何人採用できたか）</p></div>`;
+ <p class="muted" style="margin-top:6px">表は直近6ヶ月・<b>CSVは${(rcFrom||rcTo)?"指定期間":"全期間"}（${months.length}ヶ月分）</b> ／ 絞り込みに連動して再計算 ／ 費用は同条件で入力した分のみ合計<br>面接率＝面接÷応募　<b>採用率＝採用÷面接</b>（面接した人のうち何人採用できたか）　<b>バックレ率＝バックレ÷応募</b>（バックレは面接に数えません）</p></div>`;
  // 採用者の定着・離職
  const hiredAll=fAll.filter(a=>a.user_id||a.status==="retired"); // v2.5.4／v2.6.8
  if(hiredAll.length){
@@ -1521,6 +1539,14 @@ async function rcMarkFormSeen(id){
  if(rcMsgNew(a)){a.msg_seen_at=t;upd.msg_seen_at=t}
  if(!Object.keys(upd).length)return;
  try{await sb.from("applicants").update(upd).eq("id",id)}catch(e){}
+}
+// v2.6.17 招待リンクを本人に送る。端末の共有メニュー（LINE・SMS・メールなど）を開く
+async function rcShareInvite(a){
+ if(!a||!a.invite_token){toast("先に招待リンクを発行してください",true);return}
+ const url=location.origin+location.pathname+"?invite="+a.invite_token;
+ const text=a.name+"さん\n\nこの度はご応募ありがとうございます。\n下記のリンクから入社の登録をお願いいたします。\n\n"+url;
+ if(navigator.share){try{await navigator.share({title:"入社手続きのご案内",text})}catch(e){}return}
+ copyText(text);toast("この端末では共有メニューが使えないため、文面をコピーしました");
 }
 // v2.6.16 求人掲載タイトルの登録画面
 async function recruitJobsView(){
@@ -1605,9 +1631,17 @@ function recruitDetailView(){
  }
  if(a.invite_token){
   const url=location.origin+location.pathname+"?invite="+a.invite_token;
+  // v2.6.17 リンクをその場で送れるように（端末の共有メニュー＝LINE等／メール）
+  const mailSub=encodeURIComponent("【鳥一代グループ】入社手続きのご案内");
+  const mailBody=encodeURIComponent(a.name+"さん\n\nこの度はご応募ありがとうございます。\n下記のリンクから入社の登録をお願いいたします。\n\n"+url+"\n");
   h+=`<div class="card" style="background:#f0f7ff"><h3>🔗 招待リンク${a.user_id?"（使用済み・入社完了）":"（本人に送ってください）"}</h3>
    <p style="font-size:12px;word-break:break-all;margin:0">${esc(url)}</p>
-   ${a.user_id?"":`<button class="btn sm sub" data-rccopy="${esc(url)}">📋 リンクをコピー</button>`}</div>`;
+   ${a.user_id?"":`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+    <button class="btn sm" id="rc-share">📤 リンクを送る（LINEなど）</button>
+    ${a.email?`<a class="btn sm sub" href="mailto:${esc(a.email)}?subject=${mailSub}&amp;body=${mailBody}" style="text-decoration:none;display:inline-block">✉️ メールで送る</a>`:""}
+    <button class="btn sm sub" data-rccopy="${esc(url)}">📋 コピー</button>
+   </div>
+   <p class="muted" style="margin:6px 0 0">「リンクを送る」を押すと、この端末の共有メニューからLINE・SMS・メールなどを選んで送れます${a.email?"":"（メールアドレスが未登録のため「メールで送る」は出ていません）"}</p>`}</div>`;
  }
  h+=`<div class="card"><h3>📝 応募内容</h3>`;
  const seen={};
@@ -2067,7 +2101,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.16</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.17</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2690,13 +2724,54 @@ function bindPage(){
   render();
  };
  document.querySelectorAll("[data-rca]").forEach(el=>el.onclick=()=>{rcDetail=el.dataset.rca;render();rcMarkFormSeen(rcDetail)}); // v2.6.15 開いたら新着の印を消す
+ // v2.6.17 一覧の行でそのまま操作する（行を開いてしまわないよう、クリックはここで止める）
+ document.querySelectorAll("[data-rcst2],[data-rciv],[data-rcsend],[data-rcissue]").forEach(el=>el.onclick=e=>e.stopPropagation());
+ document.querySelectorAll("[data-rcst2]").forEach(el=>el.onchange=async e=>{ // ① 選考ステータス
+  e.stopPropagation();
+  const id=el.dataset.rcst2,st=el.value,a=rcList.find(x=>x.id===id);
+  if(!a||st===a.status)return;
+  el.disabled=true;
+  const now=new Date().toISOString();
+  const {error}=await sb.from("applicants").update({status:st,status_changed_at:now,updated_at:now}).eq("id",id);
+  el.disabled=false;
+  if(error){toast("変更エラー: "+error.message,true);return}
+  toast(a.name+"さんを「"+APPLICANT_STATUS[st]+"」にしました");
+  rcSeg=rcSegOf(st); // その応募者がいるタブへ自動で移動（採用にしたら「採用」タブで招待リンクが出る）
+  rcHiredInfo=null;render();
+ });
+ document.querySelectorAll("[data-rciv]").forEach(el=>el.onchange=async e=>{ // ② 面接日時
+  e.stopPropagation();
+  const id=el.dataset.rciv,v=el.value?new Date(el.value).toISOString():null;
+  el.disabled=true;
+  const {error}=await sb.from("applicants").update({interview_at:v,updated_at:new Date().toISOString()}).eq("id",id);
+  el.disabled=false;
+  if(error){toast("保存エラー: "+error.message,true);return}
+  toast(v?"面接日時を保存しました":"面接日時を消しました");render();
+ });
+ document.querySelectorAll("[data-rcissue]").forEach(b=>b.onclick=async e=>{ // ⑤ 招待リンクを発行
+  e.stopPropagation();
+  const id=b.dataset.rcissue,a=rcList.find(x=>x.id===id);
+  if(!a)return;
+  if(!a.store_id){toast("先に所属店舗を選んでください。応募者カードを開きます",true);rcDetail=id;render();return}
+  b.disabled=true;
+  const {error}=await sb.rpc("hire_applicant",{p_applicant:id,p_role:a.form_key==="shain"?"SHAIN":"AL",p_store_ids:[a.store_id]});
+  b.disabled=false;
+  if(error){toast("発行エラー: "+error.message,true);return}
+  toast("招待リンクを発行しました。「リンクを送る」で本人に送れます");
+  rcHiredInfo=null;render();
+ });
+ document.querySelectorAll("[data-rcsend]").forEach(b=>b.onclick=e=>{ // ⑤ 招待リンクを送る
+  e.stopPropagation();
+  const a=rcList.find(x=>x.id===b.dataset.rcsend);
+  if(a)rcShareInvite(a);
+ });
  document.querySelectorAll("[data-rcseg]").forEach(el=>el.onclick=()=>{rcSeg=el.dataset.rcseg;if(rcFStatus&&rcSegOf(rcFStatus)!==rcSeg)rcFStatus="";render()});
  document.querySelectorAll("[data-rccopy]").forEach(el=>el.onclick=e=>{e.stopPropagation();copyText(el.dataset.rccopy)});
  if($("rcq"))$("rcq").onkeydown=e=>{if(e.key==="Enter"){rcQ=$("rcq").value.trim();render()}};
  if($("rcqclear"))$("rcqclear").onclick=()=>{rcQ="";rcFForm="";rcFSrc="";rcFArea="";rcFStatus="";rcFrom="";rcTo="";render()};
  if($("rc-perclear"))$("rc-perclear").onclick=()=>{rcFrom="";rcTo="";render()};
  ["rc-from","rc-to"].forEach(id=>{if($(id))$(id).onchange=()=>{rcFrom=$("rc-from").value;rcTo=$("rc-to").value;render()}});
- const rcSegOf=st=>(st==="hired"||st==="retired")?"hired":(st==="rejected"||st==="declined")?"closed":"active"; // v2.5.6／v2.6.8
+ const rcSegOf=st=>(st==="hired"||st==="retired")?"hired":(st==="rejected"||st==="declined"||st==="noshow")?"closed":"active"; // v2.5.6／v2.6.8／v2.6.17
  ["rc-fform","rc-fsrc","rc-farea","rc-sort","rc-fstatus"].forEach(fid=>{if($(fid))$(fid).onchange=()=>{
   rcFForm=$("rc-fform").value;rcFSrc=$("rc-fsrc").value;rcFArea=$("rc-farea").value;rcSort=$("rc-sort").value;
   rcFStatus=$("rc-fstatus")?$("rc-fstatus").value:"";
@@ -2713,6 +2788,7 @@ function bindPage(){
   document.querySelectorAll(".chip[data-rcst]").forEach(x=>{x.classList.remove("on");x.style.background="";x.style.color=APPLICANT_COLOR[x.dataset.rcst]});
   c.classList.add("on");c.style.background=APPLICANT_COLOR[c.dataset.rcst];c.style.color="#fff";
  });
+ if($("rc-share"))$("rc-share").onclick=()=>{const a=rcList.find(x=>x.id===rcDetail);if(a)rcShareInvite(a)};
  document.querySelectorAll(".chip[data-rchst]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
  if($("rc-save"))$("rc-save").onclick=saveApplicant;
  if($("rc-urlsave"))$("rc-urlsave").onclick=async()=>{ // v2.6.6 Indeedリンク

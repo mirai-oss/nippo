@@ -1961,9 +1961,10 @@ async function settingsView(){
    <input type="password" id="cw-token" placeholder="${cwToken?"（設定済み。変更する場合のみ入力）":"Chatwork APIトークン"}" autocomplete="off">
    <button class="btn sm sub" id="cw-save">Chatworkトークンを保存</button>
    <p class="muted" style="margin:12px 0 2px"><b>② スマレジ従業員ページのURL</b>（入社通知にリンクを付けます）</p>
-   <p class="muted" style="margin:0;font-size:11px">スマレジで従業員を1人開いたときのURLを貼り、ID部分を <b>{ID}</b> に置き換えてください<br>例: https://timecard.smaregi.jp/…/staff/<b>{ID}</b>/edit</p>
-   <input type="text" id="sm-url" value="${esc(smUrlTpl||"")}" placeholder="https://.../staff/{ID}/edit" style="font-size:12px">
+   <p class="muted" style="margin:0;font-size:11px">スマレジで<b>誰か1人</b>を開いて、そのURLをそのまま貼り付けてください。末尾のID部分は自動で切り替わるようにします（1回設定すれば全員に反映されます）</p>
+   <input type="text" id="sm-url" value="${esc(smUrlTpl||"")}" placeholder="https://timecard1.smaregi.jp/staffs/detail/60" style="font-size:12px">
    <button class="btn sm sub" id="sm-urlsave">スマレジURLを保存</button>
+   ${smUrlTpl?`<p class="muted" style="margin:6px 0 0;font-size:11px">✅ 設定済み。通知にはこの形でリンクが入ります<br><span style="word-break:break-all">${esc(smUrlTpl.replace("{ID}","349"))}</span>（例: IDが349の人）</p>`:""}
    <p class="muted" style="margin:12px 0 2px"><b>③ Larkの既定のWebhook</b>（テスト用）</p>
    <input type="text" id="lark-url" placeholder="https://open.larksuite.com/open-apis/bot/v2/hook/..." value="${esc(larkUrl||"")}">
    <button class="btn sm" id="lark-save">保存する</button>
@@ -1979,7 +1980,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.9</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.12</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2686,12 +2687,17 @@ function bindPage(){
   cwToken=v;$("cw-token").value="";toast("Chatworkトークンを保存しました");render();
  };
  if($("sm-urlsave"))$("sm-urlsave").onclick=async()=>{
-  const v=$("sm-url").value.trim();
+  let v=$("sm-url").value.trim();
+  let auto=false;
   if(v&&!/^https?:\/\//.test(v)){toast("http から始まるURLを入力してください",true);return}
-  if(v&&!v.includes("{ID}")){toast("URLの中の従業員ID部分を {ID} に置き換えてください",true);return}
+  if(v&&!v.includes("{ID}")){ // v2.6.12 末尾の数字を自動で {ID} に置き換える
+   const conv=v.replace(/(\d+)\/?$/,"{ID}");
+   if(conv!==v){v=conv;auto=true}
+   else{toast("スマレジで従業員を開いたときのURLを貼り付けてください（末尾がIDの数字）",true);return}
+  }
   const {error}=await sb.from("app_secrets").upsert({key:"smaregi_staff_url",value:v,updated_by:me.id,updated_at:new Date().toISOString()});
   if(error){toast("保存エラー: "+error.message,true);return}
-  smUrlTpl=v;toast(v?"スマレジのURLを保存しました":"設定を消しました");
+  smUrlTpl=v;toast(v?(auto?"保存しました（ID部分は自動で切り替わります）":"スマレジのURLを保存しました"):"設定を消しました");render();
  };
  if($("lark-save"))$("lark-save").onclick=async()=>{
   const url=$("lark-url").value.trim();

@@ -246,6 +246,7 @@ let csvRows=null,csvBusy=false; // v2.6.5 CSV取り込み
 let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8
 let myProf=null,auRole="",auState="",auStore=""; // v2.6.0
 let ivSkipSm=false; // v2.6.1
+let joinGender=null; // v2.6.7 入社登録の性別
 let teams=[],euTeam=null,lrList=null,lrEdit=null; // v2.6.2 チーム・日報Lark通知
 // v2.6.3 Lark通知のイベント（この動きがあったら通知する）
 const LARK_EVENTS={
@@ -402,6 +403,8 @@ async function renderJoin(){
    <input type="text" id="j-name" placeholder="氏名（例: 山田 太郎）" value="${esc(info.smaregi_staff_name||info.applicant_name||"")}">
    <input type="text" id="j-kana" placeholder="フリガナ（例: ヤマダ タロウ）" value="${esc(info.smaregi_staff_kana||"")}">`;
  if(!smLinked)h+=`<div data-joinsec>
+   <p class="muted" style="margin:8px 0 0">性別 <span class="req">必須</span><span style="font-size:11px">（勤怠システムの登録に使用します）</span></p>
+   <div style="margin-top:2px">${[["male","男性"],["female","女性"],["none","回答しない"]].map(([v,l])=>`<span class="chip jgender" data-g="${v}">${l}</span>`).join("")}</div>
    ${F.birth.on?`<p class="muted" style="margin:8px 0 0">生年月日${mark("birth")}</p><input type="date" id="j-birth">`:""}
    ${F.phone.on?`<input type="text" id="j-phone" placeholder="電話番号（例: 090-1234-5678)${F.phone.req?"※必須":""}" value="${esc(info.applicant_phone||"")}">`:""}</div>`;
  h+=`</div>`;
@@ -433,8 +436,9 @@ async function renderJoin(){
  $("app").innerHTML=h;
  $("j-submit").onclick=doJoin;
  document.querySelectorAll(".chip[data-jmc]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
+ document.querySelectorAll(".chip.jgender").forEach(c=>c.onclick=()=>{joinGender=c.dataset.g;document.querySelectorAll(".chip.jgender").forEach(x=>x.classList.remove("on"));c.classList.add("on")}); // v2.6.7
  cfg.custom.forEach((c,i)=>{if(c.type==="photo")renderJoinPhoto(i)});
- joinSmSel=null;joinSmNo=false;
+ joinSmSel=null;joinSmNo=false;joinGender=null;
  document.querySelectorAll('input[name="jsm"]').forEach(r=>r.onchange=()=>{
   const on=document.querySelector('input[name="jsm"]:checked').value==="yes";
   const w=$("j-smwrap");if(w)w.style.display=on&&joinSmStaffs?"":"none";
@@ -504,6 +508,7 @@ async function doJoin(){
  if(pw.length<8){toast("パスワードは8文字以上にしてください",true);return}
  // v1.7.1: スマレジ登録済み（紐付き招待 or プルダウン選択）はアカウント登録のみ
  const acctOnly=!!joinInfoCur.smaregi_staff_id||!!joinSmSel; // v2.5.2
+ if(!acctOnly&&!joinGender){toast("性別を選んでください",true);return} // v2.6.7
  const F=joinCfgCur.fields;
  if(!acctOnly)for(const [k,label] of JOIN_STD){if(F[k].on&&F[k].req&&!val("j-"+k)){toast(`「${label}」は必須です`,true);return}}
  const extra={};let missing=null;
@@ -548,6 +553,7 @@ async function doJoin(){
   }
   if(Object.keys(extraPh).length)await sb.rpc("merge_profile_extra",{p_extra:extraPh});
  }catch(e){}
+ if(joinGender)try{await sb.rpc("set_my_gender",{p_gender:joinGender})}catch(e){} // v2.6.7 スマレジ登録の前に保存
  const linked=smId||(joinInfoCur&&joinInfoCur.smaregi_staff_id);
  const smSelRadio=document.querySelector('input[name="jsm"]:checked'); // v2.6.1
  const smWanted=!(joinInfoCur&&joinInfoCur.skip_smaregi)&&!(smSelRadio&&smSelRadio.value==="no");
@@ -1842,7 +1848,7 @@ async function adminEditView(){
  if(prof){
   const smaregi=prof.smaregi_sync_status==="synced"?"✅ 登録済み":prof.smaregi_sync_status==="error"?"⚠️ エラー（"+esc(prof.smaregi_error||"")+"）":"未連携";
   h+=`<div class="card"><h3>入社情報（本人入力）</h3><p style="font-size:13px;line-height:1.9;margin:0">
-   フリガナ: ${esc(prof.name_kana||"—")}<br>生年月日: ${prof.birth_date||"—"}<br>電話: ${esc(prof.phone||"—")}<br>
+   フリガナ: ${esc(prof.name_kana||"—")}<br>性別: ${{male:"男性",female:"女性",none:"回答しない"}[prof.gender]||"—"}<br>社員番号: ${esc(prof.staff_code||"—")}<br>生年月日: ${prof.birth_date||"—"}<br>電話: ${esc(prof.phone||"—")}<br>
    住所: ${esc([prof.postal_code,prof.address].filter(Boolean).join(" ")||"—")}<br>
    緊急連絡先: ${esc(prof.emergency_name||"—")}${prof.emergency_relation?`（${esc(prof.emergency_relation)}）`:""} ${esc(prof.emergency_phone||"")}<br>
    入社日: ${prof.hire_date||"—"}<br>${prof.extra?Object.entries(prof.extra).map(([k,v])=>Array.isArray(v)?`${esc(k)}: `+v.map((u,x)=>`<a href="${esc(u)}" target="_blank">写真${x+1}</a>`).join(" ")+"<br>":`${esc(k)}: ${esc(v)}<br>`).join(""):""}スマレジ連携: ${smaregi}</p>
@@ -1944,7 +1950,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.6</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.7</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====

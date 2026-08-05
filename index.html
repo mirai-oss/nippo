@@ -135,9 +135,9 @@ const FEATURES={
  kpi_config:"KPI・評価設定 ※次バージョンから"
 };
 // ===== v2.5 応募者管理 =====
-const APPLICANT_STATUS={new:"新規",contacted:"連絡済み",interview_set:"面接設定",interviewed:"面接済み",hired:"採用",rejected:"不採用",declined:"辞退"};
+const APPLICANT_STATUS={new:"新規",contacted:"連絡済み",interview_set:"面接設定",interviewed:"面接済み",hired:"採用",retired:"退職",rejected:"不採用",declined:"辞退"};
 const APPLICANT_ACTIVE=["new","contacted","interview_set","interviewed"];
-const APPLICANT_COLOR={new:"#2b6cb0",contacted:"#0e7490",interview_set:"#7c3aed",interviewed:"#d97706",hired:"#1e8e5a",rejected:"#c0392b",declined:"#6b7280"}; // v2.5.5 一目で分かる色分け
+const APPLICANT_COLOR={new:"#2b6cb0",contacted:"#0e7490",interview_set:"#7c3aed",interviewed:"#d97706",hired:"#1e8e5a",retired:"#7a5c3e",rejected:"#c0392b",declined:"#6b7280"}; // v2.5.5／v2.6.8で退職を追加
 const APPLICANT_SOURCE={form:"フォーム",indeed:"Indeed",manual:"手動",csv:"CSV",referral:"紹介"};
 // v2.6.6 生年月日から年齢を計算（年齢が直接入っていればそれを使う）
 function rcAge(a){
@@ -568,6 +568,16 @@ async function smaregiSync(uid){ // スマレジ・タイムカードにスタ�
    method:"POST",
    headers:{Authorization:"Bearer "+(session?session.access_token:SUPA_KEY),apikey:SUPA_KEY,"Content-Type":"application/json"},
    body:JSON.stringify({action:"sync",user_id:uid})});
+  return await res.json();
+ }catch(e){return {ok:false,error:String(e)}}
+}
+async function smaregiTerminate(uid,date){ // v2.6.8 退職日をスマレジへ反映
+ try{
+  const {data:{session}}=await sb.auth.getSession();
+  const res=await fetch(SUPA_URL+"/functions/v1/smaregi-sync",{
+   method:"POST",
+   headers:{Authorization:"Bearer "+(session?session.access_token:SUPA_KEY),apikey:SUPA_KEY,"Content-Type":"application/json"},
+   body:JSON.stringify({action:"terminate",user_id:uid,date})});
   return await res.json();
  }catch(e){return {ok:false,error:String(e)}}
 }
@@ -1297,7 +1307,7 @@ async function adminView(){
   </div>`;
   if(!shown.length)h+=`<p class="muted center" style="margin-top:16px">該当する従業員はいません</p>`;
   shown.forEach(u=>{
-   h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">退職・無効</span>'}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}${(!u.is_active&&u.deactivated_at)?" ／ 退職 "+fmtDue(u.deactivated_at):""}</span></span><span class="muted">›</span></div>`;
+   h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">退職・無効</span>'}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}${(!u.is_active&&u.deactivated_at)?" ／ 退職 "+new Date(u.deactivated_at).toLocaleDateString("ja-JP"):""}</span></span><span class="muted">›</span></div>`;
   });
  }
  return h;
@@ -1346,7 +1356,7 @@ async function recruitView(){
   return x.applied_at>y.applied_at?-1:1;
  };
  const act=rcList.filter(a=>APPLICANT_ACTIVE.includes(a.status)&&match(a)).sort(sorter);
- const hired=rcList.filter(a=>a.status==="hired"&&match(a)).sort(sorter);
+ const hired=rcList.filter(a=>(a.status==="hired"||a.status==="retired")&&match(a)).sort(sorter);
  const closed=rcList.filter(a=>(a.status==="rejected"||a.status==="declined")&&match(a)).sort(sorter);
  const fAll=rcList.filter(match); // v2.5.4 集計は絞り込み条件に連動
  const AREAS=(()=>{const base=["恵比寿","本店","川崎","新横浜","田町","三田","新橋","芝"];const found={};rcList.forEach(a=>{const v=rcAreaOf(a).split("、")[0].split(",")[0].trim();if(v&&v.length<=12)found[v]=(found[v]||0)+1});const extra=Object.keys(found).filter(v=>!base.includes(v)).sort((x,y)=>found[y]-found[x]).slice(0,8);return base.concat(extra)})();
@@ -1416,7 +1426,7 @@ async function recruitView(){
  rcStatRows=[["月","応募","面接","採用","面接率","採用率","費用","応募単価","面接単価","採用単価"]];
  months.forEach(m=>{
   const ms=fAll.filter(a=>mkey(a.applied_at)===m);
-  const ap=ms.length,iv=ms.filter(a=>["interviewed","hired"].includes(a.status)).length,hi=ms.filter(a=>a.status==="hired").length;
+  const ap=ms.length,iv=ms.filter(a=>["interviewed","hired","retired"].includes(a.status)).length,hi=ms.filter(a=>["hired","retired"].includes(a.status)).length;
   const cost=costFor(m);
   rcStatRows.push([m,ap,iv,hi,ap?Math.round(iv/ap*100)+"%":"−",ap?Math.round(hi/ap*100)+"%":"−",cost!=null?cost:"−",cost!=null&&ap?Math.round(cost/ap):"−",cost!=null&&iv?Math.round(cost/iv):"−",cost!=null&&hi?Math.round(cost/hi):"−"]);
  });
@@ -1428,12 +1438,12 @@ async function recruitView(){
  <button class="btn sm sub" id="rc-statcsv" style="margin-top:8px">📄 この集計をCSVダウンロード</button>
  <p class="muted" style="margin-top:6px">表は直近6ヶ月・<b>CSVは${(rcFrom||rcTo)?"指定期間":"全期間"}（${months.length}ヶ月分）</b> ／ 絞り込みに連動して再計算 ／ 費用は同条件で入力した分のみ合計</p></div>`;
  // 採用者の定着・離職
- const hiredAll=fAll.filter(a=>a.user_id); // v2.5.4 絞り込み連動
+ const hiredAll=fAll.filter(a=>a.user_id||a.status==="retired"); // v2.5.4／v2.6.8
  if(hiredAll.length){
   const uinfo=id=>(rcHiredInfo.users||[]).find(u=>u.id===id);
   const hdate=id=>{const p=(rcHiredInfo.profs||[]).find(x=>x.user_id===id);return p&&p.hire_date?new Date(p.hire_date+"T00:00:00"):null};
   const monthsBetween=(a,b)=>Math.max(0,Math.round((b-a)/(30.44*864e5)*10)/10);
-  const retired=hiredAll.filter(a=>{const u=uinfo(a.user_id);return u&&!u.is_active});
+  const retired=hiredAll.filter(a=>{if(a.status==="retired")return true;const u=uinfo(a.user_id);return u&&!u.is_active});
   const tenures=retired.map(a=>{const u=uinfo(a.user_id),hd=hdate(a.user_id);return u&&u.deactivated_at&&hd?monthsBetween(hd,new Date(u.deactivated_at)):null}).filter(x=>x!=null);
   h+=`<div class="card"><h3>🌱 採用者の定着</h3>
    <p style="font-size:13px;margin:0">このアプリ経由の入社: <b>${hiredAll.length}名</b> ／ 退職: <b>${retired.length}名</b> ／ 離職率: <b>${Math.round(retired.length/hiredAll.length*100)}%</b>${tenures.length?` ／ 退職までの平均: <b>${(tenures.reduce((s,x)=>s+x,0)/tenures.length).toFixed(1)}ヶ月</b>`:""}</p>
@@ -1851,7 +1861,7 @@ async function adminEditView(){
    フリガナ: ${esc(prof.name_kana||"—")}<br>性別: ${{male:"男性",female:"女性",none:"回答しない"}[prof.gender]||"—"}<br>社員番号: ${esc(prof.staff_code||"—")}<br>生年月日: ${prof.birth_date||"—"}<br>電話: ${esc(prof.phone||"—")}<br>
    住所: ${esc([prof.postal_code,prof.address].filter(Boolean).join(" ")||"—")}<br>
    緊急連絡先: ${esc(prof.emergency_name||"—")}${prof.emergency_relation?`（${esc(prof.emergency_relation)}）`:""} ${esc(prof.emergency_phone||"")}<br>
-   入社日: ${prof.hire_date||"—"}<br>${prof.extra?Object.entries(prof.extra).map(([k,v])=>Array.isArray(v)?`${esc(k)}: `+v.map((u,x)=>`<a href="${esc(u)}" target="_blank">写真${x+1}</a>`).join(" ")+"<br>":`${esc(k)}: ${esc(v)}<br>`).join(""):""}スマレジ連携: ${smaregi}</p>
+   入社日: ${prof.hire_date||"—"}<br>${prof.termination_date?`退職日: <b style="color:var(--red)">${prof.termination_date}</b><br>`:""}${prof.extra?Object.entries(prof.extra).map(([k,v])=>Array.isArray(v)?`${esc(k)}: `+v.map((u,x)=>`<a href="${esc(u)}" target="_blank">写真${x+1}</a>`).join(" ")+"<br>":`${esc(k)}: ${esc(v)}<br>`).join(""):""}スマレジ連携: ${smaregi}</p>
    ${prof.smaregi_sync_status!=="synced"?'<button class="btn sm" id="eu-smaregi" style="margin-top:10px">スマレジに再同期する</button>':""}</div>`;
  }
  h+=`<div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
@@ -1863,7 +1873,12 @@ async function adminEditView(){
   <input type="text" id="eu-pw" placeholder="新しいパスワード（8文字以上）">
   <button class="btn sm" id="eu-setpw">再設定する</button></div>`;
  if(u.id!==me.id){
-  h+=`<button class="btn sub" id="eu-toggle" style="color:var(--red);border-color:var(--red)">${u.is_active?"アカウントを無効化する（退職処理）":"アカウントを再有効化する"}</button>`;
+  h+=`<div class="card"><h3>🗓 退職日</h3>
+   <p class="muted" style="margin:0">退職日を入れると、アカウントが使えなくなり、スマレジ・タイムカードにも退職日が登録されます（打刻もできなくなります）。応募者管理に記録がある方は、状況が自動で「退職」になります。</p>
+   <input type="date" id="eu-term" value="${(prof&&prof.termination_date)||""}">
+   <button class="btn sm" id="eu-termsave">退職日を保存する</button>
+   ${(prof&&prof.termination_date)?`<button class="btn sm sub" id="eu-termclear">退職を取り消す（復職）</button>`:""}</div>`;
+  h+=`<button class="btn sub" id="eu-toggle" style="color:var(--red);border-color:var(--red)">${u.is_active?"アカウントを無効化する（退職日なしで停止）":"アカウントを再有効化する"}</button>`;
   if(me.role==="CEO")h+=`<div class="card" style="margin-top:16px;background:#fff6f6;border-color:#f3c9c9"><h3 style="color:var(--red)">⚠️ 完全に削除する</h3>
    <p class="muted" style="margin:0">アカウントと本人が書いた日報・タスク・チャットがすべて消え、元に戻せません。<br>
    退職した方は「無効化」で十分です（記録が残り、離職率の集計にも使えます）。<b>誤って登録した方だけ</b>この操作をお使いください。</p>
@@ -1950,7 +1965,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.7</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.8</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2545,7 +2560,7 @@ function bindPage(){
  if($("rcqclear"))$("rcqclear").onclick=()=>{rcQ="";rcFForm="";rcFSrc="";rcFArea="";rcFStatus="";rcFrom="";rcTo="";render()};
  if($("rc-perclear"))$("rc-perclear").onclick=()=>{rcFrom="";rcTo="";render()};
  ["rc-from","rc-to"].forEach(id=>{if($(id))$(id).onchange=()=>{rcFrom=$("rc-from").value;rcTo=$("rc-to").value;render()}});
- const rcSegOf=st=>st==="hired"?"hired":(st==="rejected"||st==="declined")?"closed":"active"; // v2.5.6
+ const rcSegOf=st=>(st==="hired"||st==="retired")?"hired":(st==="rejected"||st==="declined")?"closed":"active"; // v2.5.6／v2.6.8
  ["rc-fform","rc-fsrc","rc-farea","rc-sort","rc-fstatus"].forEach(fid=>{if($(fid))$(fid).onchange=()=>{
   rcFForm=$("rc-fform").value;rcFSrc=$("rc-fsrc").value;rcFArea=$("rc-farea").value;rcSort=$("rc-sort").value;
   rcFStatus=$("rc-fstatus")?$("rc-fstatus").value:"";
@@ -2757,6 +2772,30 @@ function bindPage(){
   render();
  };
  if($("eu-toggle"))$("eu-toggle").onclick=adminToggle;
+ // v2.6.8 退職日
+ const saveTerm=async(d)=>{
+  const btn=$(d?"eu-termsave":"eu-termclear");if(btn)btn.disabled=true;
+  const {data,error}=await sb.rpc("set_employee_termination",{p_user:adminDetail,p_date:d});
+  if(error){toast("保存エラー: "+error.message,true);if(btn)btn.disabled=false;return}
+  let sm="";
+  try{
+   const r=await smaregiTerminate(adminDetail,d);
+   sm=r&&r.ok?(r.skipped?"（スマレジは未連携）":"／スマレジにも反映しました"):"／スマレジ反映に失敗（後で再実行してください）";
+  }catch(e){sm="／スマレジ反映に失敗"}
+  const apps=(data&&data.applicants)||0;
+  toast(d?`退職日を保存しました${apps?"／応募者の状況を退職に更新":""}${sm}`:`退職を取り消しました${sm}`);
+  adminMode="list";adminDetail=null;adminUsers=null;rcList=null;rcHiredInfo=null;render();
+ };
+ if($("eu-termsave"))$("eu-termsave").onclick=()=>{
+  const d=$("eu-term").value;
+  if(!d){toast("退職日を選んでください",true);return}
+  if(!confirm(`退職日を ${d} に設定します。\n\n・アカウントが使えなくなります\n・スマレジ・タイムカードにも登録され、打刻できなくなります\n・応募者管理の状況が「退職」になります\n\nよろしいですか？`))return;
+  saveTerm(d);
+ };
+ if($("eu-termclear"))$("eu-termclear").onclick=()=>{
+  if(!confirm("退職を取り消して、アカウントを使える状態に戻します。よろしいですか？"))return;
+  saveTerm(null);
+ };
  // v2.6.0 完全削除
  if($("eu-del"))$("eu-del").onclick=async()=>{
   const {data:info,error}=await sb.rpc("delete_user_completely",{p_user:adminDetail,p_confirm:false});

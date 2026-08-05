@@ -132,6 +132,7 @@ const FEATURES={
  format_config:"フォーマット設定（日報・入社フォーム）",
  dash:"利用ダッシュボード閲覧",
  recruit:"採用担当（応募者管理）",
+ recruit_all:"応募者を全店舗ぶん見る（外すと担当店舗だけ）",
  evaluate:"評価者（従業員評価）※次バージョンから",
  kpi_config:"KPI・評価設定 ※次バージョンから"
 };
@@ -176,6 +177,7 @@ const FEATURE_DEFAULTS={ // DB未設定時のフォールバック（v2.3まで�
  format_config:["CEO"],
  dash:["TENCHO","TEAM","SHAIN","HQ","CEO"],
  recruit:["CEO","HQ"],
+ recruit_all:["CEO","HQ"],
  evaluate:["CEO","HQ","TEAM","TENCHO"],
  kpi_config:["CEO","HQ"]
 };
@@ -1643,8 +1645,11 @@ async function recruitView(){
  const fAll=rcList.filter(match); // v2.5.4 集計は絞り込み条件に連動
  const AREAS=(()=>{const base=["恵比寿","本店","川崎","新横浜","田町","三田","新橋","芝"];const found={};rcList.forEach(a=>{const v=rcAreaOf(a).split("、")[0].split(",")[0].trim();if(v&&v.length<=12)found[v]=(found[v]||0)+1});const extra=Object.keys(found).filter(v=>!base.includes(v)).sort((x,y)=>found[y]-found[x]).slice(0,8);return base.concat(extra)})();
  let h=`<h2>📥 応募者管理</h2>`;
+ // v2.6.24 担当店舗だけの人には、その旨と全社共通の設定を出さない
+ const rcAll=can("recruit_all");
+ if(!rcAll)h+=`<div class="info" style="margin-top:-4px">🏪 <b>${esc((me.stores||[]).map(s=>s.name).join("・")||"所属店舗なし")}</b> の応募者のみ表示しています${(me.stores||[]).length?"":"（所属店舗が未設定のため何も表示されません。本部にご相談ください）"}</div>`;
  // v2.6.5 CSV取り込み
- h+=`<div class="card"><h3>📄 IndeedのCSVを取り込む</h3>
+ if(rcAll)h+=`<div class="card"><h3>📄 IndeedのCSVを取り込む</h3>
   <p class="muted" style="margin:0">Indeedからダウンロードした応募者CSVを読み込むと、<b>電話番号・居住地・経験・学歴</b>などが既にいる応募者に追加されます（選考の記録は変わりません）。いない人は新しく登録します。</p>
   <label class="btn sm sub" style="display:inline-block;margin-top:8px">📂 CSVファイルを選ぶ<input type="file" id="rc-csvin" accept=".csv,text/csv" style="display:none"></label>`;
  if(csvRows){
@@ -1772,7 +1777,7 @@ async function recruitView(){
  }
  // 求人費用の入力
  const curMonth=(()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")})();
- h+=`<div class="card"><h3>💰 求人費用（月別・店舗別・区分別）</h3>
+ if(rcAll)h+=`<div class="card"><h3>💰 求人費用（月別・店舗別・区分別）</h3>
   <p class="muted" style="margin:0">「全体・共通」でざっくり入れてもOK、店舗や区分ごとに分けてもOK。上の表は絞り込み条件と同じ条件で入力した費用を使って単価を出します（全体と内訳の両方を入れると合算されるので、どちらかに統一がおすすめ）</p>
   <div style="display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap">
    <input type="month" class="inp" id="rc-cmonth" value="${curMonth}" style="flex:1.2;min-width:130px;margin:0">
@@ -1793,7 +1798,7 @@ async function recruitView(){
   <button class="btn sm" id="rc-addbtn">追加する</button></div>`;
  // v2.6.16 求人タイトルの登録への入口
  const jobUnset=(rcJobList||[]).filter(j=>!j.form_key&&!j.store_id).length;
- h+=`<div class="card"><h3>🏷 求人掲載タイトルの登録</h3>
+ if(rcAll)h+=`<div class="card"><h3>🏷 求人掲載タイトルの登録</h3>
   <p class="muted" style="margin:0 0 6px">Indeedの求人タイトルごとに「区分（社員／アルバイト）」と「店舗」を決めておくと、次からの応募に自動で入ります</p>
   <button class="btn sm sub" id="rc-jobs">求人タイトルの一覧を開く${jobUnset?`（未設定 ${jobUnset}件）`:""}</button></div>`;
  // フォームURL
@@ -2002,7 +2007,9 @@ async function addApplicant(){
  const name=$("rc-aname").value.trim();
  if(!name){toast("氏名を入力してください",true);return}
  $("rc-addbtn").disabled=true;
- const {error}=await sb.from("applicants").insert({name,phone:$("rc-aphone").value.trim()||null,form_key:$("rc-aform").value,source:$("rc-asrc").value,created_by:me.id});
+ // v2.6.24 担当店舗だけの人が追加したときは、自分の店舗を入れておく（入れないと自分で見られなくなる）
+ const myStore=(!can("recruit_all")&&me.stores&&me.stores[0])?me.stores[0].id:null;
+ const {error}=await sb.from("applicants").insert({name,phone:$("rc-aphone").value.trim()||null,form_key:$("rc-aform").value,source:$("rc-asrc").value,store_id:myStore,created_by:me.id});
  if(error){toast("追加エラー: "+error.message,true);$("rc-addbtn").disabled=false;return}
  toast("応募者を追加しました");rcList=null;rcHiredInfo=null;render();
 }
@@ -2436,7 +2443,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.23</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.24</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====

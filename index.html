@@ -315,15 +315,27 @@ const weeklyFmt=()=>((appSettings.formats&&appSettings.formats.WEEKLY)||WEEKLY_F
 const JOIN_STD=[["birth","生年月日"],["phone","電話番号"],["zip","郵便番号"],["addr","住所"],["ename","緊急連絡先の氏名"],["erel","緊急連絡先の続柄"],["ephone","緊急連絡先の電話"],["hire","入社日"]];
 function joinCfg(src){
  const d={fields:{},custom:[]};
- JOIN_STD.forEach(([k])=>d.fields[k]={on:true,req:false});
+ JOIN_STD.forEach(([k])=>d.fields[k]={on:true,req:false,hint:""});
  const c=src||appSettings.join_form;
  if(!c)return d;
- JOIN_STD.forEach(([k])=>{if(c.fields&&c.fields[k])d.fields[k]={on:!!c.fields[k].on,req:!!c.fields[k].req}});
+ JOIN_STD.forEach(([k])=>{if(c.fields&&c.fields[k])d.fields[k]={on:!!c.fields[k].on,req:!!c.fields[k].req,hint:c.fields[k].hint||""}});
  d.custom=(c.custom||[]).map(x=>({label:String(x.label||""),req:!!x.req,type:x.type||"text",opts:Array.isArray(x.opts)?x.opts:[]}));
  return d;
 }
-const JC_TYPES={text:"記入式",pull:"プルダウン",radio:"ラジオボタン",multi:"複数選択",photo:"写真添付"};
-const JC_NOOPT=["text","photo"]; // 選択肢入力が不要な種類
+const JC_TYPES={text:"記入式",date:"日付（カレンダー）",pull:"プルダウン",radio:"ラジオボタン",multi:"複数選択",photo:"写真添付"};
+const JC_NOOPT=["text","date","photo"]; // 選択肢入力が不要な種類
+// v2.6.22 選択肢に「他」があるとき、選んだら自由に書ける欄を出す
+const OTHER_RE=/^(他|その他|そのほか|other)$/i;
+const hasOtherOpt=f=>(f&&(f.opts||[]).some(o=>OTHER_RE.test(String(o).trim())));
+const otherInput=(attr,i)=>`<input type="text" class="inp" data-${attr}="${i}" placeholder="「他」を選んだ場合はこちらに入力（例: ネット銀行）" style="display:none;margin-top:6px;font-size:13px">`;
+function toggleOther(attr,i,v){const el=document.querySelector(`[data-${attr}="${i}"]`);if(el)el.style.display=OTHER_RE.test(String(v||"").trim())?"":"none"}
+function withOther(v,attr,i){ // 「他」＋自由記入 → 「他（ネット銀行）」の形にする
+ if(!OTHER_RE.test(String(v||"").trim()))return v;
+ const el=document.querySelector(`[data-${attr}="${i}"]`),t=el?el.value.trim():"";
+ return t?v+"（"+t+"）":v;
+}
+// v2.6.22 記入例（設定されていれば質問の下に薄く出す）
+const hintLine=t=>t?`<p class="muted" style="margin:2px 0 6px;font-size:12px">${esc(t)}</p>`:"";
 
 // ===== 初期化 =====
 const inviteToken=new URLSearchParams(location.search).get("invite");
@@ -357,9 +369,11 @@ async function renderApply(){
    <input type="email" id="ap-email" placeholder="メールアドレス（任意）"></div>`;
  (f.fields||[]).forEach((fd,i)=>{
   h+=`<div class="card"><h3>${esc(fd.label)} ${fd.req?'<span class="req">必須</span>':""}</h3>`;
-  if(fd.type==="pull")h+=`<select class="inp" data-ap="${i}"><option value="">選択してください</option>${(fd.opts||[]).map(o=>`<option>${esc(o)}</option>`).join("")}</select>`;
-  else if(fd.type==="radio")h+=(fd.opts||[]).map(o=>`<label class="radio-row"><input type="radio" name="apr${i}" data-apr="${i}" value="${esc(o)}">${esc(o)}</label>`).join("");
+  h+=hintLine(fd.hint); // v2.6.22 記入例
+  if(fd.type==="pull")h+=`<select class="inp" data-ap="${i}"><option value="">選択してください</option>${(fd.opts||[]).map(o=>`<option>${esc(o)}</option>`).join("")}</select>`+(hasOtherOpt(fd)?otherInput("apother",i):"");
+  else if(fd.type==="radio")h+=(fd.opts||[]).map(o=>`<label class="radio-row"><input type="radio" name="apr${i}" data-apr="${i}" value="${esc(o)}">${esc(o)}</label>`).join("")+(hasOtherOpt(fd)?otherInput("apother",i):"");
   else if(fd.type==="multi"||fd.type==="check")h+=`<div>${(fd.opts||[]).map(o=>`<span class="chip" data-apm="${i}" data-o="${esc(o)}">${esc(o)}</span>`).join("")}</div>`;
+  else if(fd.type==="date")h+=`<input type="date" class="inp" data-ap="${i}" style="margin-top:0">`; // v2.6.22 カレンダー
   else h+=`<textarea rows="2" data-ap="${i}"></textarea>`;
   h+=`</div>`;
  });
@@ -367,6 +381,9 @@ async function renderApply(){
   <p class="muted center" style="margin-top:12px">送信すると採用担当者に届きます。ご連絡をお待ちください。</p></div>`;
  $("app").innerHTML=h;
  document.querySelectorAll(".chip[data-apm]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
+ // v2.6.22 「他」を選んだら自由記入欄を出す
+ document.querySelectorAll("select[data-ap]").forEach(el=>el.onchange=()=>toggleOther("apother",el.dataset.ap,el.value));
+ document.querySelectorAll("input[data-apr]").forEach(el=>el.onchange=()=>toggleOther("apother",el.dataset.apr,el.value));
  $("ap-submit").onclick=doApply;
 }
 async function doApply(){
@@ -379,6 +396,7 @@ async function doApply(){
   if(fd.type==="radio"){const r=document.querySelector(`input[data-apr="${i}"]:checked`);v=r?r.value:""}
   else if(fd.type==="multi"||fd.type==="check"){v=[...document.querySelectorAll(`.chip[data-apm="${i}"].on`)].map(x=>x.dataset.o).join("、")}
   else{const el=document.querySelector(`[data-ap="${i}"]`);v=el?el.value.trim():""}
+  v=withOther(v,"apother",i); // v2.6.22 「他（ネット銀行）」の形にする
   if(fd.req&&!v)missing=missing||fd.label;
   if(v)answers[fd.k]=v;
  });
@@ -441,26 +459,28 @@ async function renderJoin(){
  if(!smLinked)h+=`<div data-joinsec>
    <p class="muted" style="margin:8px 0 0">性別 <span class="req">必須</span><span style="font-size:11px">（勤怠システムの登録に使用します）</span></p>
    <div style="margin-top:2px">${[["male","男性"],["female","女性"],["none","回答しない"]].map(([v,l])=>`<span class="chip jgender" data-g="${v}">${l}</span>`).join("")}</div>
-   ${F.birth.on?`<p class="muted" style="margin:8px 0 0">生年月日${mark("birth")}</p><input type="date" id="j-birth">`:""}
-   ${F.phone.on?`<input type="text" id="j-phone" placeholder="電話番号（例: 090-1234-5678)${F.phone.req?"※必須":""}" value="${esc(info.applicant_phone||"")}">`:""}</div>`;
+   ${F.birth.on?`<p class="muted" style="margin:8px 0 0">生年月日${mark("birth")}</p>${hintLine(F.birth.hint)}<input type="date" id="j-birth">`:""}
+   ${F.phone.on?`${hintLine(F.phone.hint)}<input type="text" id="j-phone" placeholder="電話番号（例: 090-1234-5678)${F.phone.req?"※必須":""}" value="${esc(info.applicant_phone||"")}">`:""}</div>`;
  h+=`</div>`;
  if(!smLinked){
   if(F.zip.on||F.addr.on)h+=`<div class="card" data-joinsec><h3>住所${(F.zip.req||F.addr.req)?' <span class="req">必須</span>':""}</h3>
-    ${F.zip.on?`<input type="text" id="j-zip" placeholder="郵便番号（例: 108-0014）">`:""}
-    ${F.addr.on?`<input type="text" id="j-addr" placeholder="住所">`:""}</div>`;
+    ${F.zip.on?`${hintLine(F.zip.hint)}<input type="text" id="j-zip" placeholder="郵便番号（例: 108-0014）">`:""}
+    ${F.addr.on?`${hintLine(F.addr.hint)}<input type="text" id="j-addr" placeholder="住所">`:""}</div>`;
   if(F.ename.on||F.erel.on||F.ephone.on)h+=`<div class="card" data-joinsec><h3>緊急連絡先${(F.ename.req||F.erel.req||F.ephone.req)?' <span class="req">必須</span>':""}</h3>
     ${F.ename.on?`<input type="text" id="j-ename" placeholder="氏名">`:""}
     ${F.erel.on?`<input type="text" id="j-erel" placeholder="続柄（例: 父）">`:""}
     ${F.ephone.on?`<input type="text" id="j-ephone" placeholder="電話番号">`:""}</div>`;
-  if(F.hire.on)h+=`<div class="card" data-joinsec><h3>入社日${mark("hire")}</h3><input type="date" id="j-hire" value="${todayStr()}"></div>`;
+  if(F.hire.on)h+=`<div class="card" data-joinsec><h3>入社日${mark("hire")}</h3>${hintLine(F.hire.hint)}<input type="date" id="j-hire" value="${todayStr()}"></div>`;
   if(cfg.custom.length){
    h+=`<div class="card" data-joinsec><h3>追加項目</h3>`;
    cfg.custom.forEach((c,i)=>{
     h+=`<p class="muted" style="margin:8px 0 0">${esc(c.label)}${c.req?' <span class="req">必須</span>':""}</p>`;
-    if(c.type==="pull")h+=`<select class="inp" data-jc="${i}"><option value="">選択してください</option>${(c.opts||[]).map(o=>`<option>${esc(o)}</option>`).join("")}</select>`;
-    else if(c.type==="radio")h+=(c.opts||[]).map(o=>`<label class="radio-row"><input type="radio" name="jrd${i}" data-jcr="${i}" value="${esc(o)}">${esc(o)}</label>`).join("");
+    h+=hintLine(c.hint); // v2.6.22 記入例
+    if(c.type==="pull")h+=`<select class="inp" data-jc="${i}"><option value="">選択してください</option>${(c.opts||[]).map(o=>`<option>${esc(o)}</option>`).join("")}</select>`+(hasOtherOpt(c)?otherInput("jcother",i):"");
+    else if(c.type==="radio")h+=(c.opts||[]).map(o=>`<label class="radio-row"><input type="radio" name="jrd${i}" data-jcr="${i}" value="${esc(o)}">${esc(o)}</label>`).join("")+(hasOtherOpt(c)?otherInput("jcother",i):"");
     else if(c.type==="multi")h+=`<div>${(c.opts||[]).map(o=>`<span class="chip" data-jmc="${i}" data-o="${esc(o)}">${esc(o)}</span>`).join("")}</div>`;
     else if(c.type==="photo")h+=`<div class="photo-grid" data-jph="${i}"></div><p class="muted">＋をタップして写真を選択（複数可）</p>`;
+    else if(c.type==="date")h+=`<input type="date" class="inp" data-jc="${i}" style="margin-top:0">`; // v2.6.22 カレンダー
     else h+=`<input type="text" data-jc="${i}">`;
    });
    h+=`</div>`;
@@ -554,6 +574,7 @@ async function doJoin(){
   if(c.type==="radio"){const r=document.querySelector(`input[data-jcr="${i}"]:checked`);v=r?r.value:""}
   else if(c.type==="multi"){v=[...document.querySelectorAll(`.chip[data-jmc="${i}"].on`)].map(x=>x.dataset.o).join("、")}
   else{const el=document.querySelector(`[data-jc="${i}"]`);v=el?el.value.trim():""}
+  v=withOther(v,"jcother",i); // v2.6.22
   if(c.req&&!v)missing=missing||c.label;
   if(v)extra[c.label]=v;
  });
@@ -721,7 +742,41 @@ async function render(){
  else if(page==="settings")body=await settingsView();
  $("app").innerHTML=`<header><b>日報・週報システム</b><span style="font-size:12px">${esc(me.name)}（${ROLE_NAME[me.role]||""}）</span></header><main>${body}</main>`;
  bindPage();
+ navSync(); // v2.6.22 ブラウザの「戻る」で1つ前の画面に戻れるようにする
 }
+
+// ===== v2.6.22 画面の履歴（ブラウザの←ボタン・スマホの右スワイプに対応） =====
+// 画面の状態をブラウザの履歴に積んでおき、戻る操作で元の状態に復元する。
+// ※ ここの変数は let 宣言のため window に生えない。明示的に読み書きする
+function navSnapshot(){
+ return {page,detail,editId,adminMode,adminDetail,setMode,rcDetail,rcJobs,chatRoom,chatNew,ckAdminMode};
+}
+function navApply(st){
+ page=st.page;detail=st.detail;editId=st.editId;adminMode=st.adminMode;adminDetail=st.adminDetail;
+ setMode=st.setMode;rcDetail=st.rcDetail;rcJobs=st.rcJobs;chatRoom=st.chatRoom;chatNew=st.chatNew;
+ ckAdminMode=st.ckAdminMode;
+}
+let navLast=null,navStack=[],navSkipPop=false;
+function navSync(){
+ const cur=navSnapshot(),j=JSON.stringify(cur);
+ if(navLast===null){history.replaceState({nav:cur},"");navLast=j;navStack=[j];return}
+ if(j===navLast)return;
+ // アプリ内の「← 戻る」で1つ前の画面に戻ったときは、履歴も1つ戻す
+ // （そうしないと履歴が増え続け、ブラウザの戻るで画面が進んでしまう）
+ if(navStack.length>=2&&navStack[navStack.length-2]===j){
+  navStack.pop();navLast=j;navSkipPop=true;history.back();return;
+ }
+ navStack.push(j);history.pushState({nav:cur},"");navLast=j;
+}
+window.addEventListener("popstate",e=>{
+ if(navSkipPop){navSkipPop=false;return} // 上のhistory.back()による分は無視
+ if(!e.state||!e.state.nav||!me)return;  // ログイン前などは何もしない
+ navApply(e.state.nav);
+ navLast=JSON.stringify(navSnapshot());
+ if(navStack.length>1)navStack.pop();
+ rcMsgs=null;
+ render();
+});
 
 async function fetchToday(){
  const {data}=await sb.from("reports").select("id,kind,answers,report_date").eq("author_id",me.id).eq("report_date",todayStr());
@@ -2337,7 +2392,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.21</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.22</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2407,7 +2462,7 @@ async function savePerm(){
  setMode="main";permMatrix=null;permUserSel=null;permUserVals=null;render();
 }
 // ===== v2.5.8 応募フォームの項目設定 =====
-const APPLY_TYPES={text:"記入式（自由記述）",pull:"プルダウン",radio:"ラジオボタン（1つ選ぶ）",multi:"複数選択",check:"チェックリスト"};
+const APPLY_TYPES={text:"記入式（自由記述）",date:"日付（カレンダーで選ぶ）",pull:"プルダウン",radio:"ラジオボタン（1つ選ぶ）",multi:"複数選択",check:"チェックリスト"};
 const APPLY_OPT_TYPES=["pull","radio","multi","check"];
 async function settingsApplyView(){
  if(!cfgApply){
@@ -2428,7 +2483,7 @@ async function settingsApplyView(){
  </div>
  <div class="card" style="padding:12px"><h3>フォームの見出し</h3>
   <input type="text" id="ap-title" value="${esc(cur.title)}" placeholder="例: アルバイト応募フォーム" style="margin:0"></div>`;
- h+=`<p class="muted" style="font-size:12px">↑↓ で並び替えできます。</p>`;
+ h+=`<p class="muted" style="font-size:12px">↑↓ で並び替えできます。選択肢に「他」を入れると、選んだ人が自由に書ける欄が出ます。</p>`;
  h+=cur.fields.map((f,i)=>`<div class="card" style="padding:12px">
   <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
    <span class="fnum">${i+1}</span>
@@ -2440,6 +2495,8 @@ async function settingsApplyView(){
    <span class="chip" data-apup="${i}">↑</span><span class="chip" data-apdn="${i}">↓</span>
    <span class="chip" data-apdel="${i}" style="color:var(--red)">削除</span></div>
   <input type="text" data-apopts="${i}" value="${esc((f.opts||[]).join("、"))}" placeholder="選択肢を「、」区切りで入力（例: ホール、キッチン、どちらでも）" style="margin:8px 0 0;font-size:13px;display:${APPLY_OPT_TYPES.includes(f.type||"text")?"":"none"}">
+  <input type="text" data-aphint="${i}" value="${esc(f.hint||"")}" placeholder="記入例・補足（例: 西暦でご記入ください）" style="margin:6px 0 0;font-size:13px">
+  ${hasOtherOpt(f)?'<p class="muted" style="margin:6px 0 0;font-size:11px">✅ 選択肢に「他」があるので、選ぶと自由記入欄が出ます</p>':""}
   </div>`).join("");
  h+=`<button class="btn sm sub" id="ap-add">＋ 質問を追加</button>
   <button class="btn" id="ap-save" style="margin-top:12px">この内容で保存する</button>
@@ -2454,6 +2511,7 @@ function collectApplyDom(){
  document.querySelectorAll("input[data-apopts]").forEach(inp=>{
   const v=inp.value.trim();cur.fields[+inp.dataset.apopts].opts=v?v.split(/[、,]/).map(x=>x.trim()).filter(Boolean):[];
  });
+ document.querySelectorAll("input[data-aphint]").forEach(inp=>cur.fields[+inp.dataset.aphint].hint=inp.value.trim()); // v2.6.22 記入例
  document.querySelectorAll(".chip.ap-req").forEach(c=>cur.fields[+c.dataset.i].req=c.classList.contains("on"));
 }
 async function saveApplyForm(){
@@ -2537,24 +2595,30 @@ async function saveLarkRoute(){
 function settingsJoinView(){
  const cfg=cfgJoin;
  let h=`<span class="back" id="setback">← 設定</span><h2>入社フォームの項目設定</h2>
-  <p class="muted" style="margin-top:-8px;font-size:13px">氏名・フリガナ・メール・パスワードは常に必須です。以下の項目の表示と必須を切り替えられます。</p>`;
+  <p class="muted" style="margin-top:-8px;font-size:13px">氏名・フリガナ・メール・パスワードは常に必須です。以下の項目の表示と必須を切り替えられます。<br>各項目に「記入例」を入れると、入力欄の上に薄い字で表示されます。自由項目は ↑↓ で並び替えできます。</p>`;
  h+=`<div class="card"><h3>標準項目</h3>`+JOIN_STD.map(([k,label])=>{
   const f=cfg.fields[k];
-  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-   <span style="flex:1;font-size:14px">${label}</span>
-   <span class="chip jf-on ${f.on?"on":""}" data-k="${k}">表示</span>
-   <span class="chip jf-req ${f.req?"on":""}" data-k="${k}">必須</span></div>`;
+  return `<div style="margin-bottom:10px">
+   <div style="display:flex;align-items:center;gap:8px">
+    <span style="flex:1;font-size:14px">${label}</span>
+    <span class="chip jf-on ${f.on?"on":""}" data-k="${k}">表示</span>
+    <span class="chip jf-req ${f.req?"on":""}" data-k="${k}">必須</span></div>
+   <input type="text" data-jfhint="${k}" value="${esc(f.hint||"")}" placeholder="記入例・補足（任意）" style="margin:4px 0 0;font-size:12px"></div>`;
  }).join("")+`</div>`;
  h+=`<div class="card"><h3>自由項目（追加の質問）</h3>`+cfg.custom.map((c,i)=>
   `<div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px">
    <div style="display:flex;align-items:center;gap:8px">
+    <span class="fnum">${i+1}</span>
     <input type="text" data-jclabel="${i}" value="${esc(c.label)}" placeholder="質問名（例: 制服サイズ）" style="flex:1;margin:0">
-    <span class="chip jc-req ${c.req?"on":""}" data-i="${i}">必須</span>
-    <span class="chip" data-jcdel="${i}" style="color:var(--red)">削除</span></div>
-   <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+    <span class="chip jc-req ${c.req?"on":""}" data-i="${i}">必須</span></div>
+   <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
     <select class="inp" data-jctype="${i}" style="width:auto;margin:0">${Object.entries(JC_TYPES).map(([t,n])=>`<option value="${t}" ${(c.type||"text")===t?"selected":""}>${n}</option>`).join("")}</select>
-    <input type="text" data-jcopts="${i}" value="${esc((c.opts||[]).join("、"))}" placeholder="選択肢（「、」区切り）" style="flex:1;margin:0;font-size:13px;display:${JC_NOOPT.includes(c.type||"text")?"none":""}">
-   </div></div>`).join("")+
+    <span class="chip" data-jcup="${i}">↑</span><span class="chip" data-jcdn="${i}">↓</span>
+    <span class="chip" data-jcdel="${i}" style="color:var(--red)">削除</span></div>
+   <input type="text" data-jcopts="${i}" value="${esc((c.opts||[]).join("、"))}" placeholder="選択肢（「、」区切り。例: 銀行、信用金庫、組合、他）" style="margin:6px 0 0;font-size:13px;display:${JC_NOOPT.includes(c.type||"text")?"none":""}">
+   <input type="text" data-jchint="${i}" value="${esc(c.hint||"")}" placeholder="記入例・補足（例: 通帳のとおりにご記入ください）" style="margin:6px 0 0;font-size:13px">
+   ${hasOtherOpt(c)?'<p class="muted" style="margin:6px 0 0;font-size:11px">✅ 選択肢に「他」があるので、選ぶと自由記入欄が出ます</p>':""}
+   </div>`).join("")+
   `<button class="btn sm sub" id="jc-add">＋ 項目を追加</button></div>
   <button class="btn" id="jf-save">保存する</button>`;
  return h;
@@ -2562,8 +2626,10 @@ function settingsJoinView(){
 function collectJoinDom(){
  document.querySelectorAll(".chip.jf-on").forEach(c=>cfgJoin.fields[c.dataset.k].on=c.classList.contains("on"));
  document.querySelectorAll(".chip.jf-req").forEach(c=>cfgJoin.fields[c.dataset.k].req=c.classList.contains("on"));
+ document.querySelectorAll("input[data-jfhint]").forEach(inp=>cfgJoin.fields[inp.dataset.jfhint].hint=inp.value.trim()); // v2.6.22 記入例
  document.querySelectorAll("input[data-jclabel]").forEach(inp=>cfgJoin.custom[+inp.dataset.jclabel].label=inp.value.trim());
  document.querySelectorAll(".chip.jc-req").forEach(c=>cfgJoin.custom[+c.dataset.i].req=c.classList.contains("on"));
+ document.querySelectorAll("input[data-jchint]").forEach(inp=>cfgJoin.custom[+inp.dataset.jchint].hint=inp.value.trim()); // v2.6.22 記入例
  document.querySelectorAll("select[data-jctype]").forEach(s=>cfgJoin.custom[+s.dataset.jctype].type=s.value);
  document.querySelectorAll("input[data-jcopts]").forEach(inp=>{
   const v=inp.value.trim();cfgJoin.custom[+inp.dataset.jcopts].opts=v?v.split(/[、,]/).map(x=>x.trim()).filter(Boolean):[];
@@ -3259,7 +3325,10 @@ function bindPage(){
  if($("perm-save"))$("perm-save").onclick=savePerm;
  document.querySelectorAll(".chip.jf-on,.chip.jf-req,.chip.jc-req,.chip.f-req").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
  document.querySelectorAll("[data-jcdel]").forEach(c=>c.onclick=()=>{collectJoinDom();cfgJoin.custom.splice(+c.dataset.jcdel,1);render()});
- if($("jc-add"))$("jc-add").onclick=()=>{collectJoinDom();cfgJoin.custom.push({label:"",req:false,type:"text",opts:[]});render()};
+ if($("jc-add"))$("jc-add").onclick=()=>{collectJoinDom();cfgJoin.custom.push({label:"",req:false,type:"text",opts:[],hint:""});render()};
+ // v2.6.22 入社フォームの自由項目も ↑↓ で並び替えできるように
+ document.querySelectorAll("[data-jcup]").forEach(c=>c.onclick=()=>{collectJoinDom();const l=cfgJoin.custom,i=+c.dataset.jcup;if(i>0){[l[i-1],l[i]]=[l[i],l[i-1]]}render()});
+ document.querySelectorAll("[data-jcdn]").forEach(c=>c.onclick=()=>{collectJoinDom();const l=cfgJoin.custom,i=+c.dataset.jcdn;if(i<l.length-1){[l[i+1],l[i]]=[l[i],l[i+1]]}render()});
  document.querySelectorAll("select[data-jctype]").forEach(s=>s.onchange=()=>{ // 選択肢欄の表示切替
   const inp=document.querySelector(`input[data-jcopts="${s.dataset.jctype}"]`);
   if(inp)inp.style.display=JC_NOOPT.includes(s.value)?"none":"";

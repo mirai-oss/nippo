@@ -1612,11 +1612,12 @@ function recruitDetailView(){
   const mine=m.direction==="out";
   h+=`<div style="margin:8px 0;display:flex;${mine?"justify-content:flex-end":""}">
    <div style="max-width:88%;background:${mine?"#e6f0ff":"#f2f4f7"};border-radius:10px;padding:8px 10px">
-    <div class="muted" style="font-size:11px;margin-bottom:2px">${mine?"こちらから":esc(a.name)+"さんから"}・${fmtDue(m.sent_at)}</div>
+    <div class="muted" style="font-size:11px;margin-bottom:2px">${mine?"こちらから":esc(a.name)+"さんから"}・${fmtDue(m.sent_at)}
+     <span data-rcdir="${m.id}" data-rcdirto="${mine?"in":"out"}" style="color:var(--blue);cursor:pointer;white-space:nowrap">↔ ${mine?esc(a.name)+"さんから":"こちらから"}に直す</span></div>
     <div style="font-size:13px;white-space:pre-wrap;word-break:break-word">${esc(m.body)}</div>
    </div></div>`;
  });
- h+=`<p class="muted" style="margin:8px 0 0">返信は上の「▶ Indeedページを開く」からIndeedの画面で行ってください</p></div>`;
+ h+=`<p class="muted" style="margin:8px 0 0">返信は上の「▶ Indeedページを開く」からIndeedの画面で行ってください${msgs.length?"<br>送り手が違っていたら「↔ …に直す」を押してください。<b>同じ相手のメッセージがまとめて直り、次からも自動で正しくなります</b>":""}</p></div>`;
  h+=`<div class="card"><h3>✏️ 基本情報（タップで編集できます）</h3>
   <input type="text" id="rc-ename" placeholder="氏名" value="${esc(a.name)}">
   <input type="text" id="rc-ephone" placeholder="電話番号" value="${esc(a.phone||"")}">
@@ -2112,7 +2113,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.18</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.19</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2723,7 +2724,10 @@ function bindPage(){
   const {error}=await sb.from("job_postings").update({form_key:fs.value||null,store_id:ss.value||null,updated_at:new Date().toISOString()}).eq("id",id);
   b.disabled=false;
   if(error){toast("保存エラー: "+error.message,true);return}
-  toast("保存しました");rcJobList=null;render();
+  // v2.6.19 保存したらその場で過去の応募者にも反映する（③を押し忘れても店舗が入る）
+  const {data:n}=await sb.rpc("job_postings_apply");
+  toast(n?"保存しました（応募者 "+n+"名にも反映しました）":"保存しました");
+  rcJobList=null;render();
  });
  if($("rcj-apply"))$("rcj-apply").onclick=async()=>{
   if(!confirm("まだ区分・店舗が空の応募者に、登録した内容をまとめて入れます。よろしいですか？"))return;
@@ -2815,6 +2819,14 @@ function bindPage(){
   c.classList.add("on");c.style.background=APPLICANT_COLOR[c.dataset.rcst];c.style.color="#fff";
  });
  if($("rc-share"))$("rc-share").onclick=()=>{const a=rcList.find(x=>x.id===rcDetail);if(a)rcShareInvite(a)};
+ document.querySelectorAll("[data-rcdir]").forEach(el=>el.onclick=async()=>{ // v2.6.19 やりとりの送り手を直す
+  el.style.opacity=.5;
+  const {data,error}=await sb.rpc("applicant_message_set_direction",{p_id:el.dataset.rcdir,p_dir:el.dataset.rcdirto});
+  el.style.opacity=1;
+  if(error){toast("変更エラー: "+error.message,true);return}
+  toast(data>1?"同じ相手の "+data+"件をまとめて直しました":"送り手を直しました");
+  render();
+ });
  document.querySelectorAll(".chip[data-rchst]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
  if($("rc-save"))$("rc-save").onclick=saveApplicant;
  if($("rc-urlsave"))$("rc-urlsave").onclick=async()=>{ // v2.6.6 Indeedリンク

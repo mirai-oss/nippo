@@ -124,7 +124,7 @@ const SUPA_KEY="sb_publishable_MrwPJAx_Ws_fdRutprKCiQ_dg3wCiTr";
 const sb=window.supabase.createClient(SUPA_URL,SUPA_KEY);
 
 // ===== フォーマット定義（プロトタイプ準拠） =====
-const ROLE_NAME={AL:"アルバイト",SHAIN:"社員",TENCHO:"店長",TEAM:"チーム長",HQ:"本部",CEO:"社長"};
+const ROLE_NAME={AL:"アルバイト",SHAIN:"社員",TENCHO:"店長",TEAM:"チーム長",HQ:"本部",CEO:"社長",GAIHAN:"外販"}; // v2.6.25 外販先向け
 // ===== v2.4 機能権限 =====
 const FEATURES={
  staff_admin:"従業員管理（招待・入社処理・編集）",
@@ -769,6 +769,8 @@ async function render(){
  document.body.classList.add("withnav");
  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.p===page||(page==="weekly"&&b.dataset.p==="write")));
  document.getElementById("navadmin").style.display=(can("staff_admin")||can("store_admin"))?"":"none";
+ // v2.6.25 外販の人は ホーム・日報・一覧・タスク・応募・設定 だけ
+ if(me.role==="GAIHAN")document.querySelectorAll('nav button[data-p="check"],nav button[data-p="chat"],nav button[data-p="weekly"]').forEach(b=>b.style.display="none");
  document.getElementById("navrecruit").style.display=can("recruit")?"":"none"; // v2.5.2 応募は独立タブ
  updateDots();
  let body="";
@@ -2443,7 +2445,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.24</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.25</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2711,7 +2713,7 @@ function curFmtList(){
 function settingsFmtView(){
  const list=curFmtList();
  let h=`<span class="back" id="setback">← 設定</span><h2>日報・週報の項目設定</h2>
-  <div class="card" style="padding:12px">${["AL","SHAIN","TENCHO","TEAM","HQ","WEEKLY"].map(r=>
+  <div class="card" style="padding:12px">${["AL","SHAIN","TENCHO","TEAM","HQ","GAIHAN","WEEKLY"].map(r=>
    `<span class="chip fmtrole ${fmtRole===r?"on":""}" data-r="${r}">${r==="WEEKLY"?"週報（共通）":ROLE_NAME[r]}</span>`).join("")}</div>`;
  h+=`<p class="muted" style="font-size:12px">⠿ をドラッグ、または ↑↓ で並び替えできます。</p>`;
  h+=list.map((f,i)=>`<div class="card fcard" data-fi="${i}" style="padding:12px">

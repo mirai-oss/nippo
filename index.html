@@ -224,6 +224,7 @@ let permMatrix=null,permUserSel=null,permUserVals=null,permUsersCache=null; // v
 let rcList=null,rcSeg="active",rcQ="",rcDetail=null,rcForms=null,applyFormDef=null; // v2.5 応募者管理
 let rcFForm="",rcFSrc="",rcFArea="",rcSort="new",rcCosts=null,rcHiredInfo=null,joinSmSel=null,joinSmNo=false; // v2.5.2
 let rcFStatus=""; // v2.5.6 選考ステータス絞り込み
+let csvRows=null,csvBusy=false; // v2.6.5 CSV取り込み
 let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8
 let myProf=null,auRole="",auState="",auStore=""; // v2.6.0
 let ivSkipSm=false; // v2.6.1
@@ -1412,6 +1413,21 @@ async function recruitView(){
   <input type="text" id="rc-camount" placeholder="金額（円）" inputmode="numeric">
   <button class="btn sm" id="rc-csave">この条件の費用を保存</button>
   ${(rcCosts||[]).length?`<p class="muted" style="margin:8px 0 0">入力済み: ${(rcCosts||[]).slice().sort((a,b)=>(b.month+(b.area||""))<(a.month+(a.area||""))?-1:1).slice(0,10).map(c=>{const d=new Date(c.month+"T00:00:00");return d.getFullYear()+"/"+(d.getMonth()+1)+" "+esc(c.area||"全体")+(c.form_key==="al"?"・アルバイト":c.form_key==="shain"?"・社員":"")+" ¥"+(+c.amount).toLocaleString("ja-JP")}).join("　／　")}</p>`:""}</div>`;
+ // v2.6.5 CSV取り込み
+ h+=`<div class="card"><h3>📄 IndeedのCSVを取り込む</h3>
+  <p class="muted" style="margin:0">Indeedからダウンロードした応募者CSVを読み込むと、<b>電話番号・居住地・経験・学歴</b>などが既にいる応募者に追加されます（選考の記録は変わりません）。いない人は新しく登録します。</p>
+  <label class="btn sm sub" style="display:inline-block;margin-top:8px">📂 CSVファイルを選ぶ<input type="file" id="rc-csvin" accept=".csv,text/csv" style="display:none"></label>`;
+ if(csvRows){
+  const upd=csvRows.filter(r=>r._match).length,nw=csvRows.length-upd;
+  h+=`<div class="info" style="margin-top:10px">読み込み結果: <b>${csvRows.length}件</b><br>
+   ✏️ 既にいる応募者に情報を追加: <b>${upd}件</b><br>✨ 新しく登録: <b>${nw}件</b></div>
+   <div class="tblwrap" style="max-height:220px;overflow-y:auto"><table class="tbl" style="min-width:320px">
+   ${csvRows.map(r=>`<tr><td style="text-align:left">${r._match?"✏️":"✨"} ${esc(r.name)}</td><td style="text-align:left" class="muted">${r._match?"既存「"+esc(r._match.name)+"」に追加":"新規登録"}${r.phone&&r._match&&!r._match.phone?" ／ 電話を追加":""}</td></tr>`).join("")}
+   </table></div>
+   <button class="btn" id="rc-csvgo" ${csvBusy?"disabled":""}>${csvBusy?"取り込み中...":"この内容で取り込む"}</button>
+   <button class="btn sm sub" id="rc-csvcancel">キャンセル</button>`;
+ }
+ h+=`</div>`;
  // 手動追加
  h+=`<div class="card"><h3>＋ 手動で追加（電話・紹介など）</h3>
   <input type="text" id="rc-aname" placeholder="氏名">
@@ -1507,6 +1523,82 @@ async function addApplicant(){
  const {error}=await sb.from("applicants").insert({name,phone:$("rc-aphone").value.trim()||null,form_key:$("rc-aform").value,source:$("rc-asrc").value,created_by:me.id});
  if(error){toast("追加エラー: "+error.message,true);$("rc-addbtn").disabled=false;return}
  toast("応募者を追加しました");rcList=null;rcHiredInfo=null;render();
+}
+// ===== v2.6.5 CSV取り込み =====
+function parseCsv(text){
+ const rows=[];let cur=[],val="",q=false;
+ text=String(text||"").replace(/^\uFEFF/,"");
+ for(let i=0;i<text.length;i++){
+  const c=text[i];
+  if(q){ if(c==='"'){ if(text[i+1]==='"'){val+='"';i++} else q=false } else val+=c }
+  else if(c==='"')q=true;
+  else if(c===","){cur.push(val);val=""}
+  else if(c==="\n"){cur.push(val);rows.push(cur);cur=[];val=""}
+  else if(c!=="\r")val+=c;
+ }
+ if(val!==""||cur.length){cur.push(val);rows.push(cur)}
+ return rows.filter(r=>r.some(x=>String(x).trim()));
+}
+function csvPhone(s){ // '+81 70 1234 5678 → 070-1234-5678（海外番号はそのまま）
+ let t=String(s||"").replace(/^'/,"").trim();
+ if(!t)return "";
+ const d=t.replace(/[^0-9]/g,"");
+ if(/^81/.test(d)&&d.length>=11){
+  const n="0"+d.slice(2);
+  if(n.length===11)return n.slice(0,3)+"-"+n.slice(3,7)+"-"+n.slice(7);
+  if(n.length===10)return n.slice(0,2)+"-"+n.slice(2,6)+"-"+n.slice(6);
+  return n;
+ }
+ return t.replace(/\s+/g," ");
+}
+const csvNormName=s=>String(s||"").replace(/[\s　]/g,"").toLowerCase();
+const csvNormPhone=s=>{const d=String(s||"").replace(/[^0-9]/g,"");return /^81/.test(d)&&d.length>=11?"0"+d.slice(2):d};
+function readRecruitCsv(file){
+ const rd=new FileReader();
+ rd.onload=()=>{
+  try{
+   const rows=parseCsv(rd.result);
+   if(rows.length<2){toast("データが入っていないようです",true);return}
+   const head=rows[0].map(h=>String(h).trim());
+   const col=(...names)=>{for(const n of names){const i=head.findIndex(h=>h.includes(n));if(i>=0)return i}return -1};
+   const ix={name:col("名前","氏名"),email:col("メール"),phone:col("電話"),status:col("ステータス"),
+    address:col("居住地","住所"),exp:col("関連のある経験","経験"),edu:col("学歴"),
+    job:col("職種"),loc:col("勤務地"),date:col("日付","応募日"),src:col("応募経路","経路")};
+   if(ix.name<0){toast("「名前」の列が見つかりません。IndeedのCSVかご確認ください",true);return}
+   const g=(r,i)=>i>=0?String(r[i]||"").trim():"";
+   const byPhone={},byName={},byMail={};
+   (rcList||[]).forEach(a=>{
+    const p=csvNormPhone(a.phone);if(p&&!byPhone[p])byPhone[p]=a;
+    const n=csvNormName(a.name);if(n&&!byName[n])byName[n]=a;
+    const m=(a.email||"").toLowerCase();if(m&&!byMail[m])byMail[m]=a;
+   });
+   const out=[];
+   rows.slice(1).forEach(r=>{
+    const name=g(r,ix.name);if(!name)return;
+    const phone=csvPhone(g(r,ix.phone)),email=g(r,ix.email);
+    const m=byPhone[csvNormPhone(phone)]||byName[csvNormName(name)]||byMail[email.toLowerCase()]||null;
+    out.push({name,email,phone,status:g(r,ix.status),address:g(r,ix.address),exp:g(r,ix.exp),
+     edu:g(r,ix.edu),job:g(r,ix.job),loc:g(r,ix.loc),date:g(r,ix.date),src:g(r,ix.src),_match:m});
+   });
+   if(!out.length){toast("取り込める行がありませんでした",true);return}
+   csvRows=out;render();
+  }catch(e){toast("読み込みエラー: "+e.message,true)}
+ };
+ rd.readAsText(file);
+}
+async function runCsvIntake(){
+ if(!csvRows||csvBusy)return;
+ csvBusy=true;render();
+ let ok=0,ng=0,upd=0;
+ for(const r of csvRows){
+  const {data,error}=await sb.rpc("csv_intake",{p_name:r.name,p_email:r.email||null,p_phone:r.phone||null,
+   p_status:r.status||null,p_address:r.address||null,p_experience:r.exp||null,p_education:r.edu||null,
+   p_job:r.job||null,p_location:r.loc||null,p_applied:/^\d{4}-\d{2}-\d{2}$/.test(r.date)?r.date:null,p_source:r.src||null});
+  if(error)ng++;else{ok++;if(data&&data.action==="updated")upd++}
+ }
+ csvBusy=false;csvRows=null;rcList=null;rcHiredInfo=null;
+ toast(`取り込み完了: ${ok}件（うち既存に追加 ${upd}件）${ng?" ／ 失敗 "+ng+"件":""}`,!!ng);
+ render();
 }
 function exportRecruitCsv(){ // v2.5.2 表示中の一覧をCSVで保存（Excelで開ける）
  const ids=[...document.querySelectorAll("[data-rca]")].map(el=>el.dataset.rca);
@@ -1829,7 +1921,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.4</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.5</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2432,6 +2524,9 @@ function bindPage(){
   render();
  }});
  if($("rc-csv"))$("rc-csv").onclick=exportRecruitCsv;
+ if($("rc-csvin"))$("rc-csvin").onchange=e=>{if(e.target.files&&e.target.files[0])readRecruitCsv(e.target.files[0])};
+ if($("rc-csvgo"))$("rc-csvgo").onclick=runCsvIntake;
+ if($("rc-csvcancel"))$("rc-csvcancel").onclick=()=>{csvRows=null;render()};
  if($("rc-statcsv"))$("rc-statcsv").onclick=exportStatsCsv;
  if($("rc-csave"))$("rc-csave").onclick=saveRecruitCost;
  document.querySelectorAll(".chip[data-rcst]").forEach(c=>c.onclick=()=>{

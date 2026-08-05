@@ -558,8 +558,10 @@ async function doJoin(){
  const linked=smId||(joinInfoCur&&joinInfoCur.smaregi_staff_id);
  const smSelRadio=document.querySelector('input[name="jsm"]:checked'); // v2.6.1
  const smWanted=!(joinInfoCur&&joinInfoCur.skip_smaregi)&&!(smSelRadio&&smSelRadio.value==="no");
- if(!linked&&smWanted)smaregiSync(data.user.id); // スマレジタイムカードへ自動登録
+ // v2.6.13 スマレジ登録の完了を待ってから通知（リンクを含めるため）
+ if(!linked&&smWanted)try{await smaregiSync(data.user.id)}catch(e){}
  else if(!linked)try{await sb.rpc("set_my_smaregi_skip")}catch(e){}
+ try{await sb.rpc("notify_join_complete")}catch(e){}
  await loadMe(data.user.id);
 }
 async function smaregiSync(uid){ // スマレジ・タイムカードにスタッフ登録するEdge Functionを呼ぶ
@@ -1980,7 +1982,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.12</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.13</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====

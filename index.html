@@ -108,6 +108,7 @@
   <button data-p="home"><i>🏠</i>ホーム<span class="ndot" id="homedot" style="display:none"></span></button>
   <button data-p="write"><i>✏️</i>日報</button>
   <button data-p="list"><i>📋</i>一覧</button>
+  <button data-p="check"><i>☑️</i>チェック</button>
   <button data-p="tasks"><i>✅</i>タスク<span class="ndot" id="taskdot" style="display:none"></span></button>
   <button data-p="chat"><i>💬</i>チャット<span class="ndot" id="chatdot" style="display:none"></span></button>
   <button data-p="recruit" id="navrecruit" style="display:none"><i>📥</i>応募<span class="ndot" id="recruitdot" style="display:none"></span></button>
@@ -695,6 +696,7 @@ async function render(){
  else if(page==="write")body=await writeView("daily");
  else if(page==="weekly")body=await writeView("weekly");
  else if(page==="list")body=detail?await detailView():await listView();
+ else if(page==="check")body=await checkView();
  else if(page==="tasks")body=await tasksView();
  else if(page==="chat")body=await chatView();
  else if(page==="dash")body=await dashView();
@@ -881,6 +883,144 @@ function taskFileHtml(fl){
 }
 const fmtDue=d=>{if(!d)return"";const t=new Date(d);return (t.getMonth()+1)+"/"+t.getDate()+" "+String(t.getHours()).padStart(2,"0")+":"+String(t.getMinutes()).padStart(2,"0")};
 function taskUserName(id){const u=(tskUsers||[]).find(x=>x.id===id);return u?u.name:"未定"}
+// ===== 店舗チェックシート（フェーズ3b: オープン準備・清掃などの毎日ルーティン） =====
+const CK_PERIODS={open:"オープン",prep:"仕込み",close:"クローズ",other:"その他"};
+let ckStore=null,ckDate=null,ckAdminMode=false;
+const ckCanManage=()=>can("store_admin")||me.role==="CEO"||me.role==="HQ"||me.is_master;
+async function checkView(){
+ if(!ckDate)ckDate=todayStr();
+ const myStores=me.stores&&me.stores.length?me.stores:[];
+ const pickable=ckCanManage()?stores:myStores;
+ if(!ckStore||!pickable.find(s=>s.id===ckStore))ckStore=pickable[0]?pickable[0].id:null;
+ let h=`<h2>☑️ 店舗チェック</h2>`;
+ if(!pickable.length)return h+`<p class="muted">所属店舗がありません。本部までお問い合わせください。</p>`;
+ h+=`<div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+  <select class="inp" id="ckstore" style="flex:1;min-width:140px;margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===ckStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select>
+  <input type="date" id="ckdate" value="${ckDate}" style="width:auto;margin:0">
+  ${ckCanManage()?`<button class="btn sm ${ckAdminMode?"":"sub"}" id="ckadmin">${ckAdminMode?"✔ 編集を終了":"🛠 テンプレート編集"}</button>`:""}
+ </div>`;
+ const [{data:tpls},{data:items},{data:checks}]=await Promise.all([
+  sb.from("checklist_templates").select("*").order("sort_order").order("created_at"),
+  sb.from("checklist_items").select("*").order("sort_order").order("created_at"),
+  sb.from("checklist_checks").select("*,checker:users(name)").eq("store_id",ckStore).eq("work_date",ckDate)
+ ]);
+ const ckMap={};(checks||[]).forEach(c=>ckMap[c.item_id]=c);
+ const forStore=(tpls||[]).filter(t=>(t.store_id===null||t.store_id===ckStore)&&(ckAdminMode||t.is_active));
+ if(ckAdminMode)return h+ckAdminHtml(tpls||[],items||[]);
+ if(!forStore.length)return h+`<p class="muted" style="margin-top:14px">この店舗のチェックシートはまだ作成されていません。${ckCanManage()?"「🛠 テンプレート編集」から作成できます。":"本部が準備中です。"}</p>`;
+ const order=["open","prep","close","other"];
+ forStore.sort((a,b)=>order.indexOf(a.period)-order.indexOf(b.period)||a.sort_order-b.sort_order);
+ forStore.forEach(t=>{
+  const its=(items||[]).filter(i=>i.template_id===t.id&&i.is_active);
+  if(!its.length)return;
+  const done=its.filter(i=>ckMap[i.id]).length;
+  const pct=Math.round(done/its.length*100);
+  h+=`<div class="card"><h3>${esc(CK_PERIODS[t.period]||"")}｜${esc(t.title)} <span class="badge" style="${done===its.length?"background:#1e8e5a":""}">${done}/${its.length}</span></h3>
+   <div style="height:6px;background:var(--line,#eee);border-radius:3px;margin:6px 0 10px"><div style="height:6px;width:${pct}%;background:${done===its.length?"#1e8e5a":"#c8401f"};border-radius:3px"></div></div>`;
+  its.forEach(i=>{
+   const c=ckMap[i.id];
+   h+=`<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px solid var(--line,#eee)">
+    <button class="btn sm ${c?"":"sub"}" data-cktoggle="${i.id}" data-photoreq="${i.photo_required?1:0}" style="flex-shrink:0;min-width:64px">${c?"✅ 済":"⬜ する"}</button>
+    <div style="flex:1">
+     <div>${esc(i.label)}${i.photo_required?' <span class="badge" style="background:#b58a00">📷 写真必須</span>':""}</div>
+     ${c?`<div class="muted" style="font-size:11px">${esc((c.checker&&c.checker.name)||"")} ／ ${new Date(c.checked_at).toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"})}${c.photo_url?` ／ <a href="${esc(c.photo_url)}" target="_blank" rel="noopener">写真を見る</a>`:""}</div>`:""}
+    </div></div>`;
+  });
+  h+=`</div>`;
+ });
+ h+=`<input type="file" id="ckphoto" accept="image/*" capture="environment" style="display:none">`;
+ return h;
+}
+function ckAdminHtml(tpls,items){
+ let h=`<div class="info">🛠 テンプレート編集モード（全店舗分を管理できます）</div>
+ <div class="card"><h3>＋ 新しいチェックシート</h3>
+  <input type="text" id="cknew-title" placeholder="例: オープン準備">
+  <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+   <select class="inp" id="cknew-period" style="flex:1;min-width:110px;margin:0">${Object.entries(CK_PERIODS).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select>
+   <select class="inp" id="cknew-store" style="flex:1;min-width:110px;margin:0"><option value="">全店舗共通</option>${stores.map(s=>`<option value="${s.id}">${esc(s.name)}のみ</option>`).join("")}</select>
+   <button class="btn sm" id="cknew-add">作成</button>
+  </div></div>`;
+ tpls.forEach(t=>{
+  const its=items.filter(i=>i.template_id===t.id);
+  const sname=t.store_id?(stores.find(s=>s.id===t.store_id)||{}).name:"全店舗";
+  h+=`<div class="card" style="${t.is_active?"":"opacity:.55"}"><h3>${esc(CK_PERIODS[t.period]||"")}｜${esc(t.title)} <span class="badge">${esc(sname||"")}</span>${t.is_active?"":' <span class="badge" style="background:#888">停止中</span>'}</h3>`;
+  its.forEach(i=>{
+   h+=`<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line,#eee);${i.is_active?"":"opacity:.5;text-decoration:line-through"}">
+    <span style="flex:1">${esc(i.label)}${i.photo_required?" 📷":""}</span>
+    <button class="btn sm sub" data-ckitoggle="${i.id}" data-on="${i.is_active?1:0}">${i.is_active?"停止":"再開"}</button>
+   </div>`;
+  });
+  h+=`<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+   <input type="text" data-ckadditem="${t.id}" placeholder="項目を追加（例: 看板の電気をつける）" style="flex:1;min-width:150px;margin:0">
+   <label style="display:flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap"><input type="checkbox" data-ckaddphoto="${t.id}" style="width:16px;height:16px">📷写真必須</label>
+   <button class="btn sm" data-ckaddbtn="${t.id}">追加</button>
+  </div>
+  <div style="margin-top:8px"><button class="btn sm sub" data-cktdeact="${t.id}" data-on="${t.is_active?1:0}">${t.is_active?"このシートを停止":"このシートを再開"}</button></div>
+  </div>`;
+ });
+ return h;
+}
+function bindCheckPage(){
+ if($("ckstore"))$("ckstore").onchange=e=>{ckStore=e.target.value;render()};
+ if($("ckdate"))$("ckdate").onchange=e=>{ckDate=e.target.value;render()};
+ if($("ckadmin"))$("ckadmin").onclick=()=>{ckAdminMode=!ckAdminMode;render()};
+ document.querySelectorAll("[data-cktoggle]").forEach(b=>b.onclick=async()=>{
+  const itemId=b.dataset.cktoggle,needPhoto=b.dataset.photoreq==="1";
+  const {data:ex}=await sb.from("checklist_checks").select("id,checked_by").eq("item_id",itemId).eq("store_id",ckStore).eq("work_date",ckDate).maybeSingle();
+  if(ex){ // 取消（自分のチェック or 管理者のみRLSが許可）
+   if(!confirm("チェックを取り消しますか？"))return;
+   const {error}=await sb.from("checklist_checks").delete().eq("id",ex.id);
+   if(error){toast("取り消せませんでした（自分が付けたチェックのみ取消できます）",true);return}
+   render();return;
+  }
+  if(needPhoto){ // 写真必須 → 撮影/選択してからチェック
+   const inp=$("ckphoto");
+   inp.onchange=async e2=>{
+    const f=e2.target.files[0];if(!f)return;
+    toast("写真をアップロード中...");
+    const ext=((f.name.split(".").pop()||"jpg").toLowerCase().replace(/[^a-z0-9]/g,""))||"jpg";
+    // 保存先はストレージのルール上「自分のユーザーIDフォルダ」配下に置く必要がある
+    const path=me.id+"/checklist_"+ckDate.replace(/-/g,"")+"_"+itemId.slice(0,8)+"_"+Math.random().toString(36).slice(2,8)+"."+ext;
+    const {error:pe}=await sb.storage.from("report-photos").upload(path,f,{contentType:f.type||"image/jpeg"});
+    if(pe){toast("アップロードエラー: "+pe.message,true);return}
+    const {data:pu}=sb.storage.from("report-photos").getPublicUrl(path);
+    const {error}=await sb.from("checklist_checks").insert({item_id:itemId,store_id:ckStore,work_date:ckDate,checked_by:me.id,photo_url:pu.publicUrl});
+    if(error){toast("記録エラー: "+error.message,true);return}
+    toast("✅ 写真つきでチェックしました");inp.value="";render();
+   };
+   inp.click();return;
+  }
+  const {error}=await sb.from("checklist_checks").insert({item_id:itemId,store_id:ckStore,work_date:ckDate,checked_by:me.id});
+  if(error){toast("記録エラー: "+error.message,true);return}
+  render();
+ });
+ // ---- 管理（テンプレート編集） ----
+ if($("cknew-add"))$("cknew-add").onclick=async()=>{
+  const title=$("cknew-title").value.trim();if(!title){toast("シート名を入れてください",true);return}
+  const {error}=await sb.from("checklist_templates").insert({title,period:$("cknew-period").value,store_id:$("cknew-store").value||null});
+  if(error){toast("作成エラー: "+error.message,true);return}
+  toast("作成しました");render();
+ };
+ document.querySelectorAll("[data-ckaddbtn]").forEach(b=>b.onclick=async()=>{
+  const tid=b.dataset.ckaddbtn;
+  const inp=document.querySelector(`[data-ckadditem="${tid}"]`);
+  const label=inp.value.trim();if(!label){toast("項目名を入れてください",true);return}
+  const ph=document.querySelector(`[data-ckaddphoto="${tid}"]`).checked;
+  const {error}=await sb.from("checklist_items").insert({template_id:tid,label,photo_required:ph});
+  if(error){toast("追加エラー: "+error.message,true);return}
+  render();
+ });
+ document.querySelectorAll("[data-ckitoggle]").forEach(b=>b.onclick=async()=>{
+  const {error}=await sb.from("checklist_items").update({is_active:b.dataset.on!=="1"}).eq("id",b.dataset.ckitoggle);
+  if(error){toast("変更エラー: "+error.message,true);return}
+  render();
+ });
+ document.querySelectorAll("[data-cktdeact]").forEach(b=>b.onclick=async()=>{
+  const {error}=await sb.from("checklist_templates").update({is_active:b.dataset.on!=="1"}).eq("id",b.dataset.cktdeact);
+  if(error){toast("変更エラー: "+error.message,true);return}
+  render();
+ });
+}
 async function tasksView(){
  const [{data:ts,error},{data:us}]=await Promise.all([
   sb.from("tasks").select("*").order("created_at",{ascending:false}).limit(300),
@@ -2474,6 +2614,7 @@ async function resetFmt(){
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";chatReply=null;chatInvite=false;chatInviteSel=[];rcDetail=null;rcJobs=false;rcMsgs=null;render()});
 function bindPage(){
  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=()=>{page=el.dataset.nav;detail=null;editId=null;render()});
+ if(page==="check")bindCheckPage();
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
  if($("goweekly"))$("goweekly").onclick=()=>{page="weekly";render()};
  if($("editdaily"))$("editdaily").onclick=()=>{editId=todayDaily.id;page="write";render()};

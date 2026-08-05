@@ -265,6 +265,7 @@ let myProf=null,auRole="",auState="",auStore=""; // v2.6.0
 let ivSkipSm=false; // v2.6.1
 let joinGender=null; // v2.6.7
 let cwToken=null,smUrlTpl=null; // v2.6.9 Chatwork・スマレジURL
+let lineToken=null,lineSecret=null,lineOa=null; // v2.6.20 求人用LINE
 let teams=[],euTeam=null,lrList=null,lrEdit=null; // v2.6.2 チーム・日報Lark通知
 // v2.6.3 Lark通知のイベント（この動きがあったら通知する）
 const LARK_EVENTS={
@@ -1343,6 +1344,7 @@ async function recruitView(){
  if(error)return `<h2>📥 応募者管理</h2><div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
  rcList=as||[];
  await chatEnsureUsers();
+ if(lineOa===null){const {data:oa}=await sb.rpc("line_oa_id");lineOa=oa||""} // v2.6.20
  if(rcDetail){ // v2.6.16 やりとりも一緒に読み込む
   const {data:ms}=await sb.from("applicant_messages").select("*").eq("applicant_id",rcDetail).order("sent_at",{ascending:true});
   rcMsgs=ms||[];
@@ -1552,6 +1554,16 @@ async function rcMarkFormSeen(id){
  if(!Object.keys(upd).length)return;
  try{await sb.from("applicants").update(upd).eq("id",id)}catch(e){}
 }
+// v2.6.20 LINE連携のEdge Functionを呼ぶ
+async function lineFn(body){
+ try{
+  const {data:{session}}=await sb.auth.getSession();
+  const res=await fetch(SUPA_URL+"/functions/v1/line-webhook",{method:"POST",
+   headers:{Authorization:"Bearer "+(session?session.access_token:SUPA_KEY),apikey:SUPA_KEY,"Content-Type":"application/json"},
+   body:JSON.stringify(body)});
+  return await res.json();
+ }catch(e){return {ok:false,error:String(e)}}
+}
 // v2.6.17 招待リンクを本人に送る。端末の共有メニュー（LINE・SMS・メールなど）を開く
 async function rcShareInvite(a){
  if(!a||!a.invite_token){toast("先に招待リンクを発行してください",true);return}
@@ -1604,15 +1616,35 @@ function recruitDetailView(){
   <p class="muted" style="margin:${a.indeed_url?"8px":"0"} 0 0">${a.indeed_url?"リンクを変えたい場合は貼り替えて保存してください":"Indeedの応募者ページのURLを貼り付けると、ここから直接開けるようになります"}</p>
   <input type="text" id="rc-url" value="${esc(a.indeed_url||"")}" placeholder="https://employers.indeed.com/candidates/view?id=..." style="font-size:12px">
   <button class="btn sm sub" id="rc-urlsave">リンクを保存</button></div>`;
+ // v2.6.20 求人用LINEの連携
+ h+=`<div class="card"${a.line_user_id?' style="background:#f0fff4"':""}><h3>💚 求人用LINE</h3>`;
+ if(a.line_user_id){
+  h+=`<p style="font-size:13px;margin:0">✅ 連携済み${a.line_linked_at?`（${fmtDue(a.line_linked_at)}）`:""}　この応募者にLINEを送れます</p>
+   <textarea rows="2" id="rc-linetext" placeholder="LINEで送る内容を入力"></textarea>
+   <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" id="rc-linesend" style="background:#06c755">💚 LINEで送る</button>
+   <button class="btn sm sub" id="rc-lineunlink">連携を解除する</button></div>`;
+ }else if(!a.line_code){
+  h+=`<p class="muted" style="margin:0">合言葉を発行して本人に送ると、公式LINEに送ってもらうだけで自動でつながります</p>
+   <button class="btn sm" id="rc-lineissue">合言葉を発行する</button>`;
+ }else{
+  const lurl=lineOa?"https://line.me/R/oaMessage/"+encodeURIComponent(lineOa)+"/?"+encodeURIComponent(a.line_code):"";
+  h+=`<p class="muted" style="margin:0">この合言葉を公式LINEに送ってもらうとつながります（まだ未連携）</p>
+   <p style="font-size:22px;font-weight:700;letter-spacing:4px;margin:6px 0 0">${esc(a.line_code)}</p>
+   ${lurl?`<p class="muted" style="margin:4px 0 0;font-size:11px">下のボタンで送ると、本人はリンクを開いて送信するだけで済みます</p>
+   <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" id="rc-lineshare" style="background:#06c755">📤 連携リンクを送る</button>
+   <button class="btn sm sub" data-rccopy="${esc(lurl)}">📋 リンクをコピー</button></div>`
+   :`<p class="muted" style="margin:6px 0 0">設定 → 求人用LINEの連携 で「つながるか確認する」を押すと、この合言葉を1タップで送れるリンクが作れます</p>`}`;
+ }
+ h+=`</div>`;
  // v2.6.16 Indeedのやりとり
  const msgs=rcMsgs||[];
- h+=`<div class="card"><h3>💬 Indeedのやりとり${msgs.length?` <span class="muted" style="font-weight:400;font-size:11px">（${msgs.length}件）</span>`:""}</h3>`;
- if(!msgs.length)h+=`<p class="muted" style="margin:0">まだ取り込んだメッセージはありません。Indeedのメッセージは5分ごとに自動で取り込まれます</p>`;
+ h+=`<div class="card"><h3>💬 やりとり${msgs.length?` <span class="muted" style="font-weight:400;font-size:11px">（${msgs.length}件）</span>`:""}</h3>`;
+ if(!msgs.length)h+=`<p class="muted" style="margin:0">まだやりとりはありません。Indeedのメッセージは5分ごとに自動で取り込まれます（🔵Indeed／💚LINE）</p>`;
  else msgs.forEach(m=>{
   const mine=m.direction==="out";
   h+=`<div style="margin:8px 0;display:flex;${mine?"justify-content:flex-end":""}">
    <div style="max-width:88%;background:${mine?"#e6f0ff":"#f2f4f7"};border-radius:10px;padding:8px 10px">
-    <div class="muted" style="font-size:11px;margin-bottom:2px">${mine?"こちらから":esc(a.name)+"さんから"}・${fmtDue(m.sent_at)}
+    <div class="muted" style="font-size:11px;margin-bottom:2px">${m.channel==="line"?"💚":"🔵"}${mine?"こちらから":esc(a.name)+"さんから"}・${fmtDue(m.sent_at)}
      <span data-rcdir="${m.id}" data-rcdirto="${mine?"in":"out"}" style="color:var(--blue);cursor:pointer;white-space:nowrap">↔ ${mine?esc(a.name)+"さんから":"こちらから"}に直す</span></div>
     <div style="font-size:13px;white-space:pre-wrap;word-break:break-word">${esc(m.body)}</div>
    </div></div>`;
@@ -2053,9 +2085,10 @@ async function settingsView(){
  if(setMode==="join")return settingsJoinView();
  if(setMode==="fmt")return settingsFmtView();
  if(isAdmin()&&larkUrl===null){ // v2.5.8／v2.6.9
-  const {data:ss}=await sb.from("app_secrets").select("key,value").in("key",["lark_webhook","chatwork_token","smaregi_staff_url"]);
+  const {data:ss}=await sb.from("app_secrets").select("key,value").in("key",["lark_webhook","chatwork_token","smaregi_staff_url","line_channel_token","line_channel_secret","line_oa_id"]);
   const m={};(ss||[]).forEach(x=>m[x.key]=x.value||"");
   larkUrl=m.lark_webhook||"";cwToken=m.chatwork_token||"";smUrlTpl=m.smaregi_staff_url||"";
+  lineToken=m.line_channel_token||"";lineSecret=m.line_channel_secret||"";lineOa=m.line_oa_id||""; // v2.6.20
  }
  if(setMode==="perm")return await settingsPermView(); // v2.4
  if(setMode==="apply")return await settingsApplyView(); // v2.5.8
@@ -2087,6 +2120,19 @@ async function settingsView(){
    <button class="btn sm" id="set-apply">応募フォームの項目設定</button></div>`;
  }
  if(isAdmin()){ // v2.5.8 Lark通知
+  // v2.6.20 求人用LINEの連携
+  h+=`<div class="card"><h3>💚 求人用LINEの連携</h3>
+   <p class="muted" style="margin:0">応募者と求人用のLINE公式アカウントでやりとりできるようにします。手順書のとおりLINE Developersで用意した2つの値を貼り付けてください</p>
+   <p class="muted" style="margin:10px 0 2px"><b>① チャネルアクセストークン（長期）</b>${lineToken?" ✅ 設定済み":""}</p>
+   <input type="password" id="line-token" placeholder="${lineToken?"（設定済み。変えるときだけ入力）":"チャネルアクセストークン"}" autocomplete="off">
+   <p class="muted" style="margin:8px 0 2px"><b>② チャネルシークレット</b>${lineSecret?" ✅ 設定済み":""}</p>
+   <input type="password" id="line-secret" placeholder="${lineSecret?"（設定済み。変えるときだけ入力）":"チャネルシークレット"}" autocomplete="off">
+   <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm sub" id="line-save">保存する</button>
+   <button class="btn sm sub" id="line-test">つながるか確認する</button></div>
+   ${lineOa?`<p class="muted" style="margin:8px 0 0">✅ 公式アカウント: <b>${esc(lineOa)}</b>（応募者に送る連携リンクに使います）</p>`:""}
+   <p class="muted" style="margin:12px 0 2px"><b>③ Webhook URL</b>（LINE Developersの「Webhook URL」に貼り付けてください）</p>
+   <p style="font-size:12px;word-break:break-all;margin:0">${SUPA_URL}/functions/v1/line-webhook</p>
+   <button class="btn sm sub" data-rccopy="${SUPA_URL}/functions/v1/line-webhook">📋 コピー</button></div>`;
   h+=`<div class="card"><h3>🔔 通知の設定</h3>
    <p class="muted" style="margin:0">Lark・Chatworkへの自動通知をまとめて管理します。</p>
    <p class="muted" style="margin:10px 0 2px"><b>① Chatworkのトークン</b>（Chatworkに通知する場合のみ）</p>
@@ -2113,7 +2159,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.19</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.20</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2819,6 +2865,35 @@ function bindPage(){
   c.classList.add("on");c.style.background=APPLICANT_COLOR[c.dataset.rcst];c.style.color="#fff";
  });
  if($("rc-share"))$("rc-share").onclick=()=>{const a=rcList.find(x=>x.id===rcDetail);if(a)rcShareInvite(a)};
+ // v2.6.20 求人用LINE
+ if($("rc-lineissue"))$("rc-lineissue").onclick=async()=>{
+  const {data,error}=await sb.rpc("line_issue_code",{p_applicant:rcDetail});
+  if(error){toast("発行エラー: "+error.message,true);return}
+  toast("合言葉「"+data+"」を発行しました");render();
+ };
+ if($("rc-lineshare"))$("rc-lineshare").onclick=async()=>{
+  const a=rcList.find(x=>x.id===rcDetail);
+  if(!a||!a.line_code||!lineOa)return;
+  const url="https://line.me/R/oaMessage/"+encodeURIComponent(lineOa)+"/?"+encodeURIComponent(a.line_code);
+  const text=a.name+"さん\n\nLINEでのご連絡をさせていただきたく、下のリンクを開いて、そのまま送信ボタンを押してください。\n（合言葉「"+a.line_code+"」が入力された状態で開きます）\n\n"+url;
+  if(navigator.share){try{await navigator.share({title:"LINE連携のお願い",text})}catch(e){}return}
+  copyText(text);toast("この端末では共有メニューが使えないため、文面をコピーしました");
+ };
+ if($("rc-linesend"))$("rc-linesend").onclick=async()=>{
+  const t=$("rc-linetext").value.trim();
+  if(!t){toast("送る内容を入力してください",true);return}
+  $("rc-linesend").disabled=true;
+  const r=await lineFn({action:"push",applicant_id:rcDetail,text:t});
+  $("rc-linesend").disabled=false;
+  if(!r.ok){toast("送信できませんでした: "+(r.error||"不明"),true);return}
+  toast("LINEを送信しました");render();
+ };
+ if($("rc-lineunlink"))$("rc-lineunlink").onclick=async()=>{
+  if(!confirm("この応募者のLINE連携を解除します。合言葉も作り直しになります。よろしいですか？"))return;
+  const {error}=await sb.rpc("line_unlink",{p_applicant:rcDetail});
+  if(error){toast("解除エラー: "+error.message,true);return}
+  toast("連携を解除しました");render();
+ };
  document.querySelectorAll("[data-rcdir]").forEach(el=>el.onclick=async()=>{ // v2.6.19 やりとりの送り手を直す
   el.style.opacity=.5;
   const {data,error}=await sb.rpc("applicant_message_set_direction",{p_id:el.dataset.rcdir,p_dir:el.dataset.rcdirto});
@@ -2909,6 +2984,27 @@ function bindPage(){
  if($("ap-add"))$("ap-add").onclick=()=>{collectApplyDom();cfgApply[applyKeyEdit].fields.push({k:"",label:"",type:"text",req:false,opts:[]});render()};
  if($("ap-save"))$("ap-save").onclick=saveApplyForm;
  // v2.5.8 Lark通知
+ // v2.6.20 求人用LINE
+ if($("line-save"))$("line-save").onclick=async()=>{
+  const t=$("line-token").value.trim(),k=$("line-secret").value.trim();
+  if(!t&&!k){toast("入力してください",true);return}
+  const now=new Date().toISOString(),rows=[];
+  if(t)rows.push({key:"line_channel_token",value:t,updated_by:me.id,updated_at:now});
+  if(k)rows.push({key:"line_channel_secret",value:k,updated_by:me.id,updated_at:now});
+  const {error}=await sb.from("app_secrets").upsert(rows);
+  if(error){toast("保存エラー: "+error.message,true);return}
+  if(t)lineToken=t;
+  if(k)lineSecret=k;
+  toast("保存しました");render();
+ };
+ if($("line-test"))$("line-test").onclick=async()=>{
+  $("line-test").disabled=true;
+  const r=await lineFn({action:"test"});
+  $("line-test").disabled=false;
+  if(!r.ok){toast("確認できませんでした: "+(r.error||"不明"),true);return}
+  if(r.basicId){await sb.from("app_secrets").upsert({key:"line_oa_id",value:r.basicId,updated_by:me.id,updated_at:new Date().toISOString()});lineOa=r.basicId}
+  toast("つながりました: "+(r.name||"")+"（"+(r.basicId||"")+"）");render();
+ };
  if($("cw-save"))$("cw-save").onclick=async()=>{ // v2.6.9
   const v=$("cw-token").value.trim();
   if(!v){toast("トークンを入力してください",true);return}

@@ -160,6 +160,8 @@ function rcAge(a){
 const rcNameAge=a=>{const n=rcAge(a);return esc(a.name)+(n!=null?`（${n}）`:"")};
 // v2.6.15 フォーム回答が届いてまだ開いていない応募者かどうか
 const rcFormNew=a=>!!(a&&a.form_received_at&&(!a.form_seen_at||new Date(a.form_seen_at)<new Date(a.form_received_at)));
+// v2.6.21 面接日を過ぎたのに選考中のままの応募者かどうか
+const rcOverdue=a=>!!(a&&a.interview_at&&APPLICANT_ACTIVE.includes(a.status)&&new Date(a.interview_at)<new Date(Date.now()-12*3600e3));
 // v2.6.16 Indeedメッセージが届いてまだ開いていない応募者かどうか
 const rcMsgNew=a=>!!(a&&a.msg_received_at&&(!a.msg_seen_at||new Date(a.msg_seen_at)<new Date(a.msg_received_at)));
 // v2.6.16 求人タイトルからの自動候補（登録画面で最初に選ばれた状態にするだけ。保存は人が押す）
@@ -382,10 +384,24 @@ async function doApply(){
  });
  if(missing){toast(`「${missing}」は必須です`,true);return}
  $("ap-submit").disabled=true;$("ap-submit").textContent="送信中...";
- const {error}=await sb.rpc("apply_submit",{p_form_key:applyKey,p_name:name,p_phone:phone||null,p_email:email||null,p_answers:answers});
+ const {data:newId,error}=await sb.rpc("apply_submit",{p_form_key:applyKey,p_name:name,p_phone:phone||null,p_email:email||null,p_answers:answers});
  if(error){toast("送信エラー: "+error.message,true);$("ap-submit").disabled=false;$("ap-submit").textContent="応募する";return}
+ // v2.6.21 完了画面からそのままLINE連携できるようにする（合言葉を自動で入れたリンクを出す）
+ let lineBox="";
+ try{
+  const {data:lc}=await sb.rpc("apply_line_code",{p_applicant:newId});
+  if(lc&&lc.ok&&lc.oa){
+   const lu="https://line.me/R/oaMessage/"+encodeURIComponent(lc.oa)+"/?"+encodeURIComponent(lc.code);
+   lineBox=`<div class="card" style="background:#f0fff4;border:2px solid #06c755;margin-top:14px">
+    <h3 style="margin:0">📱 LINEでのご連絡がスムーズです</h3>
+    <p class="muted" style="margin:6px 0 10px">面接日程のご相談などにお使いください。<br><b>ボタンを押すとLINEが開きます。文字が入った状態になるので、そのまま送信してください。</b></p>
+    <a href="${lu}" class="btn" style="background:#06c755;display:block;text-align:center;text-decoration:none;color:#fff">💚 LINEでやりとりする</a>
+    <p class="muted" style="margin:10px 0 0;font-size:12px">うまく開かない場合は、LINEで下の合言葉を送ってください</p>
+    <p style="font-size:22px;font-weight:700;letter-spacing:4px;margin:4px 0 0;text-align:center">${esc(lc.code)}</p></div>`;
+  }
+ }catch(e){}
  $("app").innerHTML=`<div class="loginwrap"><h2 class="center" style="font-size:20px">🐔 鳥一代グループ</h2>
-  <div class="info">✅ ご応募ありがとうございました！<br>内容を確認のうえ、採用担当からご連絡いたします。このページは閉じて大丈夫です。</div></div>`;
+  <div class="info">✅ ご応募ありがとうございました！<br>内容を確認のうえ、採用担当からご連絡いたします。</div>${lineBox}</div>`;
 }
 
 // ===== 入社登録（招待リンクから本人が入力） =====
@@ -1559,6 +1575,11 @@ async function recruitView(){
   ${(rcFrom||rcTo)?`<span class="chip" id="rc-perclear" style="font-size:11px;padding:3px 9px">✕ 期間解除</span>`:""}
  </div>`;
  if(rcQ||rcFForm||rcFSrc||rcFArea||rcFStatus||rcFrom||rcTo)h+=`<p class="muted" style="margin:0 0 8px">絞り込み中: ${act.length+hired.length+closed.length}件　<span style="color:var(--blue);cursor:pointer" id="rcqclear">✕ 条件をクリア</span></p>`;
+ // v2.6.21 面接日を過ぎて選考中のままの人を上に出す
+ const odList=(rcList||[]).filter(rcOverdue);
+ if(odList.length)h+=`<div class="card" style="background:#fff1f2;border-left:4px solid #c0392b"><h3 style="margin:0">⚠️ 面接日を過ぎています（${odList.length}件）</h3>
+  <p class="muted" style="margin:4px 0 6px">採用・不採用などのステータスを更新してください</p>
+  <p style="font-size:13px;margin:0">${odList.slice(0,12).map(a=>`<span style="color:var(--blue);cursor:pointer;white-space:nowrap" data-rca="${a.id}">${esc(a.name)}さん（面接 ${fmtDue(a.interview_at)}）</span>`).join("　")}${odList.length>12?"　ほか":""}</p></div>`;
  // v2.6.15 フォーム回答の新着をひと目で分かるように（絞り込みに関係なく全件から拾う）
  const fNewList=(rcList||[]).filter(rcFormNew);
  if(fNewList.length)h+=`<div class="card" style="background:#fff7ed;border-left:4px solid #d97706"><h3 style="margin:0">📝 フォーム回答が届いています（${fNewList.length}件）</h3>
@@ -1577,7 +1598,7 @@ async function recruitView(){
  if(rcShownSig!==sig){rcShown=100;rcShownSig=sig}
  list.slice(0,rcShown).forEach(a=>{
   const form=(rcForms||[]).find(f=>f.key===a.form_key);
-  const fNew=rcFormNew(a),mNew=rcMsgNew(a); // v2.6.15 フォーム回答／v2.6.16 メッセージの新着
+  const fNew=rcFormNew(a),mNew=rcMsgNew(a),od=rcOverdue(a); // v2.6.15 フォーム回答／v2.6.16 メッセージ／v2.6.21 面接日超過
   const col=APPLICANT_COLOR[a.status]||"#2b6cb0";
   // v2.6.17 ① 選考ステータスを一覧のままプルダウンで変えられる
   const stSel=`<select data-rcst2="${a.id}" style="border:1.5px solid ${col};color:${col};background:#fff;border-radius:999px;font-size:11px;font-weight:700;padding:2px 2px 2px 7px;max-width:116px">${Object.entries(APPLICANT_STATUS).map(([k,v])=>`<option value="${k}"${a.status===k?" selected":""}>${v}</option>`).join("")}</select>`;
@@ -1595,7 +1616,7 @@ async function recruitView(){
        :storeSel("font-size:11px;padding:3px 6px;border:1.5px solid var(--blue);color:var(--blue);border-radius:8px;background:#fff;font-weight:600;max-width:140px")+`<span class="muted" style="font-size:11px">店舗を選ぶと発行できます</span>`)):"";
   // v2.6.18 ③ 店舗はプルダウンに（自動で拾えていないときはここで選べる）
   const hint=a.store_id?"":rcStoreName(a);
-  h+=`<div class="row" data-rcrow="${a.id}" style="cursor:default${(fNew||mNew)?";background:#fff7ed":""}"><span style="flex:1;min-width:0"><b>${rcNameAge(a)}</b> <span style="display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;vertical-align:middle">${stSel}${ivIn}${invBtn}${fNew?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span>':""}${mNew?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span>':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</span><br>
+  h+=`<div class="row" data-rcrow="${a.id}" style="cursor:default${od?";background:#fff1f2":(fNew||mNew)?";background:#fff7ed":""}"><span style="flex:1;min-width:0"><b>${rcNameAge(a)}</b> <span style="display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;vertical-align:middle">${stSel}${ivIn}${invBtn}${fNew?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span>':""}${mNew?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span>':""}${od?'<span class="badge" style="background:#c0392b">⚠️ 面接日超過</span>':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</span><br>
    <span class="muted">${form?esc(form.title.replace("応募フォーム","")):esc(a.job_type||"")}・${storeSel("font-size:11px;padding:1px 3px;border:1px solid var(--line);border-radius:6px;background:#fff;color:inherit;max-width:136px;font-family:inherit")}${hint?"<span> 求人: "+esc(hint.split("、")[0].split(",")[0].slice(0,14))+"</span>":""}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}${a.interview_at?`・面接 ${fmtDue(a.interview_at)}`:""}${a.updated_at?`・更新 ${fmtDue(a.updated_at)}`:""}</span></span><button class="btn sm sub" data-rcopen="${a.id}" style="flex-shrink:0;margin:0;font-size:12px;padding:6px 10px">詳細</button></div>`;
  });
  if(list.length>rcShown)h+=`<button class="btn sm sub" id="rc-more" style="margin-top:10px;width:100%">▼ さらに100件表示する（残り ${list.length-rcShown}件）</button>`;
@@ -1693,6 +1714,17 @@ async function rcMarkFormSeen(id){
  if(rcMsgNew(a)){a.msg_seen_at=t;upd.msg_seen_at=t}
  if(!Object.keys(upd).length)return;
  try{await sb.from("applicants").update(upd).eq("id",id)}catch(e){}
+}
+// v2.6.21 招待リンク（入社登録フォーム）をLINEで自動送信する。連携済みのときだけ動く
+async function rcSendInviteLine(id){
+ const {data:a}=await sb.from("applicants").select("id,name,line_user_id,invite_token").eq("id",id).maybeSingle();
+ if(!a||!a.line_user_id||!a.invite_token)return false;
+ const url=location.origin+location.pathname+"?invite="+a.invite_token;
+ const text=a.name+"さん\n\nこの度は面接にお越しいただきありがとうございました。\n採用が決まりましたので、下記より入社手続きのご登録をお願いいたします。\n\n"+url+"\n\nご不明な点があれば、このままご返信ください。";
+ const r=await lineFn({action:"push",applicant_id:id,text});
+ if(!r.ok){toast("LINEに送れませんでした: "+(r.error||"不明"),true);return false}
+ await sb.from("applicants").update({invite_sent_at:new Date().toISOString()}).eq("id",id);
+ return true;
 }
 // v2.6.20 LINE連携のEdge Functionを呼ぶ
 async function lineFn(body){
@@ -1863,7 +1895,9 @@ async function hireApplicant(){
  $("rc-hire").disabled=true;
  const {data:tok,error}=await sb.rpc("hire_applicant",{p_applicant:rcDetail,p_role:$("rc-hrole").value,p_store_ids:sel});
  if(error){toast("発行エラー: "+error.message,true);$("rc-hire").disabled=false;return}
- toast("採用にして招待リンクを発行しました");rcList=null;rcHiredInfo=null;render();
+ const sent=await rcSendInviteLine(rcDetail); // v2.6.21 LINE連携済みなら自動で送る
+ toast(sent?"採用にして招待リンクを発行し、LINEで送信しました":"採用にして招待リンクを発行しました");
+ rcList=null;rcHiredInfo=null;render();
 }
 async function addApplicant(){
  const name=$("rc-aname").value.trim();
@@ -2303,7 +2337,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.20</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.21</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2978,7 +3012,8 @@ function bindPage(){
   const {error}=await sb.rpc("hire_applicant",{p_applicant:id,p_role:a.form_key==="shain"?"SHAIN":"AL",p_store_ids:[a.store_id]});
   b.disabled=false;
   if(error){toast("発行エラー: "+error.message,true);return}
-  toast("招待リンクを発行しました。「リンクを送る」で本人に送れます");
+  const sent=await rcSendInviteLine(id); // v2.6.21 LINE連携済みなら自動で送る
+  toast(sent?"招待リンクを発行し、LINEで送信しました":"招待リンクを発行しました。「リンクを送る」で本人に送れます");
   rcHiredInfo=null;render();
  });
  document.querySelectorAll("[data-rcsend]").forEach(b=>b.onclick=e=>{ // ⑤ 招待リンクを送る

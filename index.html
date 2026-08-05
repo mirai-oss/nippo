@@ -1865,7 +1865,8 @@ async function adminEditView(){
    住所: ${esc([prof.postal_code,prof.address].filter(Boolean).join(" ")||"—")}<br>
    緊急連絡先: ${esc(prof.emergency_name||"—")}${prof.emergency_relation?`（${esc(prof.emergency_relation)}）`:""} ${esc(prof.emergency_phone||"")}<br>
    入社日: ${prof.hire_date||"—"}<br>${prof.termination_date?`退職日: <b style="color:var(--red)">${prof.termination_date}</b><br>`:""}${prof.extra?Object.entries(prof.extra).map(([k,v])=>Array.isArray(v)?`${esc(k)}: `+v.map((u,x)=>`<a href="${esc(u)}" target="_blank">写真${x+1}</a>`).join(" ")+"<br>":`${esc(k)}: ${esc(v)}<br>`).join(""):""}スマレジ連携: ${smaregi}</p>
-   ${prof.smaregi_sync_status!=="synced"?'<button class="btn sm" id="eu-smaregi" style="margin-top:10px">スマレジに再同期する</button>':""}</div>`;
+   ${prof.smaregi_sync_status!=="synced"?'<button class="btn sm" id="eu-smaregi" style="margin-top:10px">スマレジに再同期する</button>':""}
+   ${prof.smaregi_staff_id?'<button class="btn sm sub" id="eu-resend" style="margin-top:10px">通知を送り直す（スマレジのリンク付き）</button>':""}</div>`;
  }
  h+=`<div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
  <div class="card"><h3>所属チーム</h3><span class="chip euteam ${!euTeam?"on":""}" data-t="">なし</span>${teams.map(t=>`<span class="chip euteam ${euTeam===t.id?"on":""}" data-t="${t.id}">${esc(t.name)}</span>`).join("")}
@@ -1982,7 +1983,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.13</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.14</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2818,6 +2819,12 @@ function bindPage(){
   if(r&&r.ok)toast("スマレジに登録しました（スタッフID: "+r.staffId+"）");
   else toast("同期エラー: "+((r&&(r.error&&r.error.title||JSON.stringify(r.error)))||"不明"),true);
   render();
+ };
+ if($("eu-resend"))$("eu-resend").onclick=async()=>{ // v2.6.14
+  $("eu-resend").disabled=true;
+  const {data,error}=await sb.rpc("notify_join_resend",{p_user:adminDetail});
+  $("eu-resend").disabled=false;
+  toast(error?"送信エラー: "+error.message:(data>0?`${data}件の通知先に送りました`:"送信先が設定されていません"),!!error);
  };
  if($("eu-toggle"))$("eu-toggle").onclick=adminToggle;
  // v2.6.8 退職日

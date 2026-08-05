@@ -76,7 +76,7 @@
   /* v1.6 フォームデザイナー */
   .fhandle{cursor:grab;color:#8a93a2;font-size:18px;padding:0 6px;user-select:none}
   .fnum{display:inline-block;background:#eaf3fd;color:var(--blue);border-radius:6px;font-size:12px;padding:2px 8px;font-weight:600}
-  .fcard.dragover{outline:2px solid var(--blue);outline-offset:-2px}
+  .dragover{outline:2px solid var(--blue);outline-offset:-2px}
   /* レスポンシブ: 小さいスマホ（〜379px）はナビ文字を少し縮小 */
   @media(max-width:379px){
    nav button{font-size:10px}
@@ -322,8 +322,8 @@ function joinCfg(src){
  d.custom=(c.custom||[]).map(x=>({label:String(x.label||""),req:!!x.req,type:x.type||"text",opts:Array.isArray(x.opts)?x.opts:[]}));
  return d;
 }
-const JC_TYPES={text:"記入式",date:"日付（カレンダー）",pull:"プルダウン",radio:"ラジオボタン",multi:"複数選択",photo:"写真添付"};
-const JC_NOOPT=["text","date","photo"]; // 選択肢入力が不要な種類
+const JC_TYPES={text:"記入式",date:"日付（カレンダー）",time:"時間（何時何分）",pull:"プルダウン",radio:"ラジオボタン",multi:"複数選択",photo:"写真添付"};
+const JC_NOOPT=["text","date","time","photo"]; // 選択肢入力が不要な種類
 // v2.6.22 選択肢に「他」があるとき、選んだら自由に書ける欄を出す
 const OTHER_RE=/^(他|その他|そのほか|other)$/i;
 const hasOtherOpt=f=>(f&&(f.opts||[]).some(o=>OTHER_RE.test(String(o).trim())));
@@ -333,6 +333,46 @@ function withOther(v,attr,i){ // 「他」＋自由記入 → 「他（ネット
  if(!OTHER_RE.test(String(v||"").trim()))return v;
  const el=document.querySelector(`[data-${attr}="${i}"]`),t=el?el.value.trim():"";
  return t?v+"（"+t+"）":v;
+}
+// v2.6.23 郵便番号を入れたら住所を自動で入れる（zipcloud・無料/登録不要）
+// 住所欄がすでに埋まっているときは上書きしない（本人が書いた番地を消さないため）
+function bindZip(zipId,addrId){
+ const z=$(zipId),a=$(addrId);
+ if(!z||!a)return;
+ let last="";
+ const look=async()=>{
+  const code=z.value.replace(/[^0-9]/g,"");
+  if(code.length!==7||code===last)return;
+  last=code;
+  try{
+   const res=await fetch("https://zipcloud.ibsnet.co.jp/api/search?zipcode="+code);
+   const j=await res.json();
+   const r=j&&j.results&&j.results[0];
+   if(!r){toast("この郵便番号の住所が見つかりませんでした",true);return}
+   const base=(r.address1||"")+(r.address2||"")+(r.address3||"");
+   if(!a.value.trim()){a.value=base;toast("住所を自動で入れました。続けて番地・建物名をご入力ください")}
+   else if(!a.value.startsWith(base))toast("住所がすでに入力されています（自動入力していません）");
+  }catch(e){ /* つながらないときは何もしない（手入力できるため） */ }
+ };
+ z.oninput=look; z.onblur=look;
+}
+// v2.6.23 ドラッグで並び替えする共通処理
+// handleSel=つまみ / cardSel=行全体 / key=data-属性名 / getList=並べ替える配列 / collect=画面の入力内容を配列に取り込む関数
+function bindDrag(handleSel,cardSel,key,getList,collect){
+ let di=null;
+ document.querySelectorAll(handleSel).forEach(hd=>{
+  hd.ondragstart=e=>{di=+hd.dataset[key];e.dataTransfer.effectAllowed="move"};
+ });
+ document.querySelectorAll(cardSel).forEach(cd=>{
+  cd.ondragover=e=>{e.preventDefault();cd.classList.add("dragover")};
+  cd.ondragleave=()=>cd.classList.remove("dragover");
+  cd.ondrop=e=>{
+   e.preventDefault();cd.classList.remove("dragover");
+   const to=+cd.dataset[key];
+   if(di==null||isNaN(to)||di===to)return;
+   collect();const l=getList();const [m]=l.splice(di,1);l.splice(to,0,m);di=null;render();
+  };
+ });
 }
 // v2.6.22 記入例（設定されていれば質問の下に薄く出す）
 const hintLine=t=>t?`<p class="muted" style="margin:2px 0 6px;font-size:12px">${esc(t)}</p>`:"";
@@ -373,7 +413,7 @@ async function renderApply(){
   if(fd.type==="pull")h+=`<select class="inp" data-ap="${i}"><option value="">選択してください</option>${(fd.opts||[]).map(o=>`<option>${esc(o)}</option>`).join("")}</select>`+(hasOtherOpt(fd)?otherInput("apother",i):"");
   else if(fd.type==="radio")h+=(fd.opts||[]).map(o=>`<label class="radio-row"><input type="radio" name="apr${i}" data-apr="${i}" value="${esc(o)}">${esc(o)}</label>`).join("")+(hasOtherOpt(fd)?otherInput("apother",i):"");
   else if(fd.type==="multi"||fd.type==="check")h+=`<div>${(fd.opts||[]).map(o=>`<span class="chip" data-apm="${i}" data-o="${esc(o)}">${esc(o)}</span>`).join("")}</div>`;
-  else if(fd.type==="date")h+=`<input type="date" class="inp" data-ap="${i}" style="margin-top:0">`; // v2.6.22 カレンダー
+  else if(fd.type==="date"||fd.type==="time")h+=`<input type="${fd.type}" class="inp" data-ap="${i}" style="margin-top:0">`; // v2.6.22 カレンダー／v2.6.23 時間
   else h+=`<textarea rows="2" data-ap="${i}"></textarea>`;
   h+=`</div>`;
  });
@@ -464,7 +504,7 @@ async function renderJoin(){
  h+=`</div>`;
  if(!smLinked){
   if(F.zip.on||F.addr.on)h+=`<div class="card" data-joinsec><h3>住所${(F.zip.req||F.addr.req)?' <span class="req">必須</span>':""}</h3>
-    ${F.zip.on?`${hintLine(F.zip.hint)}<input type="text" id="j-zip" placeholder="郵便番号（例: 108-0014）">`:""}
+    ${F.zip.on?`${hintLine(F.zip.hint)}<input type="text" id="j-zip" placeholder="郵便番号（例: 108-0014）" inputmode="numeric"><p class="muted" style="margin:2px 0 0;font-size:11px">郵便番号を入れると住所が自動で入ります</p>`:""}
     ${F.addr.on?`${hintLine(F.addr.hint)}<input type="text" id="j-addr" placeholder="住所">`:""}</div>`;
   if(F.ename.on||F.erel.on||F.ephone.on)h+=`<div class="card" data-joinsec><h3>緊急連絡先${(F.ename.req||F.erel.req||F.ephone.req)?' <span class="req">必須</span>':""}</h3>
     ${F.ename.on?`<input type="text" id="j-ename" placeholder="氏名">`:""}
@@ -480,7 +520,7 @@ async function renderJoin(){
     else if(c.type==="radio")h+=(c.opts||[]).map(o=>`<label class="radio-row"><input type="radio" name="jrd${i}" data-jcr="${i}" value="${esc(o)}">${esc(o)}</label>`).join("")+(hasOtherOpt(c)?otherInput("jcother",i):"");
     else if(c.type==="multi")h+=`<div>${(c.opts||[]).map(o=>`<span class="chip" data-jmc="${i}" data-o="${esc(o)}">${esc(o)}</span>`).join("")}</div>`;
     else if(c.type==="photo")h+=`<div class="photo-grid" data-jph="${i}"></div><p class="muted">＋をタップして写真を選択（複数可）</p>`;
-    else if(c.type==="date")h+=`<input type="date" class="inp" data-jc="${i}" style="margin-top:0">`; // v2.6.22 カレンダー
+    else if(c.type==="date"||c.type==="time")h+=`<input type="${c.type}" class="inp" data-jc="${i}" style="margin-top:0">`; // v2.6.22 カレンダー／v2.6.23 時間
     else h+=`<input type="text" data-jc="${i}">`;
    });
    h+=`</div>`;
@@ -491,6 +531,7 @@ async function renderJoin(){
  </div>`;
  $("app").innerHTML=h;
  $("j-submit").onclick=doJoin;
+ bindZip("j-zip","j-addr"); // v2.6.23 郵便番号から住所を自動で入れる
  document.querySelectorAll(".chip[data-jmc]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
  document.querySelectorAll(".chip.jgender").forEach(c=>c.onclick=()=>{joinGender=c.dataset.g;document.querySelectorAll(".chip.jgender").forEach(x=>x.classList.remove("on"));c.classList.add("on")}); // v2.6.7
  cfg.custom.forEach((c,i)=>{if(c.type==="photo")renderJoinPhoto(i)});
@@ -837,6 +878,8 @@ async function writeView(kind){
   if(f.type==="text"||f.type==="task"){
    h+=`<textarea rows="3" data-fk="${f.k}">${esc(v||"")}</textarea>`;
    if(f.type==="task")h+=`<p class="muted">※この欄に記入するとタスクとして送信されます</p>`;
+  }else if(f.type==="date"||f.type==="time"){ // v2.6.23 日付・時間
+   h+=`<input type="${f.type}" class="inp" data-fkd="${f.k}" value="${esc(v||"")}" style="margin-top:0">`;
   }else if(f.type==="stars"){
    h+=`<div class="stars" data-fk="${f.k}">${[1,2,3,4,5].map(n=>`<span data-n="${n}" class="${v>=n?"on":""}">★</span>`).join("")}</div>`;
   }else if(f.type==="multi"){
@@ -863,6 +906,7 @@ async function writeView(kind){
 }
 function collectForm(){ // DOM→form
  document.querySelectorAll("textarea[data-fk]").forEach(t=>form[t.dataset.fk]=t.value);
+ document.querySelectorAll("input[data-fkd]").forEach(t=>form[t.dataset.fkd]=t.value); // v2.6.23 日付・時間
  document.querySelectorAll("select[data-fk2]").forEach(s=>form[s.dataset.fk2]=s.value);
  document.querySelectorAll("input[data-fkr]:checked").forEach(r=>form[r.dataset.fkr]=r.value);
 }
@@ -2392,7 +2436,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.22</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.23</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2462,7 +2506,7 @@ async function savePerm(){
  setMode="main";permMatrix=null;permUserSel=null;permUserVals=null;render();
 }
 // ===== v2.5.8 応募フォームの項目設定 =====
-const APPLY_TYPES={text:"記入式（自由記述）",date:"日付（カレンダーで選ぶ）",pull:"プルダウン",radio:"ラジオボタン（1つ選ぶ）",multi:"複数選択",check:"チェックリスト"};
+const APPLY_TYPES={text:"記入式（自由記述）",date:"日付（カレンダーで選ぶ）",time:"時間（何時何分）",pull:"プルダウン",radio:"ラジオボタン（1つ選ぶ）",multi:"複数選択",check:"チェックリスト"};
 const APPLY_OPT_TYPES=["pull","radio","multi","check"];
 async function settingsApplyView(){
  if(!cfgApply){
@@ -2483,9 +2527,10 @@ async function settingsApplyView(){
  </div>
  <div class="card" style="padding:12px"><h3>フォームの見出し</h3>
   <input type="text" id="ap-title" value="${esc(cur.title)}" placeholder="例: アルバイト応募フォーム" style="margin:0"></div>`;
- h+=`<p class="muted" style="font-size:12px">↑↓ で並び替えできます。選択肢に「他」を入れると、選んだ人が自由に書ける欄が出ます。</p>`;
- h+=cur.fields.map((f,i)=>`<div class="card" style="padding:12px">
+ h+=`<p class="muted" style="font-size:12px">⠿ をドラッグ、または ↑↓ で並び替えできます。選択肢に「他」を入れると、選んだ人が自由に書ける欄が出ます。</p>`;
+ h+=cur.fields.map((f,i)=>`<div class="card apcard" data-api="${i}" style="padding:12px">
   <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
+   <span class="fhandle aphandle" draggable="true" data-api="${i}" title="ドラッグで並び替え">⠿</span>
    <span class="fnum">${i+1}</span>
    <input type="text" data-aplabel="${i}" value="${esc(f.label||"")}" placeholder="質問文（例: 希望シフト）" style="flex:1;margin:0">
   </div>
@@ -2595,7 +2640,7 @@ async function saveLarkRoute(){
 function settingsJoinView(){
  const cfg=cfgJoin;
  let h=`<span class="back" id="setback">← 設定</span><h2>入社フォームの項目設定</h2>
-  <p class="muted" style="margin-top:-8px;font-size:13px">氏名・フリガナ・メール・パスワードは常に必須です。以下の項目の表示と必須を切り替えられます。<br>各項目に「記入例」を入れると、入力欄の上に薄い字で表示されます。自由項目は ↑↓ で並び替えできます。</p>`;
+  <p class="muted" style="margin-top:-8px;font-size:13px">氏名・フリガナ・メール・パスワードは常に必須です。以下の項目の表示と必須を切り替えられます。<br>各項目に「記入例」を入れると、入力欄の上に薄い字で表示されます。自由項目は ⠿ をドラッグ、または ↑↓ で並び替えできます。</p>`;
  h+=`<div class="card"><h3>標準項目</h3>`+JOIN_STD.map(([k,label])=>{
   const f=cfg.fields[k];
   return `<div style="margin-bottom:10px">
@@ -2606,8 +2651,9 @@ function settingsJoinView(){
    <input type="text" data-jfhint="${k}" value="${esc(f.hint||"")}" placeholder="記入例・補足（任意）" style="margin:4px 0 0;font-size:12px"></div>`;
  }).join("")+`</div>`;
  h+=`<div class="card"><h3>自由項目（追加の質問）</h3>`+cfg.custom.map((c,i)=>
-  `<div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px">
+  `<div class="jccard" data-jci="${i}" style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px">
    <div style="display:flex;align-items:center;gap:8px">
+    <span class="fhandle jchandle" draggable="true" data-jci="${i}" title="ドラッグで並び替え">⠿</span>
     <span class="fnum">${i+1}</span>
     <input type="text" data-jclabel="${i}" value="${esc(c.label)}" placeholder="質問名（例: 制服サイズ）" style="flex:1;margin:0">
     <span class="chip jc-req ${c.req?"on":""}" data-i="${i}">必須</span></div>
@@ -2649,7 +2695,7 @@ async function saveJoin(){
  toast("保存しました。新しい招待リンクから反映されます");
  setMode="main";render();
 }
-const TYPE_NAMES={text:"記入式（自由記述）",stars:"★5段階",num:"評価点数（1〜10）",select2:"単一選択（ボタン）",radio:"ラジオボタン",pull:"プルダウン",multi:"複数選択",check:"チェックリスト",photo:"写真添付",select:"店舗選択",task:"報告（タスク化）"};
+const TYPE_NAMES={text:"記入式（自由記述）",date:"日付（カレンダー）",time:"時間（何時何分）",stars:"★5段階",num:"評価点数（1〜10）",select2:"単一選択（ボタン）",radio:"ラジオボタン",pull:"プルダウン",multi:"複数選択",check:"チェックリスト",photo:"写真添付",select:"店舗選択",task:"報告（タスク化）"};
 const OPT_TYPES=["multi","select2","check","radio","pull"];
 function curFmtList(){
  if(!cfgFmts[fmtRole])cfgFmts[fmtRole]=JSON.parse(JSON.stringify(fmtRole==="WEEKLY"?WEEKLY_FMT:(FORMATS[fmtRole]||[])));
@@ -3345,21 +3391,10 @@ function bindPage(){
   const inp=document.querySelector(`input[data-fopts="${s.dataset.ftype}"]`);
   if(inp)inp.style.display=OPT_TYPES.includes(s.value)?"":"none";
  });
- // ドラッグで並び替え（フォームデザイナー）
- let dragIdx=null;
- document.querySelectorAll(".fhandle").forEach(hd=>{
-  hd.ondragstart=e=>{dragIdx=+hd.dataset.fi;e.dataTransfer.effectAllowed="move"};
- });
- document.querySelectorAll(".fcard").forEach(cd=>{
-  cd.ondragover=e=>{e.preventDefault();cd.classList.add("dragover")};
-  cd.ondragleave=()=>cd.classList.remove("dragover");
-  cd.ondrop=e=>{
-   e.preventDefault();cd.classList.remove("dragover");
-   const to=+cd.dataset.fi;
-   if(dragIdx==null||dragIdx===to)return;
-   collectFmtDom();const l=curFmtList();const [m]=l.splice(dragIdx,1);l.splice(to,0,m);dragIdx=null;render();
-  };
- });
+ // v2.6.23 ドラッグで並び替え（日報・応募フォーム・入社フォームで共通）
+ bindDrag(".fhandle",".fcard","fi",()=>curFmtList(),collectFmtDom);
+ bindDrag(".aphandle",".apcard","api",()=>cfgApply[applyKeyEdit].fields,collectApplyDom);
+ bindDrag(".jchandle",".jccard","jci",()=>cfgJoin.custom,collectJoinDom);
  document.querySelectorAll(".chip.ivrole").forEach(c=>c.onclick=()=>{ivRole=c.dataset.r;document.querySelectorAll(".chip.ivrole").forEach(x=>x.classList.remove("on"));c.classList.add("on")});
  document.querySelectorAll(".chip.ivstore").forEach(c=>c.onclick=()=>{const s=c.dataset.s;ivStores=ivStores.includes(s)?ivStores.filter(x=>x!==s):ivStores.concat([s]);c.classList.toggle("on")});
  if($("iv-submit"))$("iv-submit").onclick=adminInviteCreate;

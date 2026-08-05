@@ -246,7 +246,8 @@ let csvRows=null,csvBusy=false; // v2.6.5 CSV取り込み
 let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8
 let myProf=null,auRole="",auState="",auStore=""; // v2.6.0
 let ivSkipSm=false; // v2.6.1
-let joinGender=null; // v2.6.7 入社登録の性別
+let joinGender=null; // v2.6.7
+let cwToken=null,smUrlTpl=null; // v2.6.9 Chatwork・スマレジURL
 let teams=[],euTeam=null,lrList=null,lrEdit=null; // v2.6.2 チーム・日報Lark通知
 // v2.6.3 Lark通知のイベント（この動きがあったら通知する）
 const LARK_EVENTS={
@@ -1918,7 +1919,11 @@ async function adminToggle(){
 async function settingsView(){
  if(setMode==="join")return settingsJoinView();
  if(setMode==="fmt")return settingsFmtView();
- if(isAdmin()&&larkUrl===null){const {data:s}=await sb.from("app_secrets").select("value").eq("key","lark_webhook").maybeSingle();larkUrl=(s&&s.value)||""} // v2.5.8
+ if(isAdmin()&&larkUrl===null){ // v2.5.8／v2.6.9
+  const {data:ss}=await sb.from("app_secrets").select("key,value").in("key",["lark_webhook","chatwork_token","smaregi_staff_url"]);
+  const m={};(ss||[]).forEach(x=>m[x.key]=x.value||"");
+  larkUrl=m.lark_webhook||"";cwToken=m.chatwork_token||"";smUrlTpl=m.smaregi_staff_url||"";
+ }
  if(setMode==="perm")return await settingsPermView(); // v2.4
  if(setMode==="apply")return await settingsApplyView(); // v2.5.8
  if(setMode==="lark")return await settingsLarkView(); // v2.6.2
@@ -1949,8 +1954,17 @@ async function settingsView(){
    <button class="btn sm" id="set-apply">応募フォームの項目設定</button></div>`;
  }
  if(isAdmin()){ // v2.5.8 Lark通知
-  h+=`<div class="card"><h3>🔔 Lark通知</h3>
-   <p class="muted" style="margin:0">応募が入ったらLarkのグループに自動でお知らせします。Larkのグループに「カスタムボット」を追加して、表示されたWebhook URLを貼り付けてください。</p>
+  h+=`<div class="card"><h3>🔔 通知の設定</h3>
+   <p class="muted" style="margin:0">Lark・Chatworkへの自動通知をまとめて管理します。</p>
+   <p class="muted" style="margin:10px 0 2px"><b>① Chatworkのトークン</b>（Chatworkに通知する場合のみ）</p>
+   <p class="muted" style="margin:0;font-size:11px">Chatworkの「サービス連携 → API Token」で発行したトークンを貼り付けてください</p>
+   <input type="password" id="cw-token" placeholder="${cwToken?"（設定済み。変更する場合のみ入力）":"Chatwork APIトークン"}" autocomplete="off">
+   <button class="btn sm sub" id="cw-save">Chatworkトークンを保存</button>
+   <p class="muted" style="margin:12px 0 2px"><b>② スマレジ従業員ページのURL</b>（入社通知にリンクを付けます）</p>
+   <p class="muted" style="margin:0;font-size:11px">スマレジで従業員を1人開いたときのURLを貼り、ID部分を <b>{ID}</b> に置き換えてください<br>例: https://timecard.smaregi.jp/…/staff/<b>{ID}</b>/edit</p>
+   <input type="text" id="sm-url" value="${esc(smUrlTpl||"")}" placeholder="https://.../staff/{ID}/edit" style="font-size:12px">
+   <button class="btn sm sub" id="sm-urlsave">スマレジURLを保存</button>
+   <p class="muted" style="margin:12px 0 2px"><b>③ Larkの既定のWebhook</b>（テスト用）</p>
    <input type="text" id="lark-url" placeholder="https://open.larksuite.com/open-apis/bot/v2/hook/..." value="${esc(larkUrl||"")}">
    <button class="btn sm" id="lark-save">保存する</button>
    <button class="btn sm sub" id="lark-test">テスト送信</button>
@@ -1965,7 +1979,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.8</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.9</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2112,7 +2126,7 @@ async function settingsLarkView(){
   const evs=(r.events||[]).map(e=>LARK_EVENTS[e]||e);
   h+=`<div class="card" style="padding:12px${r.is_active?"":";opacity:.55"}">
    <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
-    <b style="font-size:14px">${esc(r.name)}${r.is_active?"":" <span class='badge'>停止中</span>"}</b>
+    <b style="font-size:14px">${esc(r.name)} <span class="badge ${r.kind==="chatwork"?"":"b"}" style="${r.kind==="chatwork"?"background:#d97706":""}">${r.kind==="chatwork"?"Chatwork":"Lark"}</span>${r.is_active?"":" <span class='badge'>停止中</span>"}</b>
     <span style="flex-shrink:0"><button class="btn sm sub" data-lredit="${r.id}" style="margin:0 4px 0 0">編集</button><button class="btn sm sub" data-lrtest="${r.id}" style="margin:0">テスト</button></span>
    </div>
    <p style="margin:6px 0 0;font-size:12px">🔔 ${evs.length?esc(evs.join(" ／ ")):"（未設定）"}</p>
@@ -2124,8 +2138,10 @@ async function settingsLarkView(){
   h+=`<div class="card" style="margin-top:14px;background:#f0f7ff"><h3>${r.id?"通知先の編集":"通知先の追加"}</h3>
    <p class="muted" style="margin:0">名前（分かりやすい呼び名）</p>
    <input type="text" id="lr-name" value="${esc(r.name||"")}" placeholder="例: チーム長の日報 → 経営グループ" style="margin-top:2px">
-   <p class="muted" style="margin:8px 0 0">Lark Webhook URL</p>
-   <input type="text" id="lr-url" value="${esc(r.webhook_url||"")}" placeholder="https://open.larksuite.com/open-apis/bot/v2/hook/..." style="margin-top:2px">
+   <p class="muted" style="margin:10px 0 2px">送り先の種類</p>
+   <div><span class="chip lr-kind ${(r.kind||"lark")==="lark"?"on":""}" data-k="lark">Lark</span><span class="chip lr-kind ${r.kind==="chatwork"?"on":""}" data-k="chatwork">Chatwork</span></div>
+   <p class="muted" style="margin:10px 0 0">${r.kind==="chatwork"?"ChatworkのルームID（チャット画面URLの末尾の数字）":"Lark Webhook URL"}</p>
+   <input type="text" id="lr-url" value="${esc(r.webhook_url||"")}" placeholder="${r.kind==="chatwork"?"例: 123456789":"https://open.larksuite.com/open-apis/bot/v2/hook/..."}" style="margin-top:2px">
    <p class="muted" style="margin:10px 0 4px">🔔 通知する動き（複数選べます）</p>
    <div>${Object.entries(LARK_EVENTS).map(([k,v])=>`<span class="chip lr-ev ${(r.events||[]).includes(k)?"on":""}" data-e="${k}" style="font-size:12px">${v}</span>`).join("")}</div>
    <p class="muted" style="margin:10px 0 4px">対象の役職<span style="font-size:11px">（応募の通知では条件は使われません）</span></p>
@@ -2144,12 +2160,15 @@ async function settingsLarkView(){
 async function saveLarkRoute(){
  const r=lrEdit;
  const name=$("lr-name").value.trim(),url=$("lr-url").value.trim();
+ const kindChip=document.querySelector(".chip.lr-kind.on");
+ const kind=kindChip?kindChip.dataset.k:"lark";
  if(!name){toast("名前を入力してください",true);return}
- if(!/^https?:\/\//.test(url)){toast("Webhook URLを正しく入力してください",true);return}
+ if(kind==="chatwork"){ if(!/^\d+$/.test(url)){toast("ChatworkのルームID（数字）を入力してください",true);return} }
+ else if(!/^https?:\/\//.test(url)){toast("Webhook URLを正しく入力してください",true);return}
  const events=[...document.querySelectorAll(".chip.lr-ev.on")].map(c=>c.dataset.e);
  if(!events.length){toast("通知する動きを1つ以上選んでください",true);return}
  const row={name,webhook_url:url,role:$("lr-role").value||null,team_id:$("lr-team").value||null,
-  store_id:$("lr-store").value||null,events,kinds:events.filter(e=>e.startsWith("report_")).map(e=>e.replace("report_","")),
+  store_id:$("lr-store").value||null,events,kind,kinds:events.filter(e=>e.startsWith("report_")).map(e=>e.replace("report_","")),
   is_active:document.querySelector(".chip.lr-active").classList.contains("on"),updated_by:me.id};
  if(r.id)row.id=r.id;
  $("lr-save").disabled=true;
@@ -2659,6 +2678,21 @@ function bindPage(){
  if($("ap-add"))$("ap-add").onclick=()=>{collectApplyDom();cfgApply[applyKeyEdit].fields.push({k:"",label:"",type:"text",req:false,opts:[]});render()};
  if($("ap-save"))$("ap-save").onclick=saveApplyForm;
  // v2.5.8 Lark通知
+ if($("cw-save"))$("cw-save").onclick=async()=>{ // v2.6.9
+  const v=$("cw-token").value.trim();
+  if(!v){toast("トークンを入力してください",true);return}
+  const {error}=await sb.from("app_secrets").upsert({key:"chatwork_token",value:v,updated_by:me.id,updated_at:new Date().toISOString()});
+  if(error){toast("保存エラー: "+error.message,true);return}
+  cwToken=v;$("cw-token").value="";toast("Chatworkトークンを保存しました");render();
+ };
+ if($("sm-urlsave"))$("sm-urlsave").onclick=async()=>{
+  const v=$("sm-url").value.trim();
+  if(v&&!/^https?:\/\//.test(v)){toast("http から始まるURLを入力してください",true);return}
+  if(v&&!v.includes("{ID}")){toast("URLの中の従業員ID部分を {ID} に置き換えてください",true);return}
+  const {error}=await sb.from("app_secrets").upsert({key:"smaregi_staff_url",value:v,updated_by:me.id,updated_at:new Date().toISOString()});
+  if(error){toast("保存エラー: "+error.message,true);return}
+  smUrlTpl=v;toast(v?"スマレジのURLを保存しました":"設定を消しました");
+ };
  if($("lark-save"))$("lark-save").onclick=async()=>{
   const url=$("lark-url").value.trim();
   const {error}=await sb.from("app_secrets").upsert({key:"lark_webhook",value:url,updated_by:me.id,updated_at:new Date().toISOString()});
@@ -2666,7 +2700,7 @@ function bindPage(){
   larkUrl=url;toast(url?"Lark通知を設定しました":"Lark通知をオフにしました");
  };
  if($("lark-routes"))$("lark-routes").onclick=()=>{setMode="lark";lrList=null;lrEdit=null;render()};
- if($("lr-add"))$("lr-add").onclick=()=>{lrEdit={name:"",webhook_url:"",events:["report_daily"],is_active:true};render()};
+ if($("lr-add"))$("lr-add").onclick=()=>{lrEdit={name:"",webhook_url:"",events:["report_daily"],is_active:true,kind:"lark"};render()};
  if($("lr-cancel"))$("lr-cancel").onclick=()=>{lrEdit=null;render()};
  document.querySelectorAll("[data-lredit]").forEach(b=>b.onclick=()=>{lrEdit={...(lrList||[]).find(x=>x.id===b.dataset.lredit)};render()});
  document.querySelectorAll("[data-lrtest]").forEach(b=>b.onclick=async()=>{
@@ -2674,6 +2708,12 @@ function bindPage(){
   toast(error?"テスト失敗: "+error.message:String(data||"送信しました"),!!error);
  });
  document.querySelectorAll(".chip.lr-ev, .chip.lr-active").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
+ document.querySelectorAll(".chip.lr-kind").forEach(c=>c.onclick=()=>{ // v2.6.9 送り先の種類
+  lrEdit={...lrEdit,name:$("lr-name").value,webhook_url:$("lr-url").value,kind:c.dataset.k,
+   events:[...document.querySelectorAll(".chip.lr-ev.on")].map(x=>x.dataset.e),
+   is_active:document.querySelector(".chip.lr-active").classList.contains("on")};
+  render();
+ });
  if($("lr-save"))$("lr-save").onclick=saveLarkRoute;
  if($("lr-del"))$("lr-del").onclick=async()=>{
   if(!confirm("この通知先を削除します。よろしいですか？"))return;

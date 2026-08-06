@@ -2455,7 +2455,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.26</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.27</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2778,7 +2778,17 @@ async function saveFmt(){
  const merged={...(appSettings.formats||{}),...cfgFmts};
  const {error}=await sb.from("app_settings").upsert({key:"formats",value:merged,updated_at:new Date().toISOString(),updated_by:me.id});
  if(error){toast("保存エラー: "+error.message,true);$("f-save").disabled=false;return}
- appSettings.formats=merged;
+ // v2.6.27 保存できたか読み直して確かめる
+ // （権限で拒否された書き込みはエラーにならず「0件処理」で成功に見えるため）
+ const {data:chk}=await sb.from("app_settings").select("value").eq("key","formats").maybeSingle();
+ const saved=(chk&&chk.value&&chk.value[fmtRole])||null;
+ if(!saved||JSON.stringify(saved)!==JSON.stringify(list)){
+  $("f-save").disabled=false;
+  toast("保存できませんでした。保存する権限が無い可能性があります（社長アカウントでお試しください）",true);
+  return;
+ }
+ appSettings.formats=chk.value;
+ cfgFmts={};
  toast("保存しました");render();
 }
 async function resetFmt(){

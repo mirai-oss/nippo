@@ -182,6 +182,7 @@ const FEATURE_DEFAULTS={ // DB未設定時のフォールバック（v2.3まで�
  kpi_config:["CEO","HQ"]
 };
 const ROLES_ALL=Object.keys(ROLE_NAME);
+const FMT_ROLES=["AL","SHAIN","TENCHO","TEAM","HQ","GAIHAN"]; // v2.6.26 フォーマットを作れる役職
 const can=f=>{
  if(!me)return false;
  if(me.role==="CEO")return true; // 社長は常に全機能
@@ -312,7 +313,13 @@ function toast(msg,isErr){
 }
 const fmtAll=(role)=>((appSettings.formats&&appSettings.formats[role])||FORMATS[role]||[]);
 const fmtFor=(role)=>fmtAll(role).filter(f=>!f.kennin||isKennin());
-const weeklyFmt=()=>((appSettings.formats&&appSettings.formats.WEEKLY)||WEEKLY_FMT);
+// v2.6.26 週報も役職ごとに持てるようにする
+// 役職ぶんが未設定なら、これまでの共通（WEEKLY）→ 既定 の順に落ちるので、今までの設定はそのまま生きる
+const weeklyFmt=(role)=>{
+ const F=appSettings.formats||{};
+ const r=role||(me&&me.role);
+ return (r&&F["WEEKLY_"+r])||F.WEEKLY||WEEKLY_FMT;
+};
 // 入社フォーム設定（標準項目キーと表示名）
 const JOIN_STD=[["birth","生年月日"],["phone","電話番号"],["zip","郵便番号"],["addr","住所"],["ename","緊急連絡先の氏名"],["erel","緊急連絡先の続柄"],["ephone","緊急連絡先の電話"],["hire","入社日"]];
 function joinCfg(src){
@@ -376,6 +383,8 @@ function bindDrag(handleSel,cardSel,key,getList,collect){
   };
  });
 }
+// v2.6.26 LINE連携済みの目印（外部画像を読まずに済むよう図形で描いている）
+const LINE_ICON='<svg viewBox="0 0 40 38" width="19" height="18" style="vertical-align:-4px;margin-left:4px" role="img" aria-label="LINE連携済み"><title>LINE連携済み</title><path d="M20 0C9 0 0 7.2 0 16.1c0 8 7.1 14.7 16.7 15.9.7.1 1.6.4 1.8 1 .2.5.1 1.4.1 1.9l-.3 1.7c-.1.5-.4 2 1.8 1.1 2.2-.9 11.7-6.9 16-11.8 3-3.3 3.9-6.7 3.9-9.8C40 7.2 31 0 20 0z" fill="#06C755"/><text x="20" y="21" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" font-family="Helvetica,Arial,sans-serif">LINE</text></svg>';
 // v2.6.22 記入例（設定されていれば質問の下に薄く出す）
 const hintLine=t=>t?`<p class="muted" style="margin:2px 0 6px;font-size:12px">${esc(t)}</p>`:"";
 
@@ -878,6 +887,7 @@ async function writeView(kind){
  if(isEarlyMorning())h+=`<div class="info" style="margin-top:-4px">🌙 深夜のご入力ありがとうございます。朝6時までは<b>前日（${fmtDate(todayStr())}）の日報</b>として受け付けます。</div>`;
  fmt.forEach(f=>{
   h+=`<div class="card"><h3>${esc(f.label)} ${f.req?'<span class="req">必須</span>':""}</h3>`;
+  h+=hintLine(f.hint); // v2.6.26 記入例
   const v=form[f.k];
   if(f.type==="text"||f.type==="task"){
    h+=`<textarea rows="3" data-fk="${f.k}">${esc(v||"")}</textarea>`;
@@ -1515,7 +1525,7 @@ async function detailView(){
  const seen={};
  let h=`<span class="back" data-nav="list">← 一覧</span>
   <h2>${esc(r.author.name)}さんの${r.kind==="weekly"?"週報":"日報"} <span class="muted">${fmtDate(r.report_date)}</span></h2>`;
- (r.kind==="weekly"?weeklyFmt():fmtAll(r.author.role)).forEach(f=>{
+ (r.kind==="weekly"?weeklyFmt(r.author.role):fmtAll(r.author.role)).forEach(f=>{ // v2.6.26 書いた人の役職で表示
   if(seen[f.k])return;seen[f.k]=1;
   const v=r.answers[f.k];
   if(v==null||v===""||(Array.isArray(v)&&!v.length))return;
@@ -1722,7 +1732,7 @@ async function recruitView(){
        :storeSel("font-size:11px;padding:3px 6px;border:1.5px solid var(--blue);color:var(--blue);border-radius:8px;background:#fff;font-weight:600;max-width:140px")+`<span class="muted" style="font-size:11px">店舗を選ぶと発行できます</span>`)):"";
   // v2.6.18 ③ 店舗はプルダウンに（自動で拾えていないときはここで選べる）
   const hint=a.store_id?"":rcStoreName(a);
-  h+=`<div class="row" data-rcrow="${a.id}" style="cursor:default${od?";background:#fff1f2":(fNew||mNew)?";background:#fff7ed":""}"><span style="flex:1;min-width:0"><b>${rcNameAge(a)}</b> <span style="display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;vertical-align:middle">${stSel}${ivIn}${invBtn}${fNew?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span>':""}${mNew?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span>':""}${od?'<span class="badge" style="background:#c0392b">⚠️ 面接日超過</span>':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</span><br>
+  h+=`<div class="row" data-rcrow="${a.id}" style="cursor:default${od?";background:#fff1f2":(fNew||mNew)?";background:#fff7ed":""}"><span style="flex:1;min-width:0"><b>${rcNameAge(a)}</b>${a.line_user_id?LINE_ICON:""} <span style="display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;vertical-align:middle">${stSel}${ivIn}${invBtn}${fNew?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span>':""}${mNew?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span>':""}${od?'<span class="badge" style="background:#c0392b">⚠️ 面接日超過</span>':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</span><br>
    <span class="muted">${form?esc(form.title.replace("応募フォーム","")):esc(a.job_type||"")}・${storeSel("font-size:11px;padding:1px 3px;border:1px solid var(--line);border-radius:6px;background:#fff;color:inherit;max-width:136px;font-family:inherit")}${hint?"<span> 求人: "+esc(hint.split("、")[0].split(",")[0].slice(0,14))+"</span>":""}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}${a.interview_at?`・面接 ${fmtDue(a.interview_at)}`:""}${a.updated_at?`・更新 ${fmtDue(a.updated_at)}`:""}</span></span><button class="btn sm sub" data-rcopen="${a.id}" style="flex-shrink:0;margin:0;font-size:12px;padding:6px 10px">詳細</button></div>`;
  });
  if(list.length>rcShown)h+=`<button class="btn sm sub" id="rc-more" style="margin-top:10px;width:100%">▼ さらに100件表示する（残り ${list.length-rcShown}件）</button>`;
@@ -2445,7 +2455,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.25</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.26</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2707,14 +2717,24 @@ async function saveJoin(){
 const TYPE_NAMES={text:"記入式（自由記述）",date:"日付（カレンダー）",time:"時間（何時何分）",stars:"★5段階",num:"評価点数（1〜10）",select2:"単一選択（ボタン）",radio:"ラジオボタン",pull:"プルダウン",multi:"複数選択",check:"チェックリスト",photo:"写真添付",select:"店舗選択",task:"報告（タスク化）"};
 const OPT_TYPES=["multi","select2","check","radio","pull"];
 function curFmtList(){
- if(!cfgFmts[fmtRole])cfgFmts[fmtRole]=JSON.parse(JSON.stringify(fmtRole==="WEEKLY"?WEEKLY_FMT:(FORMATS[fmtRole]||[])));
+ if(!cfgFmts[fmtRole]){
+  // v2.6.26 WEEKLY_<役職> は「共通の週報」を下敷きにする
+  const base=fmtRole==="WEEKLY"?WEEKLY_FMT
+   :fmtRole.startsWith("WEEKLY_")?((appSettings.formats&&appSettings.formats.WEEKLY)||WEEKLY_FMT)
+   :(FORMATS[fmtRole]||[]);
+  cfgFmts[fmtRole]=JSON.parse(JSON.stringify(base));
+ }
  return cfgFmts[fmtRole];
 }
 function settingsFmtView(){
  const list=curFmtList();
  let h=`<span class="back" id="setback">← 設定</span><h2>日報・週報の項目設定</h2>
-  <div class="card" style="padding:12px">${["AL","SHAIN","TENCHO","TEAM","HQ","GAIHAN","WEEKLY"].map(r=>
-   `<span class="chip fmtrole ${fmtRole===r?"on":""}" data-r="${r}">${r==="WEEKLY"?"週報（共通）":ROLE_NAME[r]}</span>`).join("")}</div>`;
+  <div class="card" style="padding:12px">
+   <p class="muted" style="margin:0 0 4px;font-size:12px">📝 日報（役職ごと）</p>
+   <div>${FMT_ROLES.map(r=>`<span class="chip fmtrole ${fmtRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
+   <p class="muted" style="margin:10px 0 4px;font-size:12px">🗓 週報（役職ごと）※未設定の役職は「共通」の内容が使われます</p>
+   <div>${FMT_ROLES.map(r=>`<span class="chip fmtrole ${fmtRole==="WEEKLY_"+r?"on":""}" data-r="WEEKLY_${r}">${ROLE_NAME[r]}</span>`).join("")}
+    <span class="chip fmtrole ${fmtRole==="WEEKLY"?"on":""}" data-r="WEEKLY">共通</span></div></div>`;
  h+=`<p class="muted" style="font-size:12px">⠿ をドラッグ、または ↑↓ で並び替えできます。</p>`;
  h+=list.map((f,i)=>`<div class="card fcard" data-fi="${i}" style="padding:12px">
   <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
@@ -2728,6 +2748,7 @@ function settingsFmtView(){
    <span class="chip" data-fup="${i}">↑</span><span class="chip" data-fdn="${i}">↓</span>
    <span class="chip" data-fdel="${i}" style="color:var(--red)">削除</span></div>
   <input type="text" data-fopts="${i}" value="${esc((f.opts||[]).join("、"))}" placeholder="選択肢を「、」区切りで入力（例: 良い、普通、悪い）" style="margin:8px 0 0;font-size:13px;display:${OPT_TYPES.includes(f.type)?"":"none"}">
+  <input type="text" data-fhint="${i}" value="${esc(f.hint||"")}" placeholder="記入例・補足（例: 気づいたことを具体的に）" style="margin:6px 0 0;font-size:13px">
   </div>`).join("");
  h+=`<button class="btn sm sub" id="f-add">＋ 項目を追加</button>
   <button class="btn" id="f-save" style="margin-top:12px">この内容で保存する</button>
@@ -2741,6 +2762,7 @@ function collectFmtDom(){
  document.querySelectorAll("input[data-fopts]").forEach(inp=>{
   const v=inp.value.trim();list[+inp.dataset.fopts].opts=v?v.split(/[、,]/).map(x=>x.trim()).filter(Boolean):[];
  });
+ document.querySelectorAll("input[data-fhint]").forEach(inp=>list[+inp.dataset.fhint].hint=inp.value.trim()); // v2.6.26 記入例
  document.querySelectorAll(".chip.f-req").forEach(c=>list[+c.dataset.i].req=c.classList.contains("on"));
 }
 async function saveFmt(){

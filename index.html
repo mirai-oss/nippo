@@ -2728,7 +2728,10 @@ function curFmtList(){
 }
 function settingsFmtView(){
  const list=curFmtList();
+ // v2.6.27 いま何を編集しているかをはっきり出す（役職名が日報と週報で2回出るため取り違えやすい）
+ const editKind=fmtRole==="WEEKLY"?"🗓 週報（共通）":fmtRole.startsWith("WEEKLY_")?("🗓 週報 ／ "+(ROLE_NAME[fmtRole.slice(7)]||"")):("📝 日報 ／ "+(ROLE_NAME[fmtRole]||""));
  let h=`<span class="back" id="setback">← 設定</span><h2>日報・週報の項目設定</h2>
+  <div class="info" style="margin-top:-4px">いま編集中: <b>${esc(editKind)}</b></div>
   <div class="card" style="padding:12px">
    <p class="muted" style="margin:0 0 4px;font-size:12px">📝 日報（役職ごと）</p>
    <div>${FMT_ROLES.map(r=>`<span class="chip fmtrole ${fmtRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>

@@ -107,7 +107,7 @@
 <nav id="nav" style="display:none">
   <button data-p="home"><i>🏠</i>ホーム<span class="ndot" id="homedot" style="display:none"></span></button>
   <button data-p="write"><i>✏️</i>日報</button>
-  <button data-p="list"><i>📋</i>一覧</button>
+  <button data-p="list"><i>📋</i>一覧<span class="ndot" id="listdot" style="display:none"></span></button>
   <button data-p="check"><i>☑️</i>チェック</button>
   <button data-p="tasks"><i>✅</i>タスク<span class="ndot" id="taskdot" style="display:none"></span></button>
   <button data-p="chat"><i>💬</i>チャット<span class="ndot" id="chatdot" style="display:none"></span></button>
@@ -707,9 +707,10 @@ async function updateDots(){ // v1.7 未読通知バッジ（ホーム=自分宛
   const {data:ns}=await sb.from("notifications").select("id,type").eq("recipient_id",me.id).is("read_at",null).limit(100);
   const joins=(ns||[]).filter(n=>n.type==="join_registered").length;
   const recs=(ns||[]).filter(n=>n.type==="applicant_new").length; // v2.5.2 応募通知は応募タブへ
-  const others=(ns||[]).length-joins-recs;
+  const reps=(ns||[]).filter(n=>n.type==="report_new"||n.type==="report_updated").length; // v2.6.28 日報通知は一覧タブへ
+  const others=(ns||[]).length-joins-recs-reps;
   const set=(el,n)=>{if(!el)return;if(n>0){el.textContent=n>99?"99+":n;el.style.display=""}else el.style.display="none"};
-  set($("homedot"),others);set($("admdot"),joins);set($("recruitdot"),recs);
+  set($("homedot"),others);set($("admdot"),joins);set($("recruitdot"),recs);set($("listdot"),reps);
   const {count:tn}=await sb.from("tasks").select("id",{count:"exact",head:true}).eq("assignee_id",me.id).eq("status","open"); // v1.8 自分担当の未完了タスク
   set($("taskdot"),tn||0);
   set($("chatdot"),await chatUnreadTotal()); // v1.9 チャット未読
@@ -965,6 +966,7 @@ async function submitReport(){
  }
  await sb.from("report_drafts").delete().eq("user_id",me.id).eq("kind",writeKind);
  if(!editId)try{await sb.rpc("notify_report_lark",{p_report:rp.id,p_body:reportToText(rp)})}catch(e){} // v2.6.2 Lark通知
+ try{await sb.rpc("notify_report",{p_report:rp.id,p_updated:!!editId})}catch(e){} // v2.6.28 アプリ内通知（提出・修正とも。宛先はDB側で判定）
  toast(editId?"修正を保存しました":(writeKind==="weekly"?"週報を提出しました":"日報を提出しました"));
  form={};editId=null;page="home";render();
 }
@@ -1477,7 +1479,7 @@ async function dashView(){
 // ===== 一覧 =====
 async function listView(){
  const {data:rs,error}=await sb.from("reports")
-  .select("id,kind,report_date,submitted_at,store_id,answers,author:users!reports_author_id_fkey(id,name,role)")
+  .select("id,kind,report_date,submitted_at,updated_at,store_id,answers,author:users!reports_author_id_fkey(id,name,role)")
   .eq("kind",seg).order("report_date",{ascending:false}).order("submitted_at",{ascending:false}).limit(300);
  let h=`<h2>一覧</h2><div class="seg"><div class="${seg==="daily"?"on":""}" data-s="daily">日報</div><div class="${seg==="weekly"?"on":""}" data-s="weekly">週報</div></div>`;
  // v1.7 検索・フィルター
@@ -1499,11 +1501,11 @@ async function listView(){
  if(!list.length)return h+`<p class="muted">該当する${seg==="daily"?"日報":"週報"}はありません。</p>`;
  // 既読状態
  const ids=list.map(r=>r.id);
- const {data:reads}=await sb.from("report_reads").select("report_id").eq("user_id",me.id).in("report_id",ids);
- const readSet=new Set((reads||[]).map(x=>x.report_id));
+ const {data:reads}=await sb.from("report_reads").select("report_id,created_at").eq("user_id",me.id).in("report_id",ids);
+ const readAt={};(reads||[]).forEach(x=>readAt[x.report_id]=x.created_at); // v2.6.28 読んだ時刻（修正で未読に戻す判定に使う）
  const sname=id=>{const s=stores.find(x=>x.id===id);return s?s.name:""};
  list.forEach(r=>{
-  const unread=!readSet.has(r.id)&&r.author.id!==me.id;
+  const unread=r.author.id!==me.id&&(!readAt[r.id]||(r.updated_at&&readAt[r.id]<r.updated_at)); // 未読 or 読んだ後に修正された
   h+=`<div class="row" data-r="${r.id}"><span>${unread?"🔵 ":""}<b>${esc(r.author.name)}</b> <span class="muted">${ROLE_NAME[r.author.role]||""}${r.store_id?"・"+esc(sname(r.store_id)):""}</span></span><span class="muted">${fmtDate(r.report_date)}</span></div>`;
  });
  return h;
@@ -1514,8 +1516,12 @@ async function detailView(){
  const {data:r,error}=await sb.from("reports")
   .select("*,author:users!reports_author_id_fkey(id,name,role)").eq("id",detail).single();
  if(error||!r)return `<span class="back" data-nav="list">← 一覧</span><div class="alert">読み込めませんでした</div>`;
- // 既読を付ける
- if(r.author.id!==me.id)await sb.from("report_reads").upsert({report_id:r.id,user_id:me.id});
+ // 既読を付ける（v2.6.28 読んだ時刻をサーバー側で更新。SQL未適用の環境では旧方式で挿入だけ）
+ if(r.author.id!==me.id){
+  const {error:re}=await sb.rpc("mark_report_read",{p_report:r.id});
+  if(re)await sb.from("report_reads").upsert({report_id:r.id,user_id:me.id});
+  try{await sb.from("notifications").update({read_at:new Date().toISOString()}).eq("recipient_id",me.id).in("type",["report_new","report_updated"]).is("read_at",null).eq("link->>report_id",r.id)}catch(e){} // v2.6.28 この日報の通知も既読に
+ }
  const [{data:cs},{data:likes},{data:reads}]=await Promise.all([
   sb.from("report_comments").select("id,body,created_at,author:users!report_comments_author_id_fkey(name,role)").eq("report_id",r.id).order("created_at"),
   sb.from("report_likes").select("user_id").eq("report_id",r.id),
@@ -1537,6 +1543,7 @@ async function detailView(){
   h+=`<div class="card"><h3>${esc(f.label)}</h3><div style="font-size:14px;white-space:pre-wrap">${esc(disp)}</div></div>`;
  });
  h+=`<div class="card"><button class="btn sm ${liked?"":"sub"}" id="likebtn">❤️ いいね ${(likes||[]).length}</button>
+  ${r.author.id!==me.id?`<button class="btn sm sub" id="unreadbtn">📩 未読に戻す（あとで読み返す）</button>`:""}
   <p class="muted">既読: ${(reads||[]).map(x=>esc(x.user&&x.user.name||"")).filter(Boolean).join("、")||"まだいません"}</p></div>`;
  h+=`<div class="card"><h3>フィードバック</h3>`;
  (cs||[]).forEach(c=>{h+=`<div class="cmt"><b>${esc(c.author.name)}</b>（${ROLE_NAME[c.author.role]||""}）<br>${esc(c.body)}</div>`});
@@ -2455,7 +2462,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.27</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.28</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -2851,6 +2858,12 @@ function bindPage(){
   const {error}=await sb.from("report_comments").insert({report_id:detail,author_id:me.id,body:txt});
   if(error)toast("送信できませんでした: "+error.message,true);
   render();
+ };
+ if($("unreadbtn"))$("unreadbtn").onclick=async()=>{ // v2.6.28 未読に戻す（一覧に🔵が復活する）
+  const {data:del,error}=await sb.from("report_reads").delete().eq("report_id",detail).eq("user_id",me.id).select();
+  if(error){toast("未読に戻せませんでした: "+error.message,true);return}
+  if(!del||!del.length){toast("未読に戻せませんでした（v2_6_28.sql が未実行の可能性）",true);return} // RLS拒否は0行でも成功に見えるため件数で確認
+  toast("未読に戻しました");detail=null;render();updateDots();
  };
  // v1.8 タスク
  document.querySelectorAll("[data-tseg]").forEach(d=>d.onclick=()=>{tskSeg=d.dataset.tseg;tskEdit=null;render()});

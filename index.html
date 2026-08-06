@@ -710,11 +710,31 @@ async function updateDots(){ // v1.7 未読通知バッジ（ホーム=自分宛
   const reps=(ns||[]).filter(n=>n.type==="report_new"||n.type==="report_updated").length; // v2.6.28 日報通知は一覧タブへ
   const others=(ns||[]).length-joins-recs-reps;
   const set=(el,n)=>{if(!el)return;if(n>0){el.textContent=n>99?"99+":n;el.style.display=""}else el.style.display="none"};
-  set($("homedot"),others);set($("admdot"),joins);set($("recruitdot"),recs);set($("listdot"),reps);
+  set($("homedot"),others);set($("admdot"),joins);set($("recruitdot"),recs);
+  set($("listdot"),await listUnreadCount()); // v2.6.28 一覧の未読数（🔵の数と一致させる）
   const {count:tn}=await sb.from("tasks").select("id",{count:"exact",head:true}).eq("assignee_id",me.id).eq("status","open"); // v1.8 自分担当の未完了タスク
   set($("taskdot"),tn||0);
   set($("chatdot"),await chatUnreadTotal()); // v1.9 チャット未読
  }catch(e){}
+}
+// v2.6.28 一覧タブの赤バッジ＝直近7日で「まだ読んでいない／読んだ後に修正された」日報・週報の数
+// 通知の件数ではなく一覧の🔵と同じ条件で数えるので、SQL未適用でもそのまま動く
+const LIST_UNREAD_DAYS=7;
+async function listUnreadCount(){
+ try{
+  const since=new Date(Date.now()-LIST_UNREAD_DAYS*864e5).toISOString().slice(0,10);
+  const {data:rs}=await sb.from("reports").select("id,updated_at").gte("report_date",since).neq("author_id",me.id).limit(500);
+  if(!rs||!rs.length)return 0;
+  const {data:reads}=await sb.from("report_reads").select("report_id,created_at").eq("user_id",me.id).in("report_id",rs.map(r=>r.id));
+  const readAt={};(reads||[]).forEach(x=>readAt[x.report_id]=x.created_at);
+  return rs.filter(r=>isUnread(r,readAt[r.id])).length;
+ }catch(e){return 0}
+}
+// 未読の判定: まだ読んでいない or 読んだ後に修正された（時刻は日時に直して比べる）
+function isUnread(r,read){
+ if(!read)return true;
+ if(!r.updated_at)return false;
+ return new Date(r.updated_at).getTime()>new Date(read).getTime();
 }
 async function loadMe(uid){
  $("app").innerHTML='<div class="spin">読み込み中...</div>';
@@ -843,7 +863,7 @@ async function homeView(){
  await fetchToday();
  const [{count},{data:myNtf}]=await Promise.all([
   sb.from("reports").select("id",{count:"exact",head:true}),
-  sb.from("notifications").select("*").eq("recipient_id",me.id).is("read_at",null).neq("type","join_registered").neq("type","applicant_new").order("created_at",{ascending:false}).limit(10)
+  sb.from("notifications").select("*").eq("recipient_id",me.id).is("read_at",null).neq("type","join_registered").neq("type","applicant_new").neq("type","report_new").neq("type","report_updated").order("created_at",{ascending:false}).limit(10) // v2.6.28 日報の通知は一覧タブの赤バッジで見せるためホームからは外す
  ]);
  let h=`<h2>こんにちは、${esc(me.name)}さん</h2>`;
  if(me.stores.length)h+=`<p class="muted" style="margin-top:-8px">所属: ${me.stores.map(s=>esc(s.name)).join("・")}</p>`;
@@ -1505,7 +1525,7 @@ async function listView(){
  const readAt={};(reads||[]).forEach(x=>readAt[x.report_id]=x.created_at); // v2.6.28 読んだ時刻（修正で未読に戻す判定に使う）
  const sname=id=>{const s=stores.find(x=>x.id===id);return s?s.name:""};
  list.forEach(r=>{
-  const unread=r.author.id!==me.id&&(!readAt[r.id]||(r.updated_at&&readAt[r.id]<r.updated_at)); // 未読 or 読んだ後に修正された
+  const unread=r.author.id!==me.id&&isUnread(r,readAt[r.id]); // 未読 or 読んだ後に修正された（バッジと同じ判定）
   h+=`<div class="row" data-r="${r.id}"><span>${unread?"🔵 ":""}<b>${esc(r.author.name)}</b> <span class="muted">${ROLE_NAME[r.author.role]||""}${r.store_id?"・"+esc(sname(r.store_id)):""}</span></span><span class="muted">${fmtDate(r.report_date)}</span></div>`;
  });
  return h;
@@ -2462,7 +2482,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.28</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.29</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====

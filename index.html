@@ -449,15 +449,17 @@ async function renderApply(){
   <p class="center muted">${esc(f.title)}</p>
   <div class="card"><h3>基本情報 <span class="req">必須</span></h3>
    <input type="text" id="ap-name" placeholder="氏名（フルネーム）">
-   <input type="text" id="ap-phone" placeholder="電話番号">
-   <input type="email" id="ap-email" placeholder="メールアドレス（任意）"></div>`;
+   <input type="tel" inputmode="tel" autocomplete="tel" id="ap-phone" placeholder="電話番号">
+   <input type="email" inputmode="email" autocomplete="email" id="ap-email" placeholder="メールアドレス（任意）"></div>`;
  (f.fields||[]).forEach((fd,i)=>{
   h+=`<div class="card"><h3>${esc(fd.label)} ${fd.req?'<span class="req">必須</span>':""}</h3>`;
   h+=hintLine(fd.hint); // v2.6.22 記入例
   if(fd.type==="pull")h+=`<select class="inp" data-ap="${i}"><option value="">選択してください</option>${(fd.opts||[]).map(o=>`<option>${esc(o)}</option>`).join("")}</select>`+(hasOtherOpt(fd)?otherInput("apother",i):"");
   else if(fd.type==="radio")h+=(fd.opts||[]).map(o=>`<label class="radio-row"><input type="radio" name="apr${i}" data-apr="${i}" value="${esc(o)}">${esc(o)}</label>`).join("")+(hasOtherOpt(fd)?otherInput("apother",i):"");
   else if(fd.type==="multi"||fd.type==="check")h+=`<div>${(fd.opts||[]).map(o=>`<span class="chip" data-apm="${i}" data-o="${esc(o)}">${esc(o)}</span>`).join("")}</div>`;
-  else if(fd.type==="date"||fd.type==="time")h+=`<input type="${fd.type}" class="inp" data-ap="${i}" style="margin-top:0">`; // v2.6.22 カレンダー／v2.6.23 時間
+  else if(fd.type==="date")h+=`<input type="date" class="inp" data-ap="${i}" style="margin-top:0;font-size:16px;padding:12px">`; // v2.6.22 カレンダー
+  // v2.6.44 時間は「○時○分」の選ぶ形に（時計の入力は分かりにくいというご指摘）
+  else if(fd.type==="time")h+=hourMinPicker("aphm",i);
   else h+=`<textarea rows="2" data-ap="${i}"></textarea>`;
   h+=`</div>`;
  });
@@ -511,6 +513,7 @@ async function doApply(){
   let v="";
   if(fd.type==="radio"){const r=document.querySelector(`input[data-apr="${i}"]:checked`);v=r?r.value:""}
   else if(fd.type==="multi"||fd.type==="check"){v=[...document.querySelectorAll(`.chip[data-apm="${i}"].on`)].map(x=>x.dataset.o).join("、")}
+  else if(fd.type==="time"){v=hourMinValue("aphm",i)} // v2.6.44 ○時○分
   else{const el=document.querySelector(`[data-ap="${i}"]`);v=el?el.value.trim():""}
   v=withOther(v,"apother",i); // v2.6.22 「他（ネット銀行）」の形にする
   if(fd.req&&!v)missing=missing||fd.label;
@@ -616,16 +619,16 @@ async function renderJoin(){
    <p class="muted" style="margin:8px 0 0">性別 <span class="req">必須</span><span style="font-size:11px">（勤怠システムの登録に使用します）</span></p>
    <div style="margin-top:2px">${[["male","男性"],["female","女性"],["none","回答しない"]].map(([v,l])=>`<span class="chip jgender" data-g="${v}">${l}</span>`).join("")}</div>
    ${F.birth.on?`<p class="muted" style="margin:8px 0 0">生年月日${mark("birth")}</p>${hintLine(F.birth.hint)}<input type="date" id="j-birth" value="${esc(pf.birth)}">`:""}
-   ${F.phone.on?`${hintLine(F.phone.hint)}<input type="text" id="j-phone" placeholder="電話番号（例: 090-1234-5678)${F.phone.req?"※必須":""}" value="${esc(info.applicant_phone||pf.phone||"")}">`:""}</div>`;
+   ${F.phone.on?`${hintLine(F.phone.hint)}<input type="tel" inputmode="tel" autocomplete="tel" id="j-phone" placeholder="電話番号（例: 090-1234-5678)${F.phone.req?"※必須":""}" value="${esc(info.applicant_phone||pf.phone||"")}">`:""}</div>`;
  h+=`</div>`;
  if(!smLinked){
   if(F.zip.on||F.addr.on)h+=`<div class="card" data-joinsec><h3>住所${(F.zip.req||F.addr.req)?' <span class="req">必須</span>':""}</h3>
-    ${F.zip.on?`${hintLine(F.zip.hint)}<input type="text" id="j-zip" placeholder="郵便番号（例: 108-0014）" inputmode="numeric" value="${esc(pf.zip)}"><p class="muted" style="margin:2px 0 0;font-size:11px">郵便番号を入れると住所が自動で入ります</p>`:""}
+    ${F.zip.on?`${hintLine(F.zip.hint)}<input type="text" id="j-zip" placeholder="郵便番号（例: 108-0014）" inputmode="numeric" autocomplete="postal-code" value="${esc(pf.zip)}"><p class="muted" style="margin:2px 0 0;font-size:11px">郵便番号を入れると住所が自動で入ります</p>`:""}
     ${F.addr.on?`${hintLine(F.addr.hint)}<input type="text" id="j-addr" placeholder="住所" value="${esc(pf.addr)}">`:""}</div>`;
   if(F.ename.on||F.erel.on||F.ephone.on)h+=`<div class="card" data-joinsec><h3>緊急連絡先${(F.ename.req||F.erel.req||F.ephone.req)?' <span class="req">必須</span>':""}</h3>
     ${F.ename.on?`<input type="text" id="j-ename" placeholder="氏名" value="${esc(pf.ename)}">`:""}
     ${F.erel.on?`<input type="text" id="j-erel" placeholder="続柄（例: 父）" value="${esc(pf.erel)}">`:""}
-    ${F.ephone.on?`<input type="text" id="j-ephone" placeholder="電話番号" value="${esc(pf.ephone)}">`:""}</div>`;
+    ${F.ephone.on?`<input type="tel" inputmode="tel" id="j-ephone" placeholder="電話番号" value="${esc(pf.ephone)}">`:""}</div>`;
   if(F.hire.on)h+=`<div class="card" data-joinsec><h3>入社日${mark("hire")}</h3>${hintLine(F.hire.hint)}<input type="date" id="j-hire" value="${todayStr()}"></div>`;
   if(cfg.custom.length){
    h+=`<div class="card" data-joinsec><h3>追加項目</h3>`;
@@ -733,6 +736,22 @@ function interviewText(a){
  if(a.interview_url)t+=`\n【面接URL】${a.interview_url}\n\nお時間になりましたら、上のリンクからご参加ください。`;
  t+=`\n\nご都合が悪くなった場合は、このままご返信ください。\nお会いできるのを楽しみにしております。`;
  return t;
+}
+// v2.6.44 「○時○分」で選ぶ時間の入力（時計の画面より分かりやすい）
+// 例: 終電は何時ですか？ → [23]時 [45]分
+function hourMinPicker(key,i){
+ const h=[...Array(24).keys()].map(n=>`<option value="${pad2(n)}">${n}</option>`).join("");
+ const m=[0,5,10,15,20,25,30,35,40,45,50,55].map(n=>`<option value="${pad2(n)}">${pad2(n)}</option>`).join("");
+ const st="font-size:17px;padding:12px 8px;margin:0;min-width:88px";
+ return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+  <select class="inp" data-${key}h="${i}" style="${st}"><option value="">--</option>${h}</select><span>時</span>
+  <select class="inp" data-${key}m="${i}" style="${st}"><option value="">--</option>${m}</select><span>分</span></div>`;
+}
+// 選ばれた値を "HH:MM" で取り出す（どちらか片方だけなら空にする）
+function hourMinValue(key,i){
+ const h=document.querySelector(`[data-${key}h="${i}"]`),m=document.querySelector(`[data-${key}m="${i}"]`);
+ if(!h||!m||!h.value||!m.value)return "";
+ return `${h.value}:${m.value}`;
 }
 // v2.6.36 こちらから面接の候補日時を出すときの文面
 function altSlotsText(a,list){
@@ -1884,7 +1903,11 @@ async function adminView(){
 async function recruitView(){
  if(!can("recruit"))return `<p class="muted">このページを表示する権限がありません。</p>`;
  try{await sb.from("applicants").delete().in("status",["rejected","declined"]).lt("status_changed_at",new Date(Date.now()-365*864e5).toISOString());}catch(e){}
- try{await sb.from("notifications").update({read_at:new Date().toISOString()}).eq("recipient_id",me.id).eq("type","applicant_new").is("read_at",null);}catch(e){}
+ // v2.6.44 ここで全部を既読にしていたため、タブを開いた瞬間に通知が消えてしまっていた。
+ // 既読にするのは「その応募者を開いたとき」だけにする（rcMarkFormSeen で行う）。
+ // link に応募者が入っていない古い通知だけは、ここで片付ける
+ try{await sb.from("notifications").update({read_at:new Date().toISOString()})
+  .eq("recipient_id",me.id).eq("type","applicant_new").is("read_at",null).is("link->>applicant_id",null);}catch(e){}
  if(!rcForms){const {data:f}=await sb.from("applicant_forms").select("*");rcForms=f||[]}
  const {data:as,error}=await sb.from("applicants").select("*").order("applied_at",{ascending:false}).limit(1000); // v2.5.3 移行データ対応で上限拡大
  if(error)return `<h2>📥 応募者管理</h2><div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
@@ -2105,7 +2128,7 @@ async function recruitView(){
  // 手動追加
  h+=`<div class="card"><h3>＋ 手動で追加（電話・紹介など）</h3>
   <input type="text" id="rc-aname" placeholder="氏名">
-  <input type="text" id="rc-aphone" placeholder="電話番号">
+  <input type="tel" inputmode="tel" id="rc-aphone" placeholder="電話番号">
   <div style="display:flex;gap:8px;margin-top:6px">
    <select class="inp" id="rc-aform" style="margin:0"><option value="al">アルバイト</option><option value="shain">社員</option></select>
    <select class="inp" id="rc-asrc" style="margin:0">${Object.entries(APPLICANT_SOURCE).filter(([k])=>k!=="form").map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select>
@@ -2131,6 +2154,13 @@ async function rcMarkFormSeen(id){ // v2.6.31 自分が開いた記録だけを�
  rcReads[id]=new Date().toISOString();
  const {error}=await sb.rpc("mark_applicant_read",{p_applicant:id});
  if(error)try{await sb.from("applicant_reads").upsert({applicant_id:id,user_id:me.id,read_at:rcReads[id]})}catch(e){}
+ // v2.6.44 この応募者あての通知だけを既読にする（応募・LINE連携・メッセージ）
+ try{
+  await sb.from("notifications").update({read_at:new Date().toISOString()})
+   .eq("recipient_id",me.id).eq("type","applicant_new").is("read_at",null)
+   .eq("link->>applicant_id",id);
+  updateDots();
+ }catch(e){}
 }
 // v2.6.21 招待リンク（入社登録フォーム）をLINEで自動送信する。連携済みのときだけ動く
 async function rcSendInviteLine(id){
@@ -2319,7 +2349,7 @@ function recruitDetailView(){
  h+=`<p class="muted" style="margin:8px 0 0">返信は上の「▶ Indeedページを開く」からIndeedの画面で行ってください${msgs.length?"<br>送り手が違っていたら「↔ …に直す」を押してください。<b>同じ相手のメッセージがまとめて直り、次からも自動で正しくなります</b>":""}</p></details></div>`;
  h+=`<div class="card"><h3>✏️ 基本情報（タップで編集できます）</h3>
   <input type="text" id="rc-ename" placeholder="氏名" value="${esc(a.name)}">
-  <input type="text" id="rc-ephone" placeholder="電話番号" value="${esc(a.phone||"")}">
+  <input type="tel" inputmode="tel" id="rc-ephone" placeholder="電話番号" value="${esc(a.phone||"")}">
   <input type="email" id="rc-eemail" placeholder="メールアドレス" value="${esc(a.email||"")}">
   <input type="text" id="rc-ejob" placeholder="希望職種・業務（例: ホール）" value="${esc(a.job_type||"")}">
   <select class="inp" id="rc-eform"><option value="">区分: 未設定</option><option value="al"${a.form_key==="al"?" selected":""}>アルバイト</option><option value="shain"${a.form_key==="shain"?" selected":""}>社員</option></select></div>`;
@@ -2786,7 +2816,7 @@ async function settingsView(){
    <p class="muted" style="margin:8px 0 0">緊急連絡先</p>
    <input type="text" id="pf-ename" value="${esc(myProf.emergency_name||"")}" placeholder="氏名" style="margin-top:2px">
    <input type="text" id="pf-erel" value="${esc(myProf.emergency_relation||"")}" placeholder="続柄（例: 父）">
-   <input type="text" id="pf-ephone" value="${esc(myProf.emergency_phone||"")}" placeholder="電話番号">
+   <input type="tel" inputmode="tel" id="pf-ephone" value="${esc(myProf.emergency_phone||"")}" placeholder="電話番号">
    <button class="btn sm" id="pf-save">プロフィールを保存</button></div>
   <div class="card"><h3>🔑 パスワードの変更</h3>
    <input type="password" id="pf-pw" placeholder="新しいパスワード（8文字以上）" autocomplete="new-password">
@@ -2867,7 +2897,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.43</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.44</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3547,12 +3577,27 @@ function bindPage(){
   const {error}=await sb.rpc("set_interview",{p_applicant:a.id,p_at:iso,p_url:url||null});
   if(error){toast("確定できませんでした: "+error.message,true);return}
   await saveEventId(a.id,m.event_id);
-  toast(url?(m.updated?"面接日時を確定し、カレンダーの予定も直しました":"面接日時を確定し、URLを発行しました"):"面接日時を確定しました");
+  // v2.6.44 LINE連携済みなら、確定と同時にご案内（面接URL入り）を自動送信する
+  let sent="";
+  if(a.line_user_id){
+   const txt=interviewText({...a,interview_at:iso,interview_url:url});
+   const r=await lineFn({action:"push",applicant_id:a.id,text:txt});
+   if(r.ok){
+    try{await sb.rpc("line_claim_last_out",{p_applicant:a.id})}catch(e){}
+    try{await sb.rpc("mark_interview_sent",{p_applicant:a.id})}catch(e){}
+    sent="／LINEでご案内を送りました";
+   }else{
+    toast("確定しましたが、LINEを送れませんでした: "+(r.error||"不明"),true);
+   }
+  }
+  toast((url?(m.updated?"面接日時を確定し、カレンダーの予定も直しました":"面接日時を確定し、URLを発行しました"):"面接日時を確定しました")+sent);
   rcList=null;rcSimilar=[];rcPast=[];render();
  };
  document.querySelectorAll("[data-ivpick]").forEach(b=>b.onclick=async()=>{
   const iso=new Date(`${b.dataset.ivpick}T${b.dataset.ivtime}:00`).toISOString();
-  if(!confirm(`${b.dataset.ivpick} ${b.dataset.ivtime} で面接を確定します。よろしいですか？`))return;
+  const ap=rcList.find(x=>x.id===rcDetail);
+  const note=ap&&ap.line_user_id?"\n面接URLを発行し、LINEでご案内を自動送信します。":"\n面接URLを発行します。";
+  if(!confirm(`${b.dataset.ivpick} ${b.dataset.ivtime} で面接を確定します。${note}\nよろしいですか？`))return;
   b.disabled=true;await ivConfirm(iso);
  });
  if($("rc-ivset"))$("rc-ivset").onclick=async()=>{

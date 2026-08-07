@@ -667,6 +667,16 @@ function interviewText(a){
  t+=`\n\nご都合が悪くなった場合は、このままご返信ください。\nお会いできるのを楽しみにしております。`;
  return t;
 }
+// v2.6.36 こちらから面接の候補日時を出すときの文面
+function altSlotsText(a,list){
+ const when=v=>{const d=new Date(v);
+  return `${d.getMonth()+1}月${d.getDate()}日(${"日月火水木金土"[d.getDay()]}) ${pad2(d.getHours())}:${pad2(d.getMinutes())}`};
+ return `${a.name}さん\n\nこの度はご応募いただきありがとうございます。\n`
+  +`いただいたご希望の日時が埋まってしまっており、大変申し訳ございません。\n`
+  +`下記でしたらご案内できますので、ご都合のよいものをお知らせください。\n\n`
+  +list.map((v,i)=>`${i+1}. ${when(v)}`).join("\n")
+  +`\n\nいずれもご都合が合わない場合は、ご希望の日時をお知らせください。\nお手数をおかけしますが、よろしくお願いいたします。`;
+}
 // v2.6.33 重複の確認（同じ氏名で2件以上ある人の一覧）
 async function recruitDupView(){
  if(rcDupList===null){
@@ -2148,6 +2158,14 @@ function recruitDetailView(){
  }else{
   h+=`<p class="muted" style="margin:8px 0 0">本人からの希望日時はありません（応募フォームより前に登録された方です）</p>`;
  }
+ // v2.6.36 希望日時が全部埋まっているとき、こちらから候補を出して聞き直す
+ if(!a.interview_at){
+  h+=`<details style="margin-top:8px"><summary class="muted">希望日時がどれも合わない → こちらから候補を出す</summary>
+   <p class="muted" style="margin:6px 0 4px">空いている日時を最大3つ入れると、ご案内文ができます</p>
+   ${[0,1,2].map(n=>`<input type="datetime-local" class="inp" data-ivalt="${n}" style="margin-top:4px">`).join("")}
+   <button class="btn sm" id="rc-ivalt" style="margin-top:6px">${a.line_user_id?"💚 LINEでこの候補を送る":"📋 案内文をコピーする"}</button>
+   </details>`;
+ }
  h+=`<p class="muted" style="margin:8px 0 4px">別の日時にする場合はこちら</p>
   <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
    <input type="datetime-local" id="rc-ivat" class="inp" style="margin:0;max-width:220px" value="${a.interview_at?new Date(new Date(a.interview_at).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):""}">
@@ -2429,11 +2447,12 @@ async function smaregiStores(){ // スマレジ店舗一覧（紐付け用）
 async function adminStoresView(){
  if(!stList){
   const {data}=await sb.from("stores").select("*").order("sort_order");
-  stList=(data||[]).map(s=>({id:s.id,name:s.name,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||""}));
+  stList=(data||[]).map(s=>({id:s.id,name:s.name,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||"",interviewer_id:s.interviewer_id||""}));
+  await chatEnsureUsers(); // v2.6.36 面接担当を選ぶため
  }
  if(stSmaregi===undefined)stSmaregi=await smaregiStores();
  let h=`<span class="back" id="adback">← 従業員一覧</span><h2>店舗管理</h2>
- <p class="muted" style="margin-top:-8px;font-size:13px">店舗の追加・名前変更・並び替えができます。閉店した店舗は「非表示」に（過去の日報データは残ります）。スマレジ店舗と紐付けておくと、今後の売上ダッシュボード連携の土台になります。</p>`;
+ <p class="muted" style="margin-top:-8px;font-size:13px">店舗の追加・名前変更・並び替えができます。閉店した店舗は「非表示」に（過去の日報データは残ります）。スマレジ店舗と紐付けておくと、今後の売上ダッシュボード連携の土台になります。<br><b>面接担当を決めておくと、その店舗の応募者が自動でその人の担当になります。</b></p>`;
  h+=stList.map((s,i)=>`<div class="card" style="padding:12px">
   <div style="display:flex;gap:8px;align-items:center">
    <span class="fnum">${i+1}</span>
@@ -2443,6 +2462,7 @@ async function adminStoresView(){
    <span class="chip st-act ${s.is_active?"on":""}" data-i="${i}">${s.is_active?"営業中":"非表示"}</span>
    <span class="chip" data-stup="${i}">↑</span><span class="chip" data-stdn="${i}">↓</span>
   </div>
+  <select class="inp" data-stiv="${i}" style="font-size:13px"><option value="">📅 面接担当: 決めない</option>${(tskUsers||[]).map(u=>`<option value="${u.id}" ${s.interviewer_id===u.id?"selected":""}>📅 面接担当: ${esc(u.name)}（${ROLE_NAME[u.role]||""}）</option>`).join("")}</select>
   ${stSmaregi?`<select class="inp" data-stsm="${i}" style="font-size:13px"><option value="">スマレジ店舗と紐付けない</option>${stSmaregi.map(m=>`<option value="${esc(m.id)}" ${s.smaregi_store_id===m.id?"selected":""}>スマレジ: ${esc(m.name)}</option>`).join("")}</select>`:`<p class="muted" style="margin:8px 0 0">スマレジ店舗一覧を取得できませんでした（紐付けは後で設定できます）</p>`}
  </div>`).join("");
  h+=`<div class="card"><h3>＋ 店舗を追加</h3><input type="text" id="st-newname" placeholder="店舗名（例: 鳥一代 渋谷店）"><button class="btn sm" id="st-add">追加する</button><p class="muted">追加すると店舗チャットも自動で作成されます</p></div>
@@ -2453,6 +2473,7 @@ function collectStoresDom(){
  document.querySelectorAll("input[data-stname]").forEach(inp=>stList[+inp.dataset.stname].name=inp.value.trim());
  document.querySelectorAll(".chip.st-act").forEach(c=>stList[+c.dataset.i].is_active=c.classList.contains("on"));
  document.querySelectorAll("select[data-stsm]").forEach(s=>stList[+s.dataset.stsm].smaregi_store_id=s.value);
+ document.querySelectorAll("select[data-stiv]").forEach(s=>stList[+s.dataset.stiv].interviewer_id=s.value); // v2.6.36
 }
 async function addStore(){
  const name=$("st-newname").value.trim();
@@ -2461,7 +2482,7 @@ async function addStore(){
  $("st-add").disabled=true;
  const {data:ns,error}=await sb.from("stores").insert({name,sort_order:stList.length+1}).select().single();
  if(error){toast("追加エラー: "+(error.message.includes("duplicate")?"同じ名前の店舗がすでにあります":error.message),true);$("st-add").disabled=false;return}
- stList.push({id:ns.id,name:ns.name,is_active:true,smaregi_store_id:""});
+ stList.push({id:ns.id,name:ns.name,is_active:true,smaregi_store_id:"",interviewer_id:""});
  toast("店舗を追加しました（チャットも自動作成）");render();
 }
 async function saveStores(){
@@ -2469,7 +2490,7 @@ async function saveStores(){
  if(stList.some(s=>!s.name)){toast("店舗名を入力してください",true);return}
  $("st-save").disabled=true;
  for(const [i,s] of stList.entries()){
-  const {error}=await sb.from("stores").update({name:s.name,sort_order:i+1,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||null}).eq("id",s.id);
+  const {error}=await sb.from("stores").update({name:s.name,sort_order:i+1,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||null,interviewer_id:s.interviewer_id||null}).eq("id",s.id);
   if(error){toast("保存エラー: "+error.message,true);$("st-save").disabled=false;return}
  }
  const {data:st2}=await sb.from("stores").select("id,name").eq("is_active",true).order("sort_order");
@@ -2746,7 +2767,7 @@ async function settingsView(){
   <p class="muted" style="margin:6px 0 0;font-size:11px">保存済みの内容は安全のため表示されません。変えたいときだけ入力してください</p></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.35</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.36</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3422,6 +3443,23 @@ function bindPage(){
    updated_at:new Date().toISOString(),last_actor_id:me.id,last_actor_at:new Date().toISOString()}).eq("id",rcDetail);
   if(error){toast("保存エラー: "+error.message,true);return}
   toast("面接URLを保存しました");rcList=null;render();
+ };
+ if($("rc-ivalt"))$("rc-ivalt").onclick=async()=>{ // v2.6.36 こちらから候補を出して聞き直す
+  const a=rcList.find(x=>x.id===rcDetail);if(!a)return;
+  const list=[...document.querySelectorAll("[data-ivalt]")].map(el=>el.value).filter(Boolean).sort();
+  if(!list.length){toast("候補の日時を1つ以上入れてください",true);return}
+  const txt=altSlotsText(a,list);
+  if(a.line_user_id){
+   $("rc-ivalt").disabled=true;
+   const r=await lineFn({action:"push",applicant_id:a.id,text:txt});
+   $("rc-ivalt").disabled=false;
+   if(!r.ok){toast("送信できませんでした: "+(r.error||"不明"),true);return}
+   try{await sb.rpc("line_claim_last_out",{p_applicant:a.id})}catch(e){}
+   toast("LINEで候補をお送りしました");
+  }else{
+   copyText(txt);toast("案内文をコピーしました。Indeedやメールに貼り付けて送ってください");
+  }
+  rcList=null;render();
  };
  if($("rc-ivsend"))$("rc-ivsend").onclick=async()=>{
   const a=rcList.find(x=>x.id===rcDetail);if(!a||!a.interview_at)return;

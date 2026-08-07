@@ -378,6 +378,115 @@ function withOther(v,attr,i){ // 「他」＋自由記入 → 「他（ネット
 }
 // v2.6.23 郵便番号を入れたら住所を自動で入れる（zipcloud・無料/登録不要）
 // 住所欄がすでに埋まっているときは上書きしない（本人が書いた番地を消さないため）
+// v2.6.45 入社情報の編集カード（社長・本部は全員ぶん、本人は自分の分）
+// pre は入力欄のIDの頭文字（管理画面と設定画面で重ならないようにする）
+function profileEditCard(prof,pre){
+ const p=prof||{};
+ const g=(id,label,val,type,ph)=>`<p class="muted" style="margin:8px 0 2px">${label}</p>
+  <input type="${type||"text"}"${type==="tel"?' inputmode="tel"':""} id="${pre}-${id}" value="${esc(val||"")}" placeholder="${esc(ph||"")}" style="margin-top:0">`;
+ return `<div class="card"><details><summary style="cursor:pointer"><b style="font-size:15px">✏️ 入社情報を直す</b>
+   <span class="muted" style="font-size:11px">（引っ越し・電話番号の変更など）</span></summary>
+  ${g("kana","フリガナ",p.name_kana,"text","ヤマダ タロウ")}
+  ${g("birth","生年月日",p.birth_date,"date")}
+  ${g("phone","電話番号",p.phone,"tel","09012345678")}
+  ${g("zip","郵便番号",p.postal_code,"text","222-0033")}
+  ${g("addr","住所",p.address,"text","")}
+  <p style="margin:6px 0 0"><button class="btn sm sub" id="${pre}-station" style="margin:0">🚉 住所から最寄り駅を調べる</button></p>
+  <div id="${pre}-stationbox" style="margin-top:6px"></div>
+  ${g("ename","緊急連絡先の氏名",p.emergency_name)}
+  ${g("erel","続柄",p.emergency_relation,"text","父")}
+  ${g("ephone","緊急連絡先の電話",p.emergency_phone,"tel")}
+  ${g("hire","入社日",p.hire_date,"date")}
+  <button class="btn sm" id="${pre}-save" style="margin-top:10px">この内容で保存する</button>
+  </details></div>`;
+}
+// 入社情報の編集カードを動かす（保存・郵便番号・最寄り駅）
+function bindProfileEdit(pre,userId){
+ if(!$(pre+"-save"))return;
+ bindZip(pre+"-zip",pre+"-addr");
+ bindPhone(pre+"-phone");bindPhone(pre+"-ephone");
+ $(pre+"-station").onclick=async()=>{ // v2.6.45 住所から最寄り駅の候補を出す
+  const box=$(pre+"-stationbox"),addr=$(pre+"-addr").value.trim();
+  if(!addr){toast("先に住所を入れてください",true);return}
+  box.innerHTML=`<p class="muted" style="margin:0">調べています…</p>`;
+  const st=await stationsNear(addr);
+  if(!st.length){box.innerHTML=`<p class="muted" style="margin:0">最寄り駅が見つかりませんでした（住所をもう少し詳しく入れてみてください）</p>`;return}
+  box.innerHTML=`<p class="muted" style="margin:0 0 4px">近い順です。選ぶと「最寄り駅」として保存されます</p>`
+   +st.map(x=>`<span class="chip stpick" data-st="${esc(x.name+"駅（"+x.line+"）")}">${esc(x.name)}駅 <span class="muted">${esc(x.line)}・${esc(x.distance||"")}</span></span>`).join("");
+  box.querySelectorAll(".chip.stpick").forEach(c=>c.onclick=()=>{
+   box.querySelectorAll(".chip.stpick").forEach(x=>x.classList.remove("on"));c.classList.add("on");
+  });
+ };
+ $(pre+"-save").onclick=async()=>{
+  const v=id=>{const el=$(pre+"-"+id);return el?el.value.trim():""};
+  const ph=v("phone"),eph=v("ephone");
+  if(ph&&!phoneOk(ph)){toast("電話番号の桁数をご確認ください（10桁または11桁）",true);return}
+  if(eph&&!phoneOk(eph)){toast("緊急連絡先の桁数をご確認ください",true);return}
+  const pickedStation=$(pre+"-stationbox")?($(pre+"-stationbox").querySelector(".chip.stpick.on")||{}).dataset:null;
+  const rec={user_id:userId,name_kana:v("kana")||null,birth_date:v("birth")||null,phone:ph||null,
+   postal_code:v("zip")||null,address:v("addr")||null,emergency_name:v("ename")||null,
+   emergency_relation:v("erel")||null,emergency_phone:eph||null,hire_date:v("hire")||null,
+   updated_at:new Date().toISOString()};
+  // 最寄り駅は extra に入れる（スマレジの管理者メモにも送られる項目）
+  if(pickedStation&&pickedStation.st){
+   const {data:cur}=await sb.from("employee_profiles").select("extra").eq("user_id",userId).maybeSingle();
+   rec.extra=Object.assign({},(cur&&cur.extra)||{},{最寄り駅:pickedStation.st});
+  }
+  $(pre+"-save").disabled=true;
+  const {error}=await sb.from("employee_profiles").upsert(rec,{onConflict:"user_id"});
+  $(pre+"-save").disabled=false;
+  if(error){toast("保存エラー: "+error.message,true);return}
+  toast("入社情報を保存しました");render();
+ };
+}
+// v2.6.45 電話番号にハイフンを自動で入れる（桁の間違いに気づきやすくする）
+function fmtPhone(v){
+ const d=String(v||"").replace(/[^0-9]/g,"").slice(0,11);
+ if(!d)return "";
+ const cut=(a,b)=>d.length<=a?d:(d.length<=b?d.slice(0,a)+"-"+d.slice(a):d.slice(0,a)+"-"+d.slice(a,b)+"-"+d.slice(b));
+ if(/^0120/.test(d))return cut(4,7);        // フリーダイヤル
+ if(/^(0[789]0|050)/.test(d))return cut(3,7); // 携帯・IP電話
+ if(/^0[36]/.test(d))return cut(2,6);        // 東京・大阪
+ return cut(3,6);                            // その他の固定電話
+}
+// 桁数の確認（10桁か11桁が正しい）
+const phoneDigits=v=>String(v||"").replace(/[^0-9]/g,"").length;
+const phoneOk=v=>{const n=phoneDigits(v);return n===10||n===11};
+// 入力欄に「打ちながらハイフンが入る」動きを付ける
+function bindPhone(id){
+ const el=$(id);if(!el)return;
+ el.addEventListener("input",()=>{
+  const before=el.value,after=fmtPhone(before);
+  if(before!==after)el.value=after;
+  const n=phoneDigits(after);
+  el.style.borderColor=(n===0||phoneOk(after))?"":"var(--red)";
+ });
+}
+// v2.6.45 住所から郵便番号を調べる（郵便番号→住所の逆）
+async function zipFromAddress(addr){
+ const key=String(addr||"").replace(/[0-9０-９\-ー－]+.*$/,"").trim(); // 番地から後ろは外す
+ if(key.length<3)return null;
+ try{
+  const res=await fetch("https://geoapi.heartrails.com/api/json?method=suggest&matching=like&keyword="+encodeURIComponent(key));
+  const j=await res.json();
+  const l=j&&j.response&&j.response.location;
+  if(!l||!l.length)return null;
+  return l[0]; // {postal, prefecture, city, town, x, y}
+ }catch(e){return null}
+}
+// v2.6.45 住所から最寄り駅の候補を調べる
+async function stationsNear(addr){
+ const loc=await zipFromAddress(addr);
+ if(!loc||!loc.x||!loc.y)return [];
+ try{
+  const res=await fetch(`https://express.heartrails.com/api/json?method=getStations&x=${loc.x}&y=${loc.y}`);
+  const j=await res.json();
+  const st=(j&&j.response&&j.response.station)||[];
+  const seen={},out=[];
+  st.forEach(s=>{const k=s.name+"|"+s.line;if(seen[k])return;seen[k]=1;out.push(s)});
+  return out.slice(0,6);
+ }catch(e){return []}
+}
 function bindZip(zipId,addrId){
  const z=$(zipId),a=$(addrId);
  if(!z||!a)return;
@@ -397,6 +506,16 @@ function bindZip(zipId,addrId){
   }catch(e){ /* つながらないときは何もしない（手入力できるため） */ }
  };
  z.oninput=look; z.onblur=look;
+ // v2.6.45 住所を先に入れたときは、郵便番号を自動で埋める（逆引き）
+ a.addEventListener("blur",async()=>{
+  if(z.value.replace(/[^0-9]/g,"").length===7)return; // すでに入っていれば触らない
+  if(!a.value.trim())return;
+  const loc=await zipFromAddress(a.value);
+  if(!loc||!loc.postal)return;
+  z.value=loc.postal.slice(0,3)+"-"+loc.postal.slice(3);
+  last=loc.postal;
+  toast("住所から郵便番号を入れました");
+ });
 }
 // v2.6.23 ドラッグで並び替えする共通処理
 // handleSel=つまみ / cardSel=行全体 / key=data-属性名 / getList=並べ替える配列 / collect=画面の入力内容を配列に取り込む関数
@@ -449,8 +568,13 @@ async function renderApply(){
   <p class="center muted">${esc(f.title)}</p>
   <div class="card"><h3>基本情報 <span class="req">必須</span></h3>
    <input type="text" id="ap-name" placeholder="氏名（フルネーム）">
-   <input type="tel" inputmode="tel" autocomplete="tel" id="ap-phone" placeholder="電話番号">
-   <input type="email" inputmode="email" autocomplete="email" id="ap-email" placeholder="メールアドレス（任意）"></div>`;
+   <p class="muted" style="margin:8px 0 2px">電話番号 <span class="req">必須</span></p>
+   <input type="tel" inputmode="tel" autocomplete="tel" id="ap-phone" placeholder="09012345678"
+    style="font-size:20px;padding:16px;letter-spacing:1px;margin-top:0">
+   <p class="muted" style="margin:2px 0 0;font-size:12px">数字だけご入力ください。ハイフン（-）は自動で入ります</p>
+   <p class="muted" style="margin:10px 0 2px">メールアドレス <span class="req">必須</span></p>
+   <input type="email" inputmode="email" autocomplete="email" id="ap-email" placeholder="example@mail.com"
+    style="font-size:17px;padding:14px;margin-top:0"></div>`;
  (f.fields||[]).forEach((fd,i)=>{
   h+=`<div class="card"><h3>${esc(fd.label)} ${fd.req?'<span class="req">必須</span>':""}</h3>`;
   h+=hintLine(fd.hint); // v2.6.22 記入例
@@ -502,12 +626,16 @@ async function renderApply(){
  // v2.6.22 「他」を選んだら自由記入欄を出す
  document.querySelectorAll("select[data-ap]").forEach(el=>el.onchange=()=>toggleOther("apother",el.dataset.ap,el.value));
  document.querySelectorAll("input[data-apr]").forEach(el=>el.onchange=()=>toggleOther("apother",el.dataset.apr,el.value));
+ bindPhone("ap-phone"); // v2.6.45 打ちながらハイフンが入る
  $("ap-submit").onclick=doApply;
 }
 async function doApply(){
  const name=$("ap-name").value.trim(),phone=$("ap-phone").value.trim(),email=$("ap-email").value.trim();
  if(!name){toast("氏名を入力してください",true);return}
  if(!phone){toast("電話番号を入力してください",true);return}
+ if(!phoneOk(phone)){toast("電話番号の桁数をご確認ください（10桁または11桁）",true);return} // v2.6.45
+ if(!email){toast("メールアドレスを入力してください",true);return} // v2.6.45 必須に変更
+ if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){toast("メールアドレスの形をご確認ください",true);return}
  const answers={};let missing=null;
  (applyFormDef.fields||[]).forEach((fd,i)=>{
   let v="";
@@ -652,7 +780,8 @@ async function renderJoin(){
  </div>`;
  $("app").innerHTML=h;
  $("j-submit").onclick=doJoin;
- bindZip("j-zip","j-addr"); // v2.6.23 郵便番号から住所を自動で入れる
+ bindZip("j-zip","j-addr"); // v2.6.23 郵便番号から住所を自動で入れる（v2.6.45 住所→郵便番号の逆も）
+ bindPhone("j-phone");bindPhone("j-ephone"); // v2.6.45
  document.querySelectorAll(".chip[data-jmc]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
  document.querySelectorAll(".chip.jgender").forEach(c=>c.onclick=()=>{joinGender=c.dataset.g;document.querySelectorAll(".chip.jgender").forEach(x=>x.classList.remove("on"));c.classList.add("on")}); // v2.6.7
  cfg.custom.forEach((c,i)=>{if(c.type==="photo")renderJoinPhoto(i)});
@@ -1845,6 +1974,19 @@ async function detailView(){
 
 // ===== 管理（社長・本部専用） =====
 let adminMode="list",adminDetail=null,adminUsers=[],adminStoresMap={};
+let adminProfs={}; // v2.6.45 入社情報（user_id をキー）
+// v2.6.45 生年月日から年齢を出す（入社情報に入っている人だけ）
+function ageOf(uid){
+ const p=adminProfs[uid];
+ if(!p||!p.birth_date)return null;
+ const d=new Date(p.birth_date);
+ if(isNaN(d.getTime()))return null;
+ const now=new Date();
+ let age=now.getFullYear()-d.getFullYear();
+ const m=now.getMonth()-d.getMonth();
+ if(m<0||(m===0&&now.getDate()<d.getDate()))age--;
+ return (age>=0&&age<120)?age:null;
+}
 let nuRole=null,nuStores=[],euRole=null,euStores=[],lastIssued=null;
 let ivRole=null,ivStores=[],lastInvite=null;
 const isAdmin=()=>me&&(me.role==="CEO"||me.role==="HQ");
@@ -1857,14 +1999,16 @@ async function adminView(){
  if(adminMode==="invite")return await adminInviteView();
  if(adminMode==="smaregi")return await adminSmaregiView();
  if(adminMode==="stores")return await adminStoresView();
- const [{data:us,error},{data:uss},{data:ntfs}]=await Promise.all([
+ const [{data:us,error},{data:uss},{data:ntfs},{data:profs}]=await Promise.all([
   sb.from("users").select("*"),
   sb.from("user_stores").select("user_id,store_id"),
-  sb.from("notifications").select("*").eq("recipient_id",me.id).eq("type","join_registered").is("read_at",null).order("created_at",{ascending:false}).limit(20)
+  sb.from("notifications").select("*").eq("recipient_id",me.id).eq("type","join_registered").is("read_at",null).order("created_at",{ascending:false}).limit(20),
+  sb.from("employee_profiles").select("*") // v2.6.45 生年月日から年齢を出す／入社情報の編集に使う
  ]);
  if(error)return `<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
  adminUsers=us||[];
  adminStoresMap={};(uss||[]).forEach(x=>{(adminStoresMap[x.user_id]=adminStoresMap[x.user_id]||[]).push(x.store_id)});
+ adminProfs={};(profs||[]).forEach(x=>adminProfs[x.user_id]=x); // v2.6.45
  const order={CEO:0,HQ:1,TEAM:2,TENCHO:3,SHAIN:4,AL:5};
  adminUsers.sort((a,b)=>(order[a.role]??9)-(order[b.role]??9)||a.name.localeCompare(b.name,"ja"));
  const sname=id=>{const s=stores.find(x=>x.id===id);return s?s.name:""};
@@ -1893,7 +2037,7 @@ async function adminView(){
   </div>`;
   if(!shown.length)h+=`<p class="muted center" style="margin-top:16px">該当する従業員はいません</p>`;
   shown.forEach(u=>{
-   h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">退職・無効</span>'}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}${(!u.is_active&&u.deactivated_at)?" ／ 退職 "+new Date(u.deactivated_at).toLocaleDateString("ja-JP"):""}</span></span><span class="muted">›</span></div>`;
+   h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b>${ageOf(u.id)!=null?`（${ageOf(u.id)}）`:""} <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">退職・無効</span>'}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}${(!u.is_active&&u.deactivated_at)?" ／ 退職 "+new Date(u.deactivated_at).toLocaleDateString("ja-JP"):""}</span></span><span class="muted">›</span></div>`;
   });
  }
  return h;
@@ -2275,6 +2419,7 @@ function recruitDetailView(){
   <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
    <input type="datetime-local" id="rc-ivat" class="inp" style="margin:0;max-width:220px" value="${a.interview_at?new Date(new Date(a.interview_at).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):""}">
    <button class="btn sm" id="rc-ivset" style="margin:0">この日時で確定</button></div>
+  ${a.interview_at?`<p style="margin:8px 0 0"><button class="btn sm sub" id="rc-ivclear" style="margin:0;color:var(--red);border-color:var(--red)">🗑 面接日時を取り消す</button></p>`:""}
   <p class="muted" style="margin:8px 0 2px">面接URL（確定時に自動で発行されます。手で貼り付けてもOK）</p>
   <input type="text" id="rc-ivurl" value="${esc(a.interview_url||"")}" placeholder="https://meet.google.com/..." style="font-size:12px">
   <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -2734,6 +2879,7 @@ async function adminEditView(){
    入社日: ${prof.hire_date||"—"}<br>${prof.termination_date?`退職日: <b style="color:var(--red)">${prof.termination_date}</b><br>`:""}${prof.extra?Object.entries(prof.extra).map(([k,v])=>Array.isArray(v)?`${esc(k)}: `+v.map((u,x)=>`<a href="${esc(u)}" target="_blank">写真${x+1}</a>`).join(" ")+"<br>":`${esc(k)}: ${esc(v)}<br>`).join(""):""}スマレジ連携: ${smaregi}</p>
    ${prof.smaregi_sync_status!=="synced"?'<button class="btn sm" id="eu-smaregi" style="margin-top:10px">スマレジに再同期する</button>':""}
    ${prof.smaregi_staff_id?'<button class="btn sm sub" id="eu-resend" style="margin-top:10px">通知を送り直す（スマレジのリンク付き）</button>':""}</div>`;
+  h+=profileEditCard(prof,"ep"); // v2.6.45 入社情報を直せるようにする
  }
  h+=`<div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
  <div class="card"><h3>所属チーム</h3><span class="chip euteam ${!euTeam?"on":""}" data-t="">なし</span>${teams.map(t=>`<span class="chip euteam ${euTeam===t.id?"on":""}" data-t="${t.id}">${esc(t.name)}</span>`).join("")}
@@ -2817,6 +2963,8 @@ async function settingsView(){
    <input type="text" id="pf-ename" value="${esc(myProf.emergency_name||"")}" placeholder="氏名" style="margin-top:2px">
    <input type="text" id="pf-erel" value="${esc(myProf.emergency_relation||"")}" placeholder="続柄（例: 父）">
    <input type="tel" inputmode="tel" id="pf-ephone" value="${esc(myProf.emergency_phone||"")}" placeholder="電話番号">
+   <p style="margin:8px 0 0"><button class="btn sm sub" id="pf-station" style="margin:0">🚉 住所から最寄り駅を調べる</button></p>
+   <div id="pf-stationbox" style="margin-top:6px"></div>
    <button class="btn sm" id="pf-save">プロフィールを保存</button></div>
   <div class="card"><h3>🔑 パスワードの変更</h3>
    <input type="password" id="pf-pw" placeholder="新しいパスワード（8文字以上）" autocomplete="new-password">
@@ -2897,7 +3045,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.44</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.45</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3606,6 +3754,25 @@ function bindPage(){
   $("rc-ivset").disabled=true;await ivConfirm(new Date(v).toISOString());
  };
  if($("rc-iverrclose"))$("rc-iverrclose").onclick=()=>{lastMeetError="";render()}; // v2.6.40
+ // v2.6.45 面接日時の取り消し（日時欄を空にしても消えなかったため、はっきりしたボタンを用意）
+ if($("rc-ivclear"))$("rc-ivclear").onclick=async()=>{
+  const a=rcList.find(x=>x.id===rcDetail);if(!a)return;
+  if(!confirm(`${a.name}さんの面接日時を取り消します。\nGoogleカレンダーの予定も削除します。よろしいですか？`))return;
+  $("rc-ivclear").disabled=true;
+  // カレンダーの予定も消す（すでに手で消してあっても大丈夫）
+  if(a.interview_event_id){
+   try{
+    if(gasCfg===null){const {data}=await sb.rpc("gas_config");gasCfg=data||false}
+    if(gasCfg&&gasCfg.url)await fetch(gasCfg.url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},
+     body:JSON.stringify({key:gasCfg.key,action:"delete_event",event_id:a.interview_event_id,calendar_id:gasCfg.cal||"primary"})});
+   }catch(e){}
+  }
+  const {error}=await sb.from("applicants").update({interview_at:null,interview_url:null,
+   interview_event_id:null,interview_sent_at:null,
+   updated_at:new Date().toISOString(),last_actor_id:me.id,last_actor_at:new Date().toISOString()}).eq("id",a.id);
+  if(error){$("rc-ivclear").disabled=false;toast("取り消せませんでした: "+error.message,true);return}
+  toast("面接日時を取り消しました");rcList=null;rcSimilar=[];rcPast=[];render();
+ };
  if($("rc-ivurlsave"))$("rc-ivurlsave").onclick=async()=>{
   const {error}=await sb.from("applicants").update({interview_url:$("rc-ivurl").value.trim()||null,
    updated_at:new Date().toISOString(),last_actor_id:me.id,last_actor_at:new Date().toISOString()}).eq("id",rcDetail);
@@ -4083,6 +4250,7 @@ function bindPage(){
  if($("nu-gen"))$("nu-gen").onclick=()=>{$("nu-pw").value=genPw()};
  if($("nu-submit"))$("nu-submit").onclick=adminCreate;
  if($("eu-save"))$("eu-save").onclick=adminSave;
+ if(adminMode==="edit"&&adminDetail)bindProfileEdit("ep",adminDetail); // v2.6.45 入社情報の編集
  if($("eu-setpw"))$("eu-setpw").onclick=adminSetPw;
  if($("eu-smaregi"))$("eu-smaregi").onclick=async()=>{
   $("eu-smaregi").disabled=true;$("eu-smaregi").textContent="同期中...";
@@ -4140,7 +4308,21 @@ function bindPage(){
  ["au-role","au-state","au-store"].forEach(id=>{if($(id))$(id).onchange=()=>{auRole=$("au-role").value;auState=$("au-state").value;auStore=$("au-store").value;render()}});
  if($("au-clear"))$("au-clear").onclick=()=>{auRole="";auState="";auStore="";render()};
  // v2.6.0 プロフィール
+ // v2.6.45 郵便番号↔住所の自動入力・電話のハイフン・最寄り駅
+ if($("pf-zip")){bindZip("pf-zip","pf-addr");bindPhone("pf-phone");bindPhone("pf-ephone")}
+ if($("pf-station"))$("pf-station").onclick=async()=>{
+  const box=$("pf-stationbox"),addr=$("pf-addr").value.trim();
+  if(!addr){toast("先に住所を入れてください",true);return}
+  box.innerHTML=`<p class="muted" style="margin:0">調べています…</p>`;
+  const st=await stationsNear(addr);
+  box.innerHTML=st.length
+   ?`<p class="muted" style="margin:0 0 4px">近い順です</p>`+st.map(x=>`<span class="chip">${esc(x.name)}駅 <span class="muted">${esc(x.line)}・${esc(x.distance||"")}</span></span>`).join("")
+   :`<p class="muted" style="margin:0">最寄り駅が見つかりませんでした</p>`;
+ };
  if($("pf-save"))$("pf-save").onclick=async()=>{
+  const ph=$("pf-phone").value.trim(),eph=$("pf-ephone").value.trim();
+  if(ph&&!phoneOk(ph)){toast("電話番号の桁数をご確認ください（10桁または11桁）",true);return}
+  if(eph&&!phoneOk(eph)){toast("緊急連絡先の桁数をご確認ください",true);return}
   const name=$("pf-name").value.trim();
   if(!name){toast("氏名を入力してください",true);return}
   $("pf-save").disabled=true;

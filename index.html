@@ -1174,12 +1174,34 @@ async function updateDots(){ // v1.7 未読通知バッジ（ホーム=自分宛
   const reps=(ns||[]).filter(n=>n.type==="report_new"||n.type==="report_updated").length; // v2.6.28 日報通知は一覧タブへ
   const others=(ns||[]).length-joins-recs-reps;
   const set=(el,n)=>{if(!el)return;if(n>0){el.textContent=n>99?"99+":n;el.style.display=""}else el.style.display="none"};
-  set($("homedot"),others);set($("admdot"),joins);set($("recruitdot"),recs);
+  set($("homedot"),others);set($("admdot"),joins);
+  // v2.6.49 応募タブのバッジは「画面に出るお知らせの件数」と一致させる。
+  // 通知の件数で数えていたため、古い通知が残って「何が未読か分からない」状態になっていた
+  set($("recruitdot"),await recruitUnreadCount());
   set($("listdot"),await listUnreadCount()); // v2.6.28 一覧の未読数（🔵の数と一致させる）
   const {count:tn}=await sb.from("tasks").select("id",{count:"exact",head:true}).eq("assignee_id",me.id).eq("status","open"); // v1.8 自分担当の未完了タスク
   set($("taskdot"),tn||0);
   set($("chatdot"),await chatUnreadTotal()); // v1.9 チャット未読
  }catch(e){}
+}
+// v2.6.49 応募タブのバッジ＝自分がまだ開いていない「フォーム回答・メッセージ・LINE連携」の人数
+// 画面上部に出るお知らせ（📝💬💚）と同じ条件なので、数と中身が必ず一致する
+async function recruitUnreadCount(){
+ try{
+  if(!can("recruit"))return 0;
+  const since=new Date(Date.now()-90*864e5).toISOString();
+  const {data:as}=await sb.from("applicants")
+   .select("id,form_received_at,msg_received_at,line_linked_at")
+   .or(`form_received_at.gte.${since},msg_received_at.gte.${since},line_linked_at.gte.${since}`)
+   .limit(500);
+  if(!as||!as.length)return 0;
+  const {data:rr}=await sb.from("applicant_reads").select("applicant_id,read_at")
+   .eq("user_id",me.id).in("applicant_id",as.map(a=>a.id));
+  const read={};(rr||[]).forEach(x=>read[x.applicant_id]=new Date(x.read_at).getTime());
+  const isNew=(t,r)=>!!(t&&new Date(t).getTime()>r);
+  return as.filter(a=>{const r=read[a.id]||0;
+   return isNew(a.form_received_at,r)||isNew(a.msg_received_at,r)||isNew(a.line_linked_at,r)}).length;
+ }catch(e){return 0}
 }
 // v2.6.28 一覧タブの赤バッジ＝直近7日で「まだ読んでいない／読んだ後に修正された」日報・週報の数
 // 通知の件数ではなく一覧の🔵と同じ条件で数えるので、SQL未適用でもそのまま動く
@@ -2225,6 +2247,20 @@ async function recruitView(){
  const mNewList=(rcList||[]).filter(rcMsgNew);
  if(mNewList.length)h+=`<div class="card" style="background:#ecfeff;border-left:4px solid #0e7490"><h3 style="margin:0">💬 Indeedにメッセージが届いています（${mNewList.length}件）</h3>
   <p style="font-size:13px;margin:6px 0 0">${mNewList.slice(0,12).map(a=>`<span style="color:var(--blue);cursor:pointer;white-space:nowrap" data-rca="${a.id}">${esc(a.name)}さん</span>`).join("　")}${mNewList.length>12?"　ほか":""}</p></div>`;
+ // v2.6.49 いま何が未読なのかを、いちばん上にまとめて出す（バッジの数と一致する）
+ const nf=(rcList||[]).filter(rcFormNew),nm=(rcList||[]).filter(rcMsgNew),nl=(rcList||[]).filter(rcLineNew);
+ const newIds=new Set([...nf,...nm,...nl].map(a=>a.id));
+ if(newIds.size){
+  const part=[];
+  if(nf.length)part.push(`📝 フォーム回答 ${nf.length}件`);
+  if(nm.length)part.push(`💬 メッセージ ${nm.length}件`);
+  if(nl.length)part.push(`💚 LINE連携 ${nl.length}件`);
+  h+=`<div class="card" style="background:#eef6ff;border-left:4px solid var(--blue)">
+   <h3 style="margin:0">🔔 未読が ${newIds.size}名分あります</h3>
+   <p style="font-size:13px;margin:6px 0 0">内わけ: ${part.join("　")}</p>
+   <p class="muted" style="margin:6px 0 0">下の緑・オレンジ・水色の欄に、お名前が出ています。<b>名前をタップして開くと、その方の未読が消えます。</b></p>
+   <button class="btn sm sub" id="rc-allread" style="margin-top:8px">すべて見たことにする（${newIds.size}名）</button></div>`;
+ }
  // v2.6.47 LINEが連携された人を、誰か分かるようにトップに出す
  const lNewList=(rcList||[]).filter(rcLineNew);
  if(lNewList.length)h+=`<div class="card" style="background:#f0fff4;border-left:4px solid #06c755"><h3 style="margin:0">💚 LINEが連携されました（${lNewList.length}件）</h3>
@@ -3118,7 +3154,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.48</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.49</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -4029,6 +4065,21 @@ function bindPage(){
  });
  document.querySelectorAll("[data-rcseg]").forEach(el=>el.onclick=()=>{rcSeg=el.dataset.rcseg;if(rcFStatus&&rcSegOf(rcFStatus)!==rcSeg)rcFStatus="";render()});
  if($("rc-onlywait"))$("rc-onlywait").onclick=()=>{rcOnlyWait=!rcOnlyWait;render()}; // v2.6.31
+ // v2.6.49 未読をまとめて片付ける
+ if($("rc-allread"))$("rc-allread").onclick=async()=>{
+  const ids=[...new Set((rcList||[]).filter(a=>rcFormNew(a)||rcMsgNew(a)||rcLineNew(a)).map(a=>a.id))];
+  if(!ids.length)return;
+  if(!confirm(`${ids.length}名分の未読を「見たことにする」にします。\n（応募者のデータは変わりません）よろしいですか？`))return;
+  $("rc-allread").disabled=true;
+  const now=new Date().toISOString();
+  const {error}=await sb.from("applicant_reads").upsert(
+   ids.map(id=>({applicant_id:id,user_id:me.id,read_at:now})),{onConflict:"applicant_id,user_id"});
+  if(error){$("rc-allread").disabled=false;toast("できませんでした: "+error.message,true);return}
+  ids.forEach(id=>rcReads[id]=now);
+  try{await sb.from("notifications").update({read_at:now})
+   .eq("recipient_id",me.id).eq("type","applicant_new").is("read_at",null)}catch(e){}
+  toast("すべて見たことにしました");rcList=null;render();
+ };
  // v2.6.43 「対応済みにする」（返信で完結する用件のために手動で消せるようにする）
  document.querySelectorAll("[data-rcdone]").forEach(b=>b.onclick=async e=>{
   e.stopPropagation();

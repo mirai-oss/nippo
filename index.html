@@ -326,8 +326,12 @@ function toast(msg,isErr){
  if(isErr)msg=friendlyErr(msg);
  let t=document.getElementById("toast");
  if(!t){t=document.createElement("div");t.id="toast";t.style.cssText="position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99;max-width:90%;padding:11px 18px;border-radius:10px;font-size:14px;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.25);transition:opacity .3s";document.body.appendChild(t)}
- t.style.background=isErr?"var(--red)":"var(--green)";t.textContent=msg;t.style.opacity="1";
- clearTimeout(t._tm);t._tm=setTimeout(()=>{t.style.opacity="0"},2600);
+ t.style.background=isErr?"var(--red)":"var(--green)";t.style.opacity="1";
+ // v2.6.40 エラーは読み終わる前に消えないよう長く出す（タップで消せる）
+ t.textContent=msg+(isErr?"　（タップで閉じる）":"");
+ t.style.cursor=isErr?"pointer":"";
+ t.onclick=isErr?()=>{t.style.opacity="0"}:null;
+ clearTimeout(t._tm);t._tm=setTimeout(()=>{t.style.opacity="0"},isErr?20000:2600);
 }
 const fmtAll=(role)=>((appSettings.formats&&appSettings.formats[role])||FORMATS[role]||[]);
 const fmtFor=(role)=>fmtAll(role).filter(f=>!f.kennin||isKennin());
@@ -672,10 +676,13 @@ async function meetIssue(name,iso,eventId){
   msg:"予定は作られましたが、Meetのリンクが返りませんでした。GASの「サービス」に Google Calendar API があるかご確認ください。"};
  return{ok:true,url:j.url,event_id:j.event_id||""};
 }
+let lastMeetError=""; // v2.6.40 最後に出たMeetのエラー（画面に残して読めるようにする）
 // v2.6.39 カレンダーの予定の番号を控える（次に日時を変えたとき、この予定を直すため）
 async function saveEventId(id,evid){
  if(!evid)return;
- try{await sb.from("applicants").update({interview_event_id:evid}).eq("id",id)}catch(e){}
+ const {error}=await sb.from("applicants").update({interview_event_id:evid}).eq("id",id);
+ // v2.6.40 ここで失敗すると「日時を変えてもカレンダーが直らない」原因になるので黙って捨てない
+ if(error)lastMeetError="カレンダーの予定の番号を保存できませんでした。SQLの v2_6_37 が未実行かもしれません（"+error.message+"）";
 }
 // v2.6.39 面接URLを用意する。日時が変わったときはカレンダーの予定も直す
 // 返り値: {url, event_id}（発行できなければ url は空）
@@ -688,9 +695,12 @@ async function makeMeet(a,iso){
  if(a&&a.interview_url&&!changed)return{url:a.interview_url,event_id:evid};
  const r=await meetIssue(a&&a.name,iso,changed?evid:"");
  if(!r.ok){
+  // v2.6.40 消えてしまわないよう、応募者カードにも残す
+  lastMeetError=`${r.why}: ${r.msg}`;
   toast(`面接URLを発行できません（${r.why}）: ${r.msg}`,true);
   return{url:(a&&a.interview_url)||"",event_id:evid};
  }
+ lastMeetError="";
  return{url:r.url,event_id:r.event_id||evid};
 }
 // v2.6.35 本人に送る面接のご案内
@@ -2176,6 +2186,10 @@ function recruitDetailView(){
  ${a.phone?`📞 <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>　`:""}${a.email?`✉️ ${esc(a.email)}`:""}</p>`;
  // v2.6.35 面接の日程調整（希望日時をタップするだけで確定できる）
  h+=`<div class="card"${a.interview_at?'':' style="background:#fffbeb;border-left:4px solid #d97706"'}><h3>📅 面接の日程</h3>`;
+ // v2.6.40 最後に出たエラーを画面に残す（トーストだとすぐ消えて読めないため）
+ if(lastMeetError)h+=`<div class="alert" style="margin:0 0 8px"><b>⚠️ 面接URLの発行でエラーが出ました</b><br>
+  <span style="font-size:12px;word-break:break-all">${esc(lastMeetError)}</span><br>
+  <button class="btn sm sub" id="rc-iverrclose" style="margin:6px 0 0">閉じる</button></div>`;
  if(a.interview_at){
   h+=`<p style="margin:0;font-size:14px">✅ <b>${fmtDue(a.interview_at)}</b> に決まっています${a.interview_set_by?`　<span class="muted">（${esc(taskUserName(a.interview_set_by)||"")}が確定）</span>`:""}</p>`;
   if(a.interview_url)h+=`<p style="margin:6px 0 0;font-size:13px;word-break:break-all">🔗 <a href="${esc(a.interview_url)}" target="_blank" rel="noopener">${esc(a.interview_url)}</a></p>`;
@@ -2814,7 +2828,7 @@ async function settingsView(){
   テストを押すと、いまから1時間後で予定を1件作って確認します（カレンダーから消して構いません）</p></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.39</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.40</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3483,9 +3497,12 @@ function bindPage(){
  // v2.6.35 面接日時の確定（希望日時のタップ・自由入力のどちらも同じ処理）
  const ivConfirm=async iso=>{
   const a=rcList.find(x=>x.id===rcDetail);if(!a)return;
-  const typed=($("rc-ivurl")&&$("rc-ivurl").value.trim())||"";
-  // v2.6.39 手で貼ったURLがあればそれを優先。無ければ発行（日時が変わっていれば予定も直す）
-  const m=typed?{url:typed,event_id:a.interview_event_id||""}:await makeMeet(a,iso);
+  const field=($("rc-ivurl")&&$("rc-ivurl").value.trim())||"";
+  // v2.6.40 欄には保存済みのURLが最初から入っている。
+  // それを「手で貼った」と誤解して自動発行を飛ばしていたため、日時を変えても予定が直らなかった。
+  // 中身を書き換えたときだけ、手入力として扱う
+  const manual=field&&field!==(a.interview_url||"");
+  const m=manual?{url:field,event_id:a.interview_event_id||""}:await makeMeet(a,iso);
   const url=m.url;
   const {error}=await sb.rpc("set_interview",{p_applicant:a.id,p_at:iso,p_url:url||null});
   if(error){toast("確定できませんでした: "+error.message,true);return}
@@ -3503,6 +3520,7 @@ function bindPage(){
   if(!v){toast("日時を選んでください",true);return}
   $("rc-ivset").disabled=true;await ivConfirm(new Date(v).toISOString());
  };
+ if($("rc-iverrclose"))$("rc-iverrclose").onclick=()=>{lastMeetError="";render()}; // v2.6.40
  if($("rc-ivurlsave"))$("rc-ivurlsave").onclick=async()=>{
   const {error}=await sb.from("applicants").update({interview_url:$("rc-ivurl").value.trim()||null,
    updated_at:new Date().toISOString(),last_actor_id:me.id,last_actor_at:new Date().toISOString()}).eq("id",rcDetail);

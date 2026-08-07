@@ -169,6 +169,8 @@ const rcFormNew=a=>!!(a&&rcNewer(a,a.form_received_at));
 const rcOverdue=a=>!!(a&&a.interview_at&&APPLICANT_ACTIVE.includes(a.status)&&new Date(a.interview_at)<new Date(Date.now()-12*3600e3));
 // v2.6.16 Indeedメッセージが届いてまだ開いていない応募者かどうか（v2.6.31 自分が開いたかで判定）
 const rcMsgNew=a=>!!(a&&rcNewer(a,a.msg_received_at));
+// v2.6.47 LINEが連携されて、自分がまだその応募者を開いていない
+const rcLineNew=a=>!!(a&&rcNewer(a,a.line_linked_at));
 // v2.6.31 応募者から来たまま、こちらが返していない＝要対応
 const rcWaiting=a=>{
  if(!a||!APPLICANT_ACTIVE.includes(a.status))return false;
@@ -2165,6 +2167,11 @@ async function recruitView(){
  const mNewList=(rcList||[]).filter(rcMsgNew);
  if(mNewList.length)h+=`<div class="card" style="background:#ecfeff;border-left:4px solid #0e7490"><h3 style="margin:0">💬 Indeedにメッセージが届いています（${mNewList.length}件）</h3>
   <p style="font-size:13px;margin:6px 0 0">${mNewList.slice(0,12).map(a=>`<span style="color:var(--blue);cursor:pointer;white-space:nowrap" data-rca="${a.id}">${esc(a.name)}さん</span>`).join("　")}${mNewList.length>12?"　ほか":""}</p></div>`;
+ // v2.6.47 LINEが連携された人を、誰か分かるようにトップに出す
+ const lNewList=(rcList||[]).filter(rcLineNew);
+ if(lNewList.length)h+=`<div class="card" style="background:#f0fff4;border-left:4px solid #06c755"><h3 style="margin:0">💚 LINEが連携されました（${lNewList.length}件）</h3>
+  <p style="font-size:13px;margin:6px 0 0">${lNewList.slice(0,12).map(a=>`<span style="color:var(--blue);cursor:pointer;white-space:nowrap" data-rca="${a.id}">${esc(a.name)}さん</span>`).join("　")}${lNewList.length>12?"　ほか":""}</p>
+  <p class="muted" style="margin:6px 0 0">この方にはLINEで面接のご案内を自動で送れます。名前をタップすると開きます</p></div>`;
  // v2.6.31 応募者から来たまま返せていない人（＝どこで止まっているか）
  const waitList=(rcList||[]).filter(rcWaiting);
  if(waitList.length)h+=`<div class="card" style="background:#fef2f2;border-left:4px solid #c0392b"><h3 style="margin:0">🔴 応募者から来たまま、まだ返していません（${waitList.length}件）</h3>
@@ -2208,7 +2215,7 @@ async function recruitView(){
   const move=rcLastMove(a);
   const moveAt=a.last_msg_at||a.last_actor_at||a.updated_at;
   const moveTxt=move?`・${move==="応募者から"?"🔴":"✅"} ${esc(move)} ${moveAt?fmtDue(moveAt):""}`:(a.updated_at?`・更新 ${fmtDue(a.updated_at)}`:"");
-  h+=`<div class="row" data-rcrow="${a.id}" style="cursor:default${od?";background:#fff1f2":wait?";background:#fff7ed":""}"><span style="flex:1;min-width:0"><b>${rcNameAge(a)}</b>${a.line_user_id?LINE_ICON:""} <span style="display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;vertical-align:middle">${stSel}${ivIn}${invBtn}${wait?`<span class="badge" style="background:#c0392b">🔴 未対応</span><button class="btn sm sub" data-rcdone="${a.id}" style="margin:0;font-size:11px;padding:2px 8px">対応済みにする</button>`:""}${fNew?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span>':""}${mNew?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span>':""}${od?'<span class="badge" style="background:#c0392b">⚠️ 面接日超過</span>':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</span><br>
+  h+=`<div class="row" data-rcrow="${a.id}" style="cursor:default${od?";background:#fff1f2":wait?";background:#fff7ed":rcLineNew(a)?";background:#f0fff4":""}"><span style="flex:1;min-width:0"><b>${rcNameAge(a)}</b>${a.line_user_id?LINE_ICON:""} <span style="display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;vertical-align:middle">${stSel}${ivIn}${invBtn}${wait?`<span class="badge" style="background:#c0392b">🔴 未対応</span><button class="btn sm sub" data-rcdone="${a.id}" style="margin:0;font-size:11px;padding:2px 8px">対応済みにする</button>`:""}${fNew?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span>':""}${mNew?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span>':""}${rcLineNew(a)?'<span class="badge" style="background:#06c755">💚 LINEが連携されました</span>':""}${od?'<span class="badge" style="background:#c0392b">⚠️ 面接日超過</span>':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</span><br>
    <span class="muted">${form?esc(form.title.replace("応募フォーム","")):esc(a.job_type||"")}・${storeSel("font-size:11px;padding:1px 3px;border:1px solid var(--line);border-radius:6px;background:#fff;color:inherit;max-width:136px;font-family:inherit")}${hint?"<span> 求人: "+esc(hint.split("、")[0].split(",")[0].slice(0,14))+"</span>":""}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}${a.interview_at?`・面接 ${fmtDue(a.interview_at)}`:""}・${asgTxt}${moveTxt}</span></span><button class="btn sm sub" data-rcopen="${a.id}" style="flex-shrink:0;margin:0;font-size:12px;padding:6px 10px">詳細</button></div>`;
  });
  if(list.length>rcShown)h+=`<button class="btn sm sub" id="rc-more" style="margin-top:10px;width:100%">▼ さらに100件表示する（残り ${list.length-rcShown}件）</button>`;
@@ -2382,7 +2389,7 @@ function recruitDetailView(){
  if(!a){rcDetail=null;return `<span class="back" id="rcback">← 応募者一覧</span><div class="alert">応募者が見つかりません</div>`}
  const form=(rcForms||[]).find(f=>f.key===a.form_key);
  let h=`<span class="back" id="rcback">← 応募者一覧</span>
- <h2>${rcNameAge(a)} ${rcFormNew(a)?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span> ':""}${rcMsgNew(a)?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span> ':""}${a.user_id?'<span class="badge g">入社済み</span>':""}${rcWaiting(a)?'<span class="badge" style="background:#c0392b">🔴 未対応</span>':""}</h2>
+ <h2>${rcNameAge(a)} ${rcFormNew(a)?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span> ':""}${rcMsgNew(a)?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span> ':""}${rcLineNew(a)?'<span class="badge" style="background:#06c755">💚 LINEが連携されました</span> ':""}${a.user_id?'<span class="badge g">入社済み</span>':""}${rcWaiting(a)?'<span class="badge" style="background:#c0392b">🔴 未対応</span>':""}</h2>
  ${rcWaiting(a)?`<p style="margin:-4px 0 8px"><button class="btn sm sub" data-rcdone="${a.id}" style="margin:0;font-size:12px">✅ 対応済みにする</button></p>`:(a.handled_at?`<p class="muted" style="margin:-4px 0 8px;font-size:12px">✅ 対応済み（${fmtDue(a.handled_at)}）　<span style="color:var(--blue);cursor:pointer" data-rcundone="${a.id}">未対応に戻す</span></p>`:"")}
  <p class="muted" style="margin-top:-8px">${form?esc(form.title):esc(a.job_type||"")}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}<br>
  ${a.phone?`📞 <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>　`:""}${a.email?`✉️ ${esc(a.email)}`:""}</p>`;
@@ -3051,7 +3058,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.46</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.47</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====

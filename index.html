@@ -633,10 +633,28 @@ function joinPick(ans,pats,exclude){
  }
  return "";
 }
+// v2.6.34 Googleスプレッドシートの日付がそのまま英語の文字列で入っていることがある
+// 例:「Mon Feb 24 2003 00:00:00 GMT+0900 (Japan Standard Time)」
+const RAW_DATE=/^[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d{4} \d{2}:\d{2}:\d{2}/;
+const pad2=n=>String(n).padStart(2,"0");
+// 画面に出すときに読みやすい形に直す（元のデータはそのまま。表示だけ整える）
+function fmtAnswerVal(v){
+ const s=String(v==null?"":v);
+ if(!RAW_DATE.test(s))return s;
+ const d=new Date(s);
+ if(isNaN(d.getTime()))return s;
+ const ymd=`${d.getFullYear()}/${pad2(d.getMonth()+1)}/${pad2(d.getDate())}`;
+ return (d.getHours()||d.getMinutes())?`${ymd} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`:ymd;
+}
 // 「1990/1/2」「1990年1月2日」などをカレンダー入力の形（1990-01-02）に直す
 function toDateVal(s){
- const m=String(s||"").match(/(\d{4})\D{1,3}(\d{1,2})\D{1,3}(\d{1,2})/);
- return m?`${m[1]}-${String(m[2]).padStart(2,"0")}-${String(m[3]).padStart(2,"0")}`:"";
+ const t=String(s||"");
+ if(RAW_DATE.test(t)){ // 英語の日付はそのまま数字を拾うと 2003-00-00 になってしまうので先に処理する
+  const d=new Date(t);
+  if(!isNaN(d.getTime()))return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+ }
+ const m=t.match(/(\d{4})\D{1,3}(\d{1,2})\D{1,3}(\d{1,2})/);
+ return m?`${m[1]}-${pad2(m[2])}-${pad2(m[3])}`:"";
 }
 // v1.7: 入社フォームの写真（ローカル保持→登録後にアップロード）
 function renderJoinPhoto(i){
@@ -2143,9 +2161,9 @@ function recruitDetailView(){
  h+=`<div class="card"><h3>📝 応募内容</h3>`;
  const seen={};
  if(form)(form.fields||[]).forEach(f=>{const v=(a.answers||{})[f.k];seen[f.k]=1;if(v==null||v==="")return;
-  h+=`<p style="margin:8px 0 0;font-size:13px"><span class="muted">${esc(f.label)}</span><br>${esc(String(v)).replace(/\n/g,"<br>")}</p>`;});
+  h+=`<p style="margin:8px 0 0;font-size:13px"><span class="muted">${esc(f.label)}</span><br>${esc(fmtAnswerVal(v)).replace(/\n/g,"<br>")}</p>`;});
  Object.entries(a.answers||{}).forEach(([k,v])=>{if(seen[k]||v==null||v===""||String(k).startsWith("_"))return;
-  h+=`<p style="margin:8px 0 0;font-size:13px"><span class="muted">${esc(k)}</span><br>${esc(String(v)).replace(/\n/g,"<br>")}</p>`;});
+  h+=`<p style="margin:8px 0 0;font-size:13px"><span class="muted">${esc(k)}</span><br>${esc(fmtAnswerVal(v)).replace(/\n/g,"<br>")}</p>`;});
  if(!Object.keys(a.answers||{}).length)h+=`<p class="muted" style="margin:0">回答はありません（手動追加）</p>`;
  h+=`</div><button class="btn sub" id="rc-del" style="color:var(--red);border-color:var(--red)">この応募者を削除する</button>`;
  return h;
@@ -2616,7 +2634,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.33</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.34</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====

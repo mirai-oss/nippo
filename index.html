@@ -646,7 +646,7 @@ async function renderJoin(){
 // 設定されていない・失敗した場合は空を返し、手で貼り付ける運用に落ちる
 let gasCfg=null;
 // v2.6.38 どこで止まったかをはっきり返す（黙って諦めない）
-async function meetIssue(name,iso){
+async function meetIssue(name,iso,eventId){
  if(gasCfg===null){
   const {data,error}=await sb.rpc("gas_config");
   if(error){gasCfg=false;return{ok:false,why:"データベースが未対応",
@@ -659,6 +659,7 @@ async function meetIssue(name,iso){
  try{
   res=await fetch(gasCfg.url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},
    body:JSON.stringify({key:gasCfg.key,action:"meet",name:name||"接続テスト",start:iso,minutes:30,
+    event_id:eventId||"", // v2.6.39 あれば作り直さず日時だけ直す（MeetのURLが変わらない）
     note:"nippo の応募者管理から作成"})});
  }catch(e){return{ok:false,why:"GASに届かない",
   msg:"GASのウェブアプリに接続できませんでした。デプロイ設定の「アクセスできるユーザー＝全員」と、URLの末尾が /exec になっているかをご確認ください。"}}
@@ -669,12 +670,28 @@ async function meetIssue(name,iso){
  if(!j.ok)return{ok:false,why:"GAS側で失敗",msg:j.error||"不明なエラー"};
  if(!j.url)return{ok:false,why:"URLが空",
   msg:"予定は作られましたが、Meetのリンクが返りませんでした。GASの「サービス」に Google Calendar API があるかご確認ください。"};
- return{ok:true,url:j.url};
+ return{ok:true,url:j.url,event_id:j.event_id||""};
 }
+// v2.6.39 カレンダーの予定の番号を控える（次に日時を変えたとき、この予定を直すため）
+async function saveEventId(id,evid){
+ if(!evid)return;
+ try{await sb.from("applicants").update({interview_event_id:evid}).eq("id",id)}catch(e){}
+}
+// v2.6.39 面接URLを用意する。日時が変わったときはカレンダーの予定も直す
+// 返り値: {url, event_id}（発行できなければ url は空）
 async function makeMeet(a,iso){
- const r=await meetIssue(a&&a.name,iso);
- if(!r.ok){toast(`面接URLを発行できません（${r.why}）: ${r.msg}`,true);return ""}
- return r.url;
+ const had=a&&a.interview_at?new Date(a.interview_at).getTime():0;
+ const now=new Date(iso).getTime();
+ const changed=had&&had!==now;                 // 日時が変わったか
+ const evid=(a&&a.interview_event_id)||"";
+ // URLがまだ無い、または日時が変わったときだけGoogleカレンダーを触る
+ if(a&&a.interview_url&&!changed)return{url:a.interview_url,event_id:evid};
+ const r=await meetIssue(a&&a.name,iso,changed?evid:"");
+ if(!r.ok){
+  toast(`面接URLを発行できません（${r.why}）: ${r.msg}`,true);
+  return{url:(a&&a.interview_url)||"",event_id:evid};
+ }
+ return{url:r.url,event_id:r.event_id||evid};
 }
 // v2.6.35 本人に送る面接のご案内
 function interviewText(a){
@@ -2797,7 +2814,7 @@ async function settingsView(){
   テストを押すと、いまから1時間後で予定を1件作って確認します（カレンダーから消して構いません）</p></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.38</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.39</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3466,13 +3483,13 @@ function bindPage(){
  // v2.6.35 面接日時の確定（希望日時のタップ・自由入力のどちらも同じ処理）
  const ivConfirm=async iso=>{
   const a=rcList.find(x=>x.id===rcDetail);if(!a)return;
-  let url=($("rc-ivurl")&&$("rc-ivurl").value.trim())||"";
-  if(!url){ // Google Meet を自動発行する（設定されていれば）
-   const made=await makeMeet(a,iso);
-   if(made)url=made;
-  }
+  const typed=($("rc-ivurl")&&$("rc-ivurl").value.trim())||"";
+  // v2.6.39 手で貼ったURLがあればそれを優先。無ければ発行（日時が変わっていれば予定も直す）
+  const m=typed?{url:typed,event_id:a.interview_event_id||""}:await makeMeet(a,iso);
+  const url=m.url;
   const {error}=await sb.rpc("set_interview",{p_applicant:a.id,p_at:iso,p_url:url||null});
   if(error){toast("確定できませんでした: "+error.message,true);return}
+  await saveEventId(a.id,m.event_id);
   toast(url?"面接日時を確定し、URLを発行しました":"面接日時を確定しました");
   rcList=null;rcSimilar=[];rcPast=[];render();
  };
@@ -3613,10 +3630,11 @@ function bindPage(){
   const iso=new Date(v).toISOString();
   if(!confirm(`${a.name}さんの面接を ${v.replace("T"," ")} で確定します。\n面接URLを発行し、${a.line_user_id?"LINEでご案内を送ります":"案内文をコピーします"}。よろしいですか？`))return;
   b.disabled=true;b.textContent="発行中...";
-  let url=a.interview_url||"";
-  if(!url)url=await makeMeet(a,iso)||"";
+  const m=await makeMeet(a,iso); // v2.6.39 日時が変わっていればカレンダーの予定も直す
+  const url=m.url;
   const {error}=await sb.rpc("set_interview",{p_applicant:id,p_at:iso,p_url:url||null});
   if(error){b.disabled=false;toast("確定できませんでした: "+error.message,true);render();return}
+  await saveEventId(id,m.event_id);
   const txt=interviewText({...a,interview_at:iso,interview_url:url});
   if(a.line_user_id){
    const r=await lineFn({action:"push",applicant_id:id,text:txt});

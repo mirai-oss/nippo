@@ -1949,7 +1949,9 @@ async function recruitView(){
   const storeSel=st=>`<select data-rcstore="${a.id}" style="${st}"><option value="">🏪 店舗を選ぶ</option>${(stores||[]).map(s=>`<option value="${s.id}"${a.store_id===s.id?" selected":""}>${esc(s.name)}</option>`).join("")}</select>`;
   // v2.6.18 ② 面接日時はステータスのすぐ隣に・小さめに（スマホで大きくなりすぎないように）
   const ivIn=["interview_set","interviewed"].includes(a.status)
-   ?`<input type="datetime-local" data-rciv="${a.id}" value="${a.interview_at?new Date(new Date(a.interview_at).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):""}" style="font-size:11px;padding:1px 3px;border:1px solid var(--line);border-radius:6px;width:auto;max-width:152px;background:#fff;color:inherit;font-family:inherit">`:"";
+   ?`<input type="datetime-local" data-rciv="${a.id}" value="${a.interview_at?new Date(new Date(a.interview_at).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):""}" style="font-size:11px;padding:1px 3px;border:1px solid var(--line);border-radius:6px;width:auto;max-width:152px;background:#fff;color:inherit;font-family:inherit">`
+     // v2.6.37 この場で確定 → 面接URLを発行して本人へ送る
+     +`<button class="btn sm" data-rcivgo="${a.id}" style="margin:0;font-size:11px;padding:3px 9px;background:${a.interview_url?"var(--green)":"var(--blue)"}">${a.interview_url?"✅ 送り直す":"✅ 確定して送る"}</button>`:"";
   // v2.6.17/18 ⑤ 採用にすると招待リンクの発行→送信。店舗が未設定ならその場で選べる
   const invBtn=(a.status==="hired"&&!a.user_id)
    ?(a.invite_token
@@ -2767,7 +2769,7 @@ async function settingsView(){
   <p class="muted" style="margin:6px 0 0;font-size:11px">保存済みの内容は安全のため表示されません。変えたいときだけ入力してください</p></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.36</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.37</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3553,6 +3555,34 @@ function bindPage(){
   el.disabled=false;
   if(error){toast("保存エラー: "+error.message,true);return}
   toast(v?"面接日時を保存しました":"面接日時を消しました");render();
+ });
+ // v2.6.37 一覧からそのまま確定 → 面接URLを発行して本人へ送る
+ document.querySelectorAll("[data-rcivgo]").forEach(b=>b.onclick=async e=>{
+  e.stopPropagation();
+  const id=b.dataset.rcivgo,a=(rcList||[]).find(x=>x.id===id);
+  if(!a)return;
+  const inp=document.querySelector(`[data-rciv="${id}"]`);
+  const v=inp&&inp.value?inp.value:null;
+  if(!v){toast("先に面接日時を入れてください",true);return}
+  const iso=new Date(v).toISOString();
+  if(!confirm(`${a.name}さんの面接を ${v.replace("T"," ")} で確定します。\n面接URLを発行し、${a.line_user_id?"LINEでご案内を送ります":"案内文をコピーします"}。よろしいですか？`))return;
+  b.disabled=true;b.textContent="発行中...";
+  let url=a.interview_url||"";
+  if(!url)url=await makeMeet(a,iso)||"";
+  const {error}=await sb.rpc("set_interview",{p_applicant:id,p_at:iso,p_url:url||null});
+  if(error){b.disabled=false;toast("確定できませんでした: "+error.message,true);render();return}
+  const txt=interviewText({...a,interview_at:iso,interview_url:url});
+  if(a.line_user_id){
+   const r=await lineFn({action:"push",applicant_id:id,text:txt});
+   if(!r.ok){b.disabled=false;toast("確定しましたが、LINEを送れませんでした: "+(r.error||"不明"),true);rcList=null;render();return}
+   try{await sb.rpc("line_claim_last_out",{p_applicant:id})}catch(e){}
+   toast(url?"確定し、面接URLをLINEで送りました":"確定してLINEで送りました（URLは未発行）");
+  }else{
+   copyText(txt);
+   toast("確定しました。案内文をコピーしたので、Indeedやメールに貼り付けて送ってください");
+  }
+  try{await sb.rpc("mark_interview_sent",{p_applicant:id})}catch(e){}
+  rcList=null;render();
  });
  document.querySelectorAll("[data-rcstore]").forEach(el=>el.onchange=async e=>{ // v2.6.18 ②③ 店舗をその場で変える
   e.stopPropagation();

@@ -170,7 +170,18 @@ const rcOverdue=a=>!!(a&&a.interview_at&&APPLICANT_ACTIVE.includes(a.status)&&ne
 // v2.6.16 Indeedメッセージが届いてまだ開いていない応募者かどうか（v2.6.31 自分が開いたかで判定）
 const rcMsgNew=a=>!!(a&&rcNewer(a,a.msg_received_at));
 // v2.6.31 応募者から来たまま、こちらが返していない＝要対応
-const rcWaiting=a=>!!(a&&APPLICANT_ACTIVE.includes(a.status)&&(a.last_msg_dir==="in"||rcFormNew(a)));
+const rcWaiting=a=>{
+ if(!a||!APPLICANT_ACTIVE.includes(a.status))return false;
+ if(!(a.last_msg_dir==="in"||rcFormNew(a)))return false;
+ // v2.6.43 「対応済み」にしてあれば消す。ただし、そのあとに新しく届いたらまた出す
+ if(a.handled_at){
+  const h=new Date(a.handled_at).getTime();
+  const last=Math.max(a.last_msg_dir==="in"&&a.last_msg_at?new Date(a.last_msg_at).getTime():0,
+                      a.form_received_at?new Date(a.form_received_at).getTime():0);
+  if(h>=last)return false;
+ }
+ return true;
+};
 // v2.6.31 最後に動いたのはどちらか（表示用）
 function rcLastMove(a){
  if(!a)return "";
@@ -460,10 +471,11 @@ async function renderApply(){
    <div>${[["exact","日時をぴったり指定"],["range","この時間帯なら可"],["any","いつでもよい"]]
      .map(([v,l])=>`<span class="chip ivmode" data-iv="${n}" data-m="${v}">${l}</span>`).join("")}</div>
    <div data-ivbox="${n}" style="display:none;margin-top:6px">
-    <input type="date" class="inp" data-ivdate="${n}" style="margin-top:0">
-    <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
-     <input type="time" class="inp" data-ivfrom="${n}" style="margin:0">
-     <span data-ivto-wrap="${n}" style="display:none;align-items:center;gap:6px">〜 <input type="time" class="inp" data-ivto="${n}" style="margin:0"></span>
+    <p class="muted" style="margin:0 0 2px;font-size:12px">日付と時刻をお選びください</p>
+    <input type="datetime-local" class="inp" data-ivdt="${n}" style="margin-top:0;font-size:16px;padding:12px">
+    <div data-ivto-wrap="${n}" style="display:none;align-items:center;gap:6px;margin-top:6px">
+     <span style="font-size:13px">この時刻まで</span>
+     <input type="time" class="inp" data-ivto="${n}" style="margin:0;font-size:16px;padding:10px;max-width:150px">
     </div>
    </div>
    <input type="text" class="inp" data-ivnote="${n}" placeholder="例: 平日の夕方以降なら空いています（任意）" style="display:none;margin-top:6px">
@@ -482,7 +494,7 @@ async function renderApply(){
   const box=document.querySelector(`[data-ivbox="${n}"]`),note=document.querySelector(`[data-ivnote="${n}"]`),
         to=document.querySelector(`[data-ivto-wrap="${n}"]`);
   box.style.display=(on&&m!=="any")?"":"none";
-  to.style.display=(on&&m==="range")?"inline-flex":"none";
+  to.style.display=(on&&m==="range")?"flex":"none";
   note.style.display=(on&&m==="any")?"":"none";
  });
  // v2.6.22 「他」を選んだら自由記入欄を出す
@@ -512,10 +524,11 @@ async function doApply(){
   if(!c)continue;
   const m=c.dataset.m,g=s=>{const el=document.querySelector(`[data-iv${s}="${n}"]`);return el?el.value.trim():""};
   if(m==="any"){prefs.push({mode:"any",note:g("note")});continue}
-  const date=g("date"),from=g("from"),to=g("to");
-  if(!date){toast(`第${n+1}希望の日付を選んでください`,true);return}
-  if(!from){toast(`第${n+1}希望の時刻を入れてください`,true);return}
-  if(m==="range"&&!to){toast(`第${n+1}希望の終わりの時刻を入れてください`,true);return}
+  // v2.6.43 日付と時刻を1つの入力（カレンダー＋時計）で選んでもらう
+  const dt=g("dt"),to=g("to");
+  if(!dt){toast(`第${n+1}希望の日時を選んでください`,true);return}
+  const date=dt.slice(0,10),from=dt.slice(11,16);
+  if(m==="range"&&!to){toast(`第${n+1}希望の「この時刻まで」を入れてください`,true);return}
   if(m==="range"&&to<=from){toast(`第${n+1}希望は、終わりの時刻を開始より後にしてください`,true);return}
   prefs.push(m==="range"?{mode:"range",date,from,to}:{mode:"exact",date,from});
  }
@@ -530,16 +543,24 @@ async function doApply(){
   const {data:lc}=await sb.rpc("apply_line_code",{p_applicant:newId});
   if(lc&&lc.ok&&lc.oa){
    const lu="https://line.me/R/oaMessage/"+encodeURIComponent(lc.oa)+"/?"+encodeURIComponent(lc.code);
-   lineBox=`<div class="card" style="background:#f0fff4;border:2px solid #06c755;margin-top:14px">
-    <h3 style="margin:0">📱 LINEでのご連絡がスムーズです</h3>
-    <p class="muted" style="margin:6px 0 10px">面接日程のご相談などにお使いください。<br><b>ボタンを押すとLINEが開きます。文字が入った状態になるので、そのまま送信してください。</b></p>
-    <a href="${lu}" class="btn" style="background:#06c755;display:block;text-align:center;text-decoration:none;color:#fff">💚 LINEでやりとりする</a>
-    <p class="muted" style="margin:10px 0 0;font-size:12px">うまく開かない場合は、LINEで下の合言葉を送ってください</p>
-    <p style="font-size:22px;font-weight:700;letter-spacing:4px;margin:4px 0 0;text-align:center">${esc(lc.code)}</p></div>`;
+   // v2.6.43 いちばん目立たせる（完了メッセージより上・大きく）
+   lineBox=`<div class="card" style="background:#f0fff4;border:3px solid #06c755;margin:0 0 14px;padding:18px 16px">
+    <p style="margin:0 0 4px;text-align:center;font-size:13px;color:#06803c;font-weight:700">あと1ステップ</p>
+    <h3 style="margin:0;text-align:center;font-size:18px">📱 LINEのご登録をお願いします</h3>
+    <p style="margin:8px 0 12px;font-size:14px">面接日程のご連絡は<b>LINEでお送りします</b>。<br>
+     下のボタンを押すとLINEが開き、<b>文字が入った状態になりますので、そのまま送信してください。</b></p>
+    <a href="${lu}" class="btn" style="background:#06c755;display:block;text-align:center;text-decoration:none;color:#fff;font-size:17px;padding:15px">💚 LINEで登録する</a>
+    <p class="muted" style="margin:12px 0 0;font-size:12px;text-align:center">うまく開かない場合は、LINEで下の合言葉を送ってください</p>
+    <p style="font-size:26px;font-weight:700;letter-spacing:5px;margin:4px 0 0;text-align:center">${esc(lc.code)}</p></div>`;
+  }else if(lc&&lc.linked){
+   lineBox=`<div class="card" style="background:#f0fff4;border:2px solid #06c755;margin:0 0 14px">
+    <h3 style="margin:0">💚 LINEは登録済みです</h3>
+    <p style="margin:6px 0 0;font-size:14px">ご連絡はLINEでお送りしますので、そのままお待ちください。</p></div>`;
   }
  }catch(e){}
+ // LINEのご案内を先に、完了メッセージを後に出す（登録を見落とされないように）
  $("app").innerHTML=`<div class="loginwrap"><h2 class="center" style="font-size:20px">🐔 鳥一代グループ</h2>
-  <div class="info">✅ ご応募ありがとうございました！<br>内容を確認のうえ、採用担当からご連絡いたします。</div>${lineBox}</div>`;
+  ${lineBox}<div class="info">✅ ご応募ありがとうございました！<br>内容を確認のうえ、採用担当からご連絡いたします。</div></div>`;
 }
 
 // ===== 入社登録（招待リンクから本人が入力） =====
@@ -2014,7 +2035,7 @@ async function recruitView(){
   const move=rcLastMove(a);
   const moveAt=a.last_msg_at||a.last_actor_at||a.updated_at;
   const moveTxt=move?`・${move==="応募者から"?"🔴":"✅"} ${esc(move)} ${moveAt?fmtDue(moveAt):""}`:(a.updated_at?`・更新 ${fmtDue(a.updated_at)}`:"");
-  h+=`<div class="row" data-rcrow="${a.id}" style="cursor:default${od?";background:#fff1f2":wait?";background:#fff7ed":""}"><span style="flex:1;min-width:0"><b>${rcNameAge(a)}</b>${a.line_user_id?LINE_ICON:""} <span style="display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;vertical-align:middle">${stSel}${ivIn}${invBtn}${wait?'<span class="badge" style="background:#c0392b">🔴 未対応</span>':""}${fNew?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span>':""}${mNew?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span>':""}${od?'<span class="badge" style="background:#c0392b">⚠️ 面接日超過</span>':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</span><br>
+  h+=`<div class="row" data-rcrow="${a.id}" style="cursor:default${od?";background:#fff1f2":wait?";background:#fff7ed":""}"><span style="flex:1;min-width:0"><b>${rcNameAge(a)}</b>${a.line_user_id?LINE_ICON:""} <span style="display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;vertical-align:middle">${stSel}${ivIn}${invBtn}${wait?`<span class="badge" style="background:#c0392b">🔴 未対応</span><button class="btn sm sub" data-rcdone="${a.id}" style="margin:0;font-size:11px;padding:2px 8px">対応済みにする</button>`:""}${fNew?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span>':""}${mNew?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span>':""}${od?'<span class="badge" style="background:#c0392b">⚠️ 面接日超過</span>':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</span><br>
    <span class="muted">${form?esc(form.title.replace("応募フォーム","")):esc(a.job_type||"")}・${storeSel("font-size:11px;padding:1px 3px;border:1px solid var(--line);border-radius:6px;background:#fff;color:inherit;max-width:136px;font-family:inherit")}${hint?"<span> 求人: "+esc(hint.split("、")[0].split(",")[0].slice(0,14))+"</span>":""}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}${a.interview_at?`・面接 ${fmtDue(a.interview_at)}`:""}・${asgTxt}${moveTxt}</span></span><button class="btn sm sub" data-rcopen="${a.id}" style="flex-shrink:0;margin:0;font-size:12px;padding:6px 10px">詳細</button></div>`;
  });
  if(list.length>rcShown)h+=`<button class="btn sm sub" id="rc-more" style="margin-top:10px;width:100%">▼ さらに100件表示する（残り ${list.length-rcShown}件）</button>`;
@@ -2181,11 +2202,13 @@ function recruitDetailView(){
  if(!a){rcDetail=null;return `<span class="back" id="rcback">← 応募者一覧</span><div class="alert">応募者が見つかりません</div>`}
  const form=(rcForms||[]).find(f=>f.key===a.form_key);
  let h=`<span class="back" id="rcback">← 応募者一覧</span>
- <h2>${rcNameAge(a)} ${rcFormNew(a)?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span> ':""}${rcMsgNew(a)?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span> ':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</h2>
+ <h2>${rcNameAge(a)} ${rcFormNew(a)?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span> ':""}${rcMsgNew(a)?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span> ':""}${a.user_id?'<span class="badge g">入社済み</span>':""}${rcWaiting(a)?'<span class="badge" style="background:#c0392b">🔴 未対応</span>':""}</h2>
+ ${rcWaiting(a)?`<p style="margin:-4px 0 8px"><button class="btn sm sub" data-rcdone="${a.id}" style="margin:0;font-size:12px">✅ 対応済みにする</button></p>`:(a.handled_at?`<p class="muted" style="margin:-4px 0 8px;font-size:12px">✅ 対応済み（${fmtDue(a.handled_at)}）　<span style="color:var(--blue);cursor:pointer" data-rcundone="${a.id}">未対応に戻す</span></p>`:"")}
  <p class="muted" style="margin-top:-8px">${form?esc(form.title):esc(a.job_type||"")}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}<br>
  ${a.phone?`📞 <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>　`:""}${a.email?`✉️ ${esc(a.email)}`:""}</p>`;
  // v2.6.35 面接の日程調整（希望日時をタップするだけで確定できる）
- h+=`<div class="card"${a.interview_at?'':' style="background:#fffbeb;border-left:4px solid #d97706"'}><h3>📅 面接の日程</h3>`;
+ h+=`<div class="card"${a.interview_at?'':' style="background:#fffbeb;border-left:4px solid #d97706"'}>
+ <details${a.interview_at?"":" open"}><summary style="cursor:pointer"><b style="font-size:15px">📅 面接の日程</b>${a.interview_at?` <span class="muted" style="font-size:11px">（${fmtDue(a.interview_at)}に確定）</span>`:' <span class="muted" style="font-size:11px">（未定）</span>'}</summary>`;
  // v2.6.40 最後に出たエラーを画面に残す（トーストだとすぐ消えて読めないため）
  if(lastMeetError)h+=`<div class="alert" style="margin:0 0 8px"><b>⚠️ 面接URLの発行でエラーが出ました</b><br>
   <span style="font-size:12px;word-break:break-all">${esc(lastMeetError)}</span><br>
@@ -2227,7 +2250,7 @@ function recruitDetailView(){
   <div style="display:flex;gap:6px;flex-wrap:wrap">
    <button class="btn sm sub" id="rc-ivurlsave" style="margin:0">URLを保存</button>
    ${a.interview_at?`<button class="btn sm" id="rc-ivsend" style="margin:0;background:${a.line_user_id?"#06c755":"var(--blue)"}">${a.line_user_id?"💚 LINEで案内を送る":"📋 案内文をコピーする"}</button>`:""}</div>
-  </div>`;
+  </details></div>`;
  // v2.6.33 同じ方かもしれない候補（住所などが変わっていて別人に見えている場合に気づけるように）
  if((rcSimilar||[]).length){
   h+=`<div class="card" style="background:#fffbeb;border-left:4px solid #d97706"><h3 style="margin:0">🔎 もしかして、同じ方かもしれません（${rcSimilar.length}件）</h3>
@@ -2279,7 +2302,7 @@ function recruitDetailView(){
  h+=`</div>`;
  // v2.6.16 Indeedのやりとり
  const msgs=rcMsgs||[];
- h+=`<div class="card"><h3>💬 やりとり${msgs.length?` <span class="muted" style="font-weight:400;font-size:11px">（${msgs.length}件）</span>`:""}</h3>`;
+ h+=`<div class="card"><details${msgs.length>3?"":" open"}><summary style="cursor:pointer"><b style="font-size:15px">💬 やりとり</b>${msgs.length?` <span class="muted" style="font-size:11px">（${msgs.length}件）</span>`:""}</summary>`;
  if(!msgs.length)h+=`<p class="muted" style="margin:0">まだやりとりはありません。Indeedのメッセージは5分ごとに自動で取り込まれます（🔵Indeed／💚LINE）</p>`;
  else msgs.forEach(m=>{
   const mine=m.direction==="out";
@@ -2293,7 +2316,7 @@ function recruitDetailView(){
     <div style="font-size:13px;white-space:pre-wrap;word-break:break-word">${esc(m.body)}</div>
    </div></div>`;
  });
- h+=`<p class="muted" style="margin:8px 0 0">返信は上の「▶ Indeedページを開く」からIndeedの画面で行ってください${msgs.length?"<br>送り手が違っていたら「↔ …に直す」を押してください。<b>同じ相手のメッセージがまとめて直り、次からも自動で正しくなります</b>":""}</p></div>`;
+ h+=`<p class="muted" style="margin:8px 0 0">返信は上の「▶ Indeedページを開く」からIndeedの画面で行ってください${msgs.length?"<br>送り手が違っていたら「↔ …に直す」を押してください。<b>同じ相手のメッセージがまとめて直り、次からも自動で正しくなります</b>":""}</p></details></div>`;
  h+=`<div class="card"><h3>✏️ 基本情報（タップで編集できます）</h3>
   <input type="text" id="rc-ename" placeholder="氏名" value="${esc(a.name)}">
   <input type="text" id="rc-ephone" placeholder="電話番号" value="${esc(a.phone||"")}">
@@ -2332,14 +2355,14 @@ function recruitDetailView(){
    </div>
    <p class="muted" style="margin:6px 0 0">「リンクを送る」を押すと、この端末の共有メニューからLINE・SMS・メールなどを選んで送れます${a.email?"":"（メールアドレスが未登録のため「メールで送る」は出ていません）"}</p>`}</div>`;
  }
- h+=`<div class="card"><h3>📝 応募内容</h3>`;
+ h+=`<div class="card"><details><summary style="cursor:pointer"><b style="font-size:15px">📝 応募内容</b> <span class="muted" style="font-size:11px">（タップで開く）</span></summary>`;
  const seen={};
  if(form)(form.fields||[]).forEach(f=>{const v=(a.answers||{})[f.k];seen[f.k]=1;if(v==null||v==="")return;
   h+=`<p style="margin:8px 0 0;font-size:13px"><span class="muted">${esc(f.label)}</span><br>${esc(fmtAnswerVal(v)).replace(/\n/g,"<br>")}</p>`;});
  Object.entries(a.answers||{}).forEach(([k,v])=>{if(seen[k]||v==null||v===""||String(k).startsWith("_"))return;
   h+=`<p style="margin:8px 0 0;font-size:13px"><span class="muted">${esc(k)}</span><br>${esc(fmtAnswerVal(v)).replace(/\n/g,"<br>")}</p>`;});
  if(!Object.keys(a.answers||{}).length)h+=`<p class="muted" style="margin:0">回答はありません（手動追加）</p>`;
- h+=`</div><button class="btn sub" id="rc-del" style="color:var(--red);border-color:var(--red)">この応募者を削除する</button>`;
+ h+=`</details></div><button class="btn sub" id="rc-del" style="color:var(--red);border-color:var(--red)">この応募者を削除する</button>`;
  return h;
 }
 async function saveApplicant(){
@@ -2844,7 +2867,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.42</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.43</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3715,6 +3738,20 @@ function bindPage(){
  });
  document.querySelectorAll("[data-rcseg]").forEach(el=>el.onclick=()=>{rcSeg=el.dataset.rcseg;if(rcFStatus&&rcSegOf(rcFStatus)!==rcSeg)rcFStatus="";render()});
  if($("rc-onlywait"))$("rc-onlywait").onclick=()=>{rcOnlyWait=!rcOnlyWait;render()}; // v2.6.31
+ // v2.6.43 「対応済みにする」（返信で完結する用件のために手動で消せるようにする）
+ document.querySelectorAll("[data-rcdone]").forEach(b=>b.onclick=async e=>{
+  e.stopPropagation();
+  b.disabled=true;
+  const {error}=await sb.rpc("mark_applicant_handled",{p_applicant:b.dataset.rcdone,p_on:true});
+  if(error){b.disabled=false;toast("変更できませんでした: "+error.message,true);return}
+  toast("対応済みにしました（新しく届いたらまた出ます）");
+  rcList=null;render();
+ });
+ document.querySelectorAll("[data-rcundone]").forEach(b=>b.onclick=async()=>{ // v2.6.43 未対応に戻す
+  const {error}=await sb.rpc("mark_applicant_handled",{p_applicant:b.dataset.rcundone,p_on:false});
+  if(error){toast("変更できませんでした: "+error.message,true);return}
+  toast("未対応に戻しました");rcList=null;render();
+ });
  document.querySelectorAll("[data-rccopy]").forEach(el=>el.onclick=e=>{e.stopPropagation();copyText(el.dataset.rccopy)});
  if($("rcq"))$("rcq").onkeydown=e=>{if(e.key==="Enter"){rcQ=$("rcq").value.trim();render()}};
  if($("rcqclear"))$("rcqclear").onclick=()=>{rcQ="";rcFForm="";rcFSrc="";rcFArea="";rcFStatus="";rcFrom="";rcTo="";render()};

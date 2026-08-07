@@ -446,10 +446,41 @@ async function renderApply(){
   else h+=`<textarea rows="2" data-ap="${i}"></textarea>`;
   h+=`</div>`;
  });
+ // v2.6.35 面接の希望日時を3つまで。日時ぴったり／時間帯／いつでも から選べる
+ h+=`<div class="card"><h3>面接の希望日時 <span class="req">必須</span></h3>
+  <p class="muted" style="margin:0 0 4px">ご都合のよい日時を<b>3つまで</b>お知らせください。1つ目だけでも構いません。<br>
+  早くお決まりになるほど、面接のご案内も早くお送りできます。</p>`;
+ for(let n=0;n<3;n++){
+  h+=`<div style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px">
+   <p class="muted" style="margin:0 0 4px">第${n+1}希望${n?"（任意）":""}</p>
+   <div>${[["exact","日時をぴったり指定"],["range","この時間帯なら可"],["any","いつでもよい"]]
+     .map(([v,l])=>`<span class="chip ivmode" data-iv="${n}" data-m="${v}">${l}</span>`).join("")}</div>
+   <div data-ivbox="${n}" style="display:none;margin-top:6px">
+    <input type="date" class="inp" data-ivdate="${n}" style="margin-top:0">
+    <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+     <input type="time" class="inp" data-ivfrom="${n}" style="margin:0">
+     <span data-ivto-wrap="${n}" style="display:none;align-items:center;gap:6px">〜 <input type="time" class="inp" data-ivto="${n}" style="margin:0"></span>
+    </div>
+   </div>
+   <input type="text" class="inp" data-ivnote="${n}" placeholder="例: 平日の夕方以降なら空いています（任意）" style="display:none;margin-top:6px">
+  </div>`;
+ }
+ h+=`</div>`;
  h+=`<button class="btn" id="ap-submit">応募する</button>
   <p class="muted center" style="margin-top:12px">送信すると採用担当者に届きます。ご連絡をお待ちください。</p></div>`;
  $("app").innerHTML=h;
  document.querySelectorAll(".chip[data-apm]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
+ // v2.6.35 希望日時: 選んだ方式に合わせて入力欄を出し分ける
+ document.querySelectorAll(".chip.ivmode").forEach(c=>c.onclick=()=>{
+  const n=c.dataset.iv,m=c.dataset.m,on=!c.classList.contains("on");
+  document.querySelectorAll(`.chip.ivmode[data-iv="${n}"]`).forEach(x=>x.classList.remove("on"));
+  if(on)c.classList.add("on");
+  const box=document.querySelector(`[data-ivbox="${n}"]`),note=document.querySelector(`[data-ivnote="${n}"]`),
+        to=document.querySelector(`[data-ivto-wrap="${n}"]`);
+  box.style.display=(on&&m!=="any")?"":"none";
+  to.style.display=(on&&m==="range")?"inline-flex":"none";
+  note.style.display=(on&&m==="any")?"":"none";
+ });
  // v2.6.22 「他」を選んだら自由記入欄を出す
  document.querySelectorAll("select[data-ap]").forEach(el=>el.onchange=()=>toggleOther("apother",el.dataset.ap,el.value));
  document.querySelectorAll("input[data-apr]").forEach(el=>el.onchange=()=>toggleOther("apother",el.dataset.apr,el.value));
@@ -470,6 +501,22 @@ async function doApply(){
   if(v)answers[fd.k]=v;
  });
  if(missing){toast(`「${missing}」は必須です`,true);return}
+ // v2.6.35 面接の希望日時を集める
+ const prefs=[];
+ for(let n=0;n<3;n++){
+  const c=document.querySelector(`.chip.ivmode[data-iv="${n}"].on`);
+  if(!c)continue;
+  const m=c.dataset.m,g=s=>{const el=document.querySelector(`[data-iv${s}="${n}"]`);return el?el.value.trim():""};
+  if(m==="any"){prefs.push({mode:"any",note:g("note")});continue}
+  const date=g("date"),from=g("from"),to=g("to");
+  if(!date){toast(`第${n+1}希望の日付を選んでください`,true);return}
+  if(!from){toast(`第${n+1}希望の時刻を入れてください`,true);return}
+  if(m==="range"&&!to){toast(`第${n+1}希望の終わりの時刻を入れてください`,true);return}
+  if(m==="range"&&to<=from){toast(`第${n+1}希望は、終わりの時刻を開始より後にしてください`,true);return}
+  prefs.push(m==="range"?{mode:"range",date,from,to}:{mode:"exact",date,from});
+ }
+ if(!prefs.length){toast("面接の希望日時を1つ以上お知らせください",true);return}
+ answers._面接希望=prefs;
  $("ap-submit").disabled=true;$("ap-submit").textContent="送信中...";
  const {data:newId,error}=await sb.rpc("apply_submit",{p_form_key:applyKey,p_name:name,p_phone:phone||null,p_email:email||null,p_answers:answers});
  if(error){toast("送信エラー: "+error.message,true);$("ap-submit").disabled=false;$("ap-submit").textContent="応募する";return}
@@ -594,6 +641,31 @@ async function renderJoin(){
   joinSmCheck();
  });
  if(!info.smaregi_staff_id&&!skipSm)loadJoinSm();
+}
+// v2.6.35 Google Meet のリンクを作る（GASのウェブアプリ経由）
+// 設定されていない・失敗した場合は空を返し、手で貼り付ける運用に落ちる
+let gasCfg=null;
+async function makeMeet(a,iso){
+ try{
+  if(gasCfg===null){const {data}=await sb.rpc("gas_config");gasCfg=data||false}
+  if(!gasCfg||!gasCfg.url)return "";
+  const res=await fetch(gasCfg.url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},
+   body:JSON.stringify({key:gasCfg.key,action:"meet",name:a.name,start:iso,minutes:30,
+    note:`nippo の応募者管理から作成\n${a.phone||""} ${a.email||""}`})});
+  const j=await res.json().catch(()=>({}));
+  if(!j.ok){toast("Meetのリンクを作れませんでした: "+(j.error||"不明")+"（URLは手で貼り付けられます）",true);return ""}
+  return j.url||"";
+ }catch(e){toast("Meetのリンクを作れませんでした（URLは手で貼り付けられます）",true);return ""}
+}
+// v2.6.35 本人に送る面接のご案内
+function interviewText(a){
+ const d=new Date(a.interview_at);
+ const w="日月火水木金土"[d.getDay()];
+ const when=`${d.getMonth()+1}月${d.getDate()}日(${w}) ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+ let t=`${a.name}さん\n\nこの度はご応募いただきありがとうございます。\n面接の日時が決まりましたのでご連絡いたします。\n\n【面接日時】${when}`;
+ if(a.interview_url)t+=`\n【面接URL】${a.interview_url}\n\nお時間になりましたら、上のリンクからご参加ください。`;
+ t+=`\n\nご都合が悪くなった場合は、このままご返信ください。\nお会いできるのを楽しみにしております。`;
+ return t;
 }
 // v2.6.33 重複の確認（同じ氏名で2件以上ある人の一覧）
 async function recruitDupView(){
@@ -2054,6 +2126,38 @@ function recruitDetailView(){
  <h2>${rcNameAge(a)} ${rcFormNew(a)?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span> ':""}${rcMsgNew(a)?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span> ':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</h2>
  <p class="muted" style="margin-top:-8px">${form?esc(form.title):esc(a.job_type||"")}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}<br>
  ${a.phone?`📞 <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>　`:""}${a.email?`✉️ ${esc(a.email)}`:""}</p>`;
+ // v2.6.35 面接の日程調整（希望日時をタップするだけで確定できる）
+ h+=`<div class="card"${a.interview_at?'':' style="background:#fffbeb;border-left:4px solid #d97706"'}><h3>📅 面接の日程</h3>`;
+ if(a.interview_at){
+  h+=`<p style="margin:0;font-size:14px">✅ <b>${fmtDue(a.interview_at)}</b> に決まっています${a.interview_set_by?`　<span class="muted">（${esc(taskUserName(a.interview_set_by)||"")}が確定）</span>`:""}</p>`;
+  if(a.interview_url)h+=`<p style="margin:6px 0 0;font-size:13px;word-break:break-all">🔗 <a href="${esc(a.interview_url)}" target="_blank" rel="noopener">${esc(a.interview_url)}</a></p>`;
+  h+=`<p class="muted" style="margin:6px 0 0">${a.interview_sent_at?`📤 本人へ送信済み（${fmtDue(a.interview_sent_at)}）`:"⚠️ まだ本人へ送っていません"}</p>`;
+ }
+ const prefs=(a.interview_prefs||[]);
+ if(prefs.length){
+  h+=`<p class="muted" style="margin:8px 0 4px">本人の希望日時（タップすると、その日時で確定します）</p>`;
+  prefs.forEach((p,i)=>{
+   if(p.mode==="any"){
+    h+=`<p style="margin:4px 0;font-size:13px">第${i+1}希望: <b>いつでもよい</b>${p.note?`<span class="muted">（${esc(p.note)}）</span>`:""}</p>`;
+    return;
+   }
+   const label=p.mode==="range"?`${esc(p.date)} ${esc(p.from)}〜${esc(p.to)}`:`${esc(p.date)} ${esc(p.from)}`;
+   h+=`<div class="row" style="cursor:default"><span>第${i+1}希望: <b>${label}</b></span>
+    <button class="btn sm" data-ivpick="${esc(p.date)}" data-ivtime="${esc(p.from)}" style="margin:0;flex-shrink:0;font-size:12px;padding:6px 10px">この日時で確定</button></div>`;
+  });
+ }else{
+  h+=`<p class="muted" style="margin:8px 0 0">本人からの希望日時はありません（応募フォームより前に登録された方です）</p>`;
+ }
+ h+=`<p class="muted" style="margin:8px 0 4px">別の日時にする場合はこちら</p>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+   <input type="datetime-local" id="rc-ivat" class="inp" style="margin:0;max-width:220px" value="${a.interview_at?new Date(new Date(a.interview_at).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):""}">
+   <button class="btn sm" id="rc-ivset" style="margin:0">この日時で確定</button></div>
+  <p class="muted" style="margin:8px 0 2px">面接URL（確定時に自動で発行されます。手で貼り付けてもOK）</p>
+  <input type="text" id="rc-ivurl" value="${esc(a.interview_url||"")}" placeholder="https://meet.google.com/..." style="font-size:12px">
+  <div style="display:flex;gap:6px;flex-wrap:wrap">
+   <button class="btn sm sub" id="rc-ivurlsave" style="margin:0">URLを保存</button>
+   ${a.interview_at?`<button class="btn sm" id="rc-ivsend" style="margin:0;background:${a.line_user_id?"#06c755":"var(--blue)"}">${a.line_user_id?"💚 LINEで案内を送る":"📋 案内文をコピーする"}</button>`:""}</div>
+  </div>`;
  // v2.6.33 同じ方かもしれない候補（住所などが変わっていて別人に見えている場合に気づけるように）
  if((rcSimilar||[]).length){
   h+=`<div class="card" style="background:#fffbeb;border-left:4px solid #d97706"><h3 style="margin:0">🔎 もしかして、同じ方かもしれません（${rcSimilar.length}件）</h3>
@@ -2632,9 +2736,17 @@ async function settingsView(){
    <p class="muted" style="margin:0 0 8px">役職ごとに使える機能と、特定の人だけの例外を設定できます</p>
    <button class="btn sm" id="set-perm">権限設定を開く</button></div>`;
  }
+ // v2.6.35 面接のGoogle Meetを自動発行するための接続先（社長・本部のみ）
+ if(isAdmin())h+=`<div class="card"><h3>📅 面接Meetの自動発行</h3>
+  <p class="muted" style="margin:0 0 6px">面接日時を確定したときに、Google Meet のリンクを自動で作る設定です。<br>
+  設定しなくても、面接URLを手で貼り付ければ使えます。<b>手順は「面接Meet発行の設定手順.md」をご覧ください。</b></p>
+  <input type="text" id="set-gasurl" placeholder="GASウェブアプリのURL（https://script.google.com/macros/s/.../exec）" style="font-size:12px">
+  <input type="text" id="set-gaskey" placeholder="GAS側の GAS_KEY と同じ文字列" style="font-size:12px">
+  <button class="btn sm sub" id="set-gassave">保存する</button>
+  <p class="muted" style="margin:6px 0 0;font-size:11px">保存済みの内容は安全のため表示されません。変えたいときだけ入力してください</p></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.34</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.35</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3272,6 +3384,62 @@ function bindPage(){
  if($("adstores"))$("adstores").onclick=()=>{adminMode="stores";stList=null;stSmaregi=undefined;lastIssued=null;lastInvite=null;render()};
  // v2.5 応募者管理
  if($("rcback"))$("rcback").onclick=()=>{rcDetail=null;rcMsgs=null;rcSimilar=[];rcPast=[];render()};
+ if($("set-gassave"))$("set-gassave").onclick=async()=>{ // v2.6.35 面接Meetの接続先を保存
+  const u=$("set-gasurl").value.trim(),k=$("set-gaskey").value.trim();
+  if(!u||!k){toast("URLと合言葉の両方を入れてください",true);return}
+  if(!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(u)){
+   toast("URLの形が違います。末尾が /exec のウェブアプリURLを貼ってください",true);return}
+  const {error}=await sb.rpc("set_gas_config",{p_url:u,p_key:k});
+  if(error){toast("保存エラー: "+error.message,true);return}
+  gasCfg=null;$("set-gasurl").value="";$("set-gaskey").value="";
+  toast("保存しました。面接日時を確定するとMeetのリンクが作られます");
+ };
+ // v2.6.35 面接日時の確定（希望日時のタップ・自由入力のどちらも同じ処理）
+ const ivConfirm=async iso=>{
+  const a=rcList.find(x=>x.id===rcDetail);if(!a)return;
+  let url=($("rc-ivurl")&&$("rc-ivurl").value.trim())||"";
+  if(!url){ // Google Meet を自動発行する（設定されていれば）
+   const made=await makeMeet(a,iso);
+   if(made)url=made;
+  }
+  const {error}=await sb.rpc("set_interview",{p_applicant:a.id,p_at:iso,p_url:url||null});
+  if(error){toast("確定できませんでした: "+error.message,true);return}
+  toast(url?"面接日時を確定し、URLを発行しました":"面接日時を確定しました");
+  rcList=null;rcSimilar=[];rcPast=[];render();
+ };
+ document.querySelectorAll("[data-ivpick]").forEach(b=>b.onclick=async()=>{
+  const iso=new Date(`${b.dataset.ivpick}T${b.dataset.ivtime}:00`).toISOString();
+  if(!confirm(`${b.dataset.ivpick} ${b.dataset.ivtime} で面接を確定します。よろしいですか？`))return;
+  b.disabled=true;await ivConfirm(iso);
+ });
+ if($("rc-ivset"))$("rc-ivset").onclick=async()=>{
+  const v=$("rc-ivat").value;
+  if(!v){toast("日時を選んでください",true);return}
+  $("rc-ivset").disabled=true;await ivConfirm(new Date(v).toISOString());
+ };
+ if($("rc-ivurlsave"))$("rc-ivurlsave").onclick=async()=>{
+  const {error}=await sb.from("applicants").update({interview_url:$("rc-ivurl").value.trim()||null,
+   updated_at:new Date().toISOString(),last_actor_id:me.id,last_actor_at:new Date().toISOString()}).eq("id",rcDetail);
+  if(error){toast("保存エラー: "+error.message,true);return}
+  toast("面接URLを保存しました");rcList=null;render();
+ };
+ if($("rc-ivsend"))$("rc-ivsend").onclick=async()=>{
+  const a=rcList.find(x=>x.id===rcDetail);if(!a||!a.interview_at)return;
+  const txt=interviewText(a);
+  if(a.line_user_id){
+   $("rc-ivsend").disabled=true;
+   const r=await lineFn({action:"push",applicant_id:a.id,text:txt});
+   $("rc-ivsend").disabled=false;
+   if(!r.ok){toast("送信できませんでした: "+(r.error||"不明"),true);return}
+   try{await sb.rpc("line_claim_last_out",{p_applicant:a.id})}catch(e){}
+   toast("LINEで面接のご案内を送りました");
+  }else{
+   copyText(txt);
+   toast("案内文をコピーしました。Indeedやメールに貼り付けて送ってください");
+  }
+  try{await sb.rpc("mark_interview_sent",{p_applicant:a.id})}catch(e){}
+  rcList=null;render();
+ };
  // v2.6.33 同じ方かもしれない候補を1件にまとめる
  document.querySelectorAll("[data-rcmerge]").forEach(b=>b.onclick=async()=>{
   const keep=rcList.find(x=>x.id===rcDetail);

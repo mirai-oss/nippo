@@ -382,6 +382,29 @@ function withOther(v,attr,i){ // 「他」＋自由記入 → 「他（ネット
 }
 // v2.6.23 郵便番号を入れたら住所を自動で入れる（zipcloud・無料/登録不要）
 // 住所欄がすでに埋まっているときは上書きしない（本人が書いた番地を消さないため）
+// v2.6.48 最寄り駅の候補を出して「選べる」ようにする（選んだものを返せる）
+async function showStations(boxId,addrId){
+ const box=$(boxId),el=$(addrId);
+ if(!box||!el)return;
+ const addr=el.value.trim();
+ if(!addr){toast("先に住所を入れてください",true);return}
+ box.innerHTML=`<p class="muted" style="margin:0">調べています…</p>`;
+ const st=await stationsNear(addr);
+ if(!st.length){box.innerHTML=`<p class="muted" style="margin:0">最寄り駅が見つかりませんでした（住所をもう少し詳しく入れてみてください）</p>`;return}
+ box.innerHTML=`<p class="muted" style="margin:0 0 4px">近い順です。<b>ご自分の最寄り駅をタップして選んでください</b></p>`
+  +st.map(x=>`<span class="chip stpick" data-st="${esc(x.name+"駅（"+x.line+"）")}">${esc(x.name)}駅 <span class="muted">${esc(x.line)}・${esc(x.distance||"")}</span></span>`).join("");
+ box.querySelectorAll(".chip.stpick").forEach(c=>c.onclick=()=>{
+  const was=c.classList.contains("on");
+  box.querySelectorAll(".chip.stpick").forEach(x=>x.classList.remove("on"));
+  if(!was)c.classList.add("on");
+ });
+}
+// 選ばれた駅を取り出す（選ばれていなければ空）
+function pickedStation(boxId){
+ const box=$(boxId);if(!box)return "";
+ const on=box.querySelector(".chip.stpick.on");
+ return on?on.dataset.st:"";
+}
 // v2.6.45 入社情報の編集カード（社長・本部は全員ぶん、本人は自分の分）
 // pre は入力欄のIDの頭文字（管理画面と設定画面で重ならないようにする）
 function profileEditCard(prof,pre){
@@ -409,32 +432,21 @@ function bindProfileEdit(pre,userId){
  if(!$(pre+"-save"))return;
  bindZip(pre+"-zip",pre+"-addr");
  bindPhone(pre+"-phone");bindPhone(pre+"-ephone");
- $(pre+"-station").onclick=async()=>{ // v2.6.45 住所から最寄り駅の候補を出す
-  const box=$(pre+"-stationbox"),addr=$(pre+"-addr").value.trim();
-  if(!addr){toast("先に住所を入れてください",true);return}
-  box.innerHTML=`<p class="muted" style="margin:0">調べています…</p>`;
-  const st=await stationsNear(addr);
-  if(!st.length){box.innerHTML=`<p class="muted" style="margin:0">最寄り駅が見つかりませんでした（住所をもう少し詳しく入れてみてください）</p>`;return}
-  box.innerHTML=`<p class="muted" style="margin:0 0 4px">近い順です。選ぶと「最寄り駅」として保存されます</p>`
-   +st.map(x=>`<span class="chip stpick" data-st="${esc(x.name+"駅（"+x.line+"）")}">${esc(x.name)}駅 <span class="muted">${esc(x.line)}・${esc(x.distance||"")}</span></span>`).join("");
-  box.querySelectorAll(".chip.stpick").forEach(c=>c.onclick=()=>{
-   box.querySelectorAll(".chip.stpick").forEach(x=>x.classList.remove("on"));c.classList.add("on");
-  });
- };
+ $(pre+"-station").onclick=()=>showStations(pre+"-stationbox",pre+"-addr"); // v2.6.48 共通部品に統一
  $(pre+"-save").onclick=async()=>{
   const v=id=>{const el=$(pre+"-"+id);return el?el.value.trim():""};
   const ph=v("phone"),eph=v("ephone");
   if(ph&&!phoneOk(ph)){toast("電話番号の桁数をご確認ください（10桁または11桁）",true);return}
   if(eph&&!phoneOk(eph)){toast("緊急連絡先の桁数をご確認ください",true);return}
-  const pickedStation=$(pre+"-stationbox")?($(pre+"-stationbox").querySelector(".chip.stpick.on")||{}).dataset:null;
+  const stPick=pickedStation(pre+"-stationbox"); // v2.6.48
   const rec={user_id:userId,name_kana:v("kana")||null,birth_date:v("birth")||null,phone:ph||null,
    postal_code:v("zip")||null,address:v("addr")||null,emergency_name:v("ename")||null,
    emergency_relation:v("erel")||null,emergency_phone:eph||null,hire_date:v("hire")||null,
    updated_at:new Date().toISOString()};
   // 最寄り駅は extra に入れる（スマレジの管理者メモにも送られる項目）
-  if(pickedStation&&pickedStation.st){
+  if(stPick){
    const {data:cur}=await sb.from("employee_profiles").select("extra").eq("user_id",userId).maybeSingle();
-   rec.extra=Object.assign({},(cur&&cur.extra)||{},{最寄り駅:pickedStation.st});
+   rec.extra=Object.assign({},(cur&&cur.extra)||{},{最寄り駅:stPick});
   }
   $(pre+"-save").disabled=true;
   const {error}=await sb.from("employee_profiles").upsert(rec,{onConflict:"user_id"});
@@ -753,12 +765,19 @@ async function renderJoin(){
    <p class="muted" style="margin:8px 0 0">性別 <span class="req">必須</span><span style="font-size:11px">（勤怠システムの登録に使用します）</span></p>
    <div style="margin-top:2px">${[["male","男性"],["female","女性"],["none","回答しない"]].map(([v,l])=>`<span class="chip jgender" data-g="${v}">${l}</span>`).join("")}</div>
    ${F.birth.on?`<p class="muted" style="margin:8px 0 0">生年月日${mark("birth")}</p>${hintLine(F.birth.hint)}<input type="date" id="j-birth" value="${esc(pf.birth)}">`:""}
-   ${F.phone.on?`${hintLine(F.phone.hint)}<input type="tel" inputmode="tel" autocomplete="tel" id="j-phone" placeholder="電話番号（例: 090-1234-5678)${F.phone.req?"※必須":""}" value="${esc(info.applicant_phone||pf.phone||"")}">`:""}</div>`;
+   ${F.phone.on?`<p class="muted" style="margin:10px 0 2px">電話番号${F.phone.req?' <span class="req">必須</span>':""}</p>${hintLine(F.phone.hint)}
+    <input type="tel" inputmode="tel" autocomplete="tel" id="j-phone" placeholder="09012345678" value="${esc(info.applicant_phone||pf.phone||"")}"
+     style="font-size:20px;padding:16px;letter-spacing:1px;margin-top:0">
+    <p class="muted" style="margin:2px 0 0;font-size:12px">数字だけご入力ください。ハイフン（-）は自動で入ります</p>`:""}</div>`;
  h+=`</div>`;
  if(!smLinked){
   if(F.zip.on||F.addr.on)h+=`<div class="card" data-joinsec><h3>住所${(F.zip.req||F.addr.req)?' <span class="req">必須</span>':""}</h3>
     ${F.zip.on?`${hintLine(F.zip.hint)}<input type="text" id="j-zip" placeholder="郵便番号（例: 108-0014）" inputmode="numeric" autocomplete="postal-code" value="${esc(pf.zip)}"><p class="muted" style="margin:2px 0 0;font-size:11px">郵便番号を入れると住所が自動で入ります</p>`:""}
-    ${F.addr.on?`${hintLine(F.addr.hint)}<input type="text" id="j-addr" placeholder="住所" value="${esc(pf.addr)}">`:""}</div>`;
+    ${F.addr.on?`${hintLine(F.addr.hint)}<input type="text" id="j-addr" placeholder="住所" value="${esc(pf.addr)}">`:""}
+    ${F.addr.on?`<p class="muted" style="margin:10px 0 2px">最寄り駅</p>
+     <button type="button" class="btn sm sub" id="j-station" style="margin:0">🚉 住所から最寄り駅を調べる</button>
+     <div id="j-stationbox" style="margin-top:6px"></div>
+     <input type="text" id="j-stnote" placeholder="備考（例: 自転車で10分、バス利用）" style="margin-top:6px;font-size:14px">`:""}</div>`;
   if(F.ename.on||F.erel.on||F.ephone.on)h+=`<div class="card" data-joinsec><h3>緊急連絡先${(F.ename.req||F.erel.req||F.ephone.req)?' <span class="req">必須</span>':""}</h3>
     ${F.ename.on?`<input type="text" id="j-ename" placeholder="氏名" value="${esc(pf.ename)}">`:""}
     ${F.erel.on?`<input type="text" id="j-erel" placeholder="続柄（例: 父）" value="${esc(pf.erel)}">`:""}
@@ -789,6 +808,7 @@ async function renderJoin(){
  $("j-submit").onclick=doJoin;
  bindZip("j-zip","j-addr"); // v2.6.23 郵便番号から住所を自動で入れる（v2.6.45 住所→郵便番号の逆も）
  bindPhone("j-phone");bindPhone("j-ephone"); // v2.6.45
+ if($("j-station"))$("j-station").onclick=()=>showStations("j-stationbox","j-addr"); // v2.6.48
  document.querySelectorAll(".chip[data-jmc]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
  document.querySelectorAll(".chip.jgender").forEach(c=>c.onclick=()=>{joinGender=c.dataset.g;document.querySelectorAll(".chip.jgender").forEach(x=>x.classList.remove("on"));c.classList.add("on")}); // v2.6.7
  cfg.custom.forEach((c,i)=>{if(!c.off&&c.type==="photo")renderJoinPhoto(i)}); // v2.6.46
@@ -987,7 +1007,15 @@ async function loadJoinSm(){
   joinSmCheck();
  }catch(e){}
 }
-const normJp=s=>String(s||"").replace(/[\s　]/g,"").replace(/[ぁ-ん]/g,c=>String.fromCharCode(c.charCodeAt(0)+96)).toLowerCase();
+// v2.6.48 スマレジの氏名照合。空白・ひらがな/カタカナに加えて、
+// 旧字体（髙→高 など）と全角英数字も吸収する（データベース側の norm_name と同じ考え方）
+const JP_FROM="髙﨑濵邊邉齋齊冨桒栁眞德瀨ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ０１２３４５６７８９";
+const JP_TO  ="高崎浜辺辺斎斎富桑柳真徳瀬ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+const normJp=s=>{
+ let t=String(s||"").replace(/[\s　]/g,"").replace(/[ぁ-ん]/g,c=>String.fromCharCode(c.charCodeAt(0)+96));
+ t=[...t].map(c=>{const i=JP_FROM.indexOf(c);return i<0?c:JP_TO[i]}).join("");
+ return t.toLowerCase();
+};
 function joinSmApply(on){
  document.querySelectorAll("[data-joinsec]").forEach(d=>d.style.display=on?"none":"");
  $("j-title").textContent=on?"アカウント登録":"入社登録フォーム";
@@ -1006,12 +1034,36 @@ function joinSmCheck(){
  }
  if(joinSmNo){box.innerHTML="";return}
  const n=normJp($("j-name").value),k=normJp($("j-kana").value);
- const hit=(n||k)?joinSmStaffs.find(s=>(n&&normJp(s.name)===n)||(k&&s.kana&&normJp(s.kana)===k)):null;
- if(!hit){box.innerHTML="";return}
- box.innerHTML=`<div class="info" style="margin:8px 0 0">🕐 スマレジ・タイムカードに同じお名前の登録が見つかりました。ご本人ですか？<br>
-  <button class="btn sm" id="j-smyes" style="margin-top:6px">はい、連携する</button>
-  <button class="btn sm sub" id="j-smno" style="margin-top:6px">いいえ、別人です</button></div>`;
- $("j-smyes").onclick=()=>{joinSmSel=String(hit.staffId);if(!$("j-name").value.trim())$("j-name").value=hit.name;if(!$("j-kana").value.trim()&&hit.kana)$("j-kana").value=hit.kana;joinSmApply(true);joinSmCheck()};
+ if(!n&&!k){box.innerHTML="";return}
+ // ぴったり一致するもの
+ const hit=joinSmStaffs.find(s=>(n&&normJp(s.name)===n)||(k&&s.kana&&normJp(s.kana)===k));
+ // v2.6.48 ぴったり合わなくても、姓（前の2文字以上）が同じ人を候補として出す
+ //   ミドルネームや表記の違いで見つからず、二重に登録されてしまうのを防ぐ
+ const near=hit?[]:joinSmStaffs.filter(s=>{
+  const sn=normJp(s.name),sk=normJp(s.kana||"");
+  const near1=x=>x&&x.length>=2&&(sn.startsWith(x.slice(0,2))||x.startsWith(sn.slice(0,2)));
+  return near1(n)||(sk&&k&&(sk.startsWith(k.slice(0,2))||k.startsWith(sk.slice(0,2))));
+ }).slice(0,5);
+ if(!hit&&!near.length){box.innerHTML="";return}
+ const pick=(staffId,nm,kn)=>{joinSmSel=String(staffId);
+  if(!$("j-name").value.trim())$("j-name").value=nm;
+  if(!$("j-kana").value.trim()&&kn)$("j-kana").value=kn;
+  joinSmApply(true);joinSmCheck()};
+ if(hit){
+  box.innerHTML=`<div class="info" style="margin:8px 0 0">🕐 スマレジ・タイムカードに同じお名前の登録が見つかりました。ご本人ですか？<br>
+   <button class="btn sm" id="j-smyes" style="margin-top:6px">はい、連携する</button>
+   <button class="btn sm sub" id="j-smno" style="margin-top:6px">いいえ、別人です</button></div>`;
+  $("j-smyes").onclick=()=>pick(hit.staffId,hit.name,hit.kana);
+  $("j-smno").onclick=()=>{joinSmNo=true;joinSmCheck()};
+  return;
+ }
+ box.innerHTML=`<div class="info" style="margin:8px 0 0">🕐 スマレジ・タイムカードに<b>似たお名前</b>の登録があります。ご自分のお名前があれば選んでください<br>
+  <span class="muted" style="font-size:12px">※ すでに登録がある方は、選んでいただくと二重登録になりません</span><br>
+  ${near.map((x,i)=>`<button class="btn sm" data-smpick="${i}" style="margin:6px 6px 0 0">${esc(x.name)}${x.kana?`（${esc(x.kana)}）`:""}</button>`).join("")}
+  <button class="btn sm sub" id="j-smno" style="margin-top:6px">どれも違います</button></div>`;
+ box.querySelectorAll("[data-smpick]").forEach(b2=>b2.onclick=()=>{
+  const x=near[+b2.dataset.smpick];pick(x.staffId,x.name,x.kana);
+ });
  $("j-smno").onclick=()=>{joinSmNo=true;joinSmCheck()};
 }
 async function doJoin(){
@@ -1037,6 +1089,12 @@ async function doJoin(){
   if(v)extra[c.label]=v;
  });
  if(missing){toast(`「${missing}」は必須です`,true);return}
+ // v2.6.48 最寄り駅と備考（スマレジの管理者メモに送られる項目に入れる）
+ const st=pickedStation("j-stationbox"),stNote=val("j-stnote");
+ if(st)extra["最寄り駅"]=st+(stNote?`／${stNote}`:"");
+ else if(stNote)extra["最寄り駅"]=stNote;
+ const ph=val("j-phone");
+ if(ph&&!phoneOk(ph)){toast("電話番号の桁数をご確認ください（10桁または11桁）",true);return} // v2.6.48
  const smId=joinSmSel||null; // v2.5.2 照合で本人確認したスマレジスタッフ
  $("j-submit").disabled=true;$("j-submit").textContent="登録中...";
  const {error}=await sb.rpc("register_via_invite",{
@@ -2970,7 +3028,9 @@ async function settingsView(){
    <p class="muted" style="margin:8px 0 0">フリガナ</p><input type="text" id="pf-kana" value="${esc(myProf.name_kana||"")}" style="margin-top:2px">
    <p class="muted" style="margin:8px 0 0">電話番号</p><input type="text" id="pf-phone" value="${esc(myProf.phone||"")}" style="margin-top:2px">
    <p class="muted" style="margin:8px 0 0">郵便番号・住所</p>
-   <input type="text" id="pf-zip" value="${esc(myProf.postal_code||"")}" placeholder="郵便番号" style="margin-top:2px">
+   <p class="muted" style="margin:8px 0 2px">生年月日</p>
+   <input type="date" id="pf-birth" value="${esc(myProf.birth_date||"")}" style="margin-top:0">
+   <input type="text" id="pf-zip" value="${esc(myProf.postal_code||"")}" placeholder="郵便番号" inputmode="numeric" style="margin-top:8px">
    <input type="text" id="pf-addr" value="${esc(myProf.address||"")}" placeholder="住所">
    <p class="muted" style="margin:8px 0 0">緊急連絡先</p>
    <input type="text" id="pf-ename" value="${esc(myProf.emergency_name||"")}" placeholder="氏名" style="margin-top:2px">
@@ -3058,7 +3118,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.47</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.48</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -4329,15 +4389,8 @@ function bindPage(){
  // v2.6.0 プロフィール
  // v2.6.45 郵便番号↔住所の自動入力・電話のハイフン・最寄り駅
  if($("pf-zip")){bindZip("pf-zip","pf-addr");bindPhone("pf-phone");bindPhone("pf-ephone")}
- if($("pf-station"))$("pf-station").onclick=async()=>{
-  const box=$("pf-stationbox"),addr=$("pf-addr").value.trim();
-  if(!addr){toast("先に住所を入れてください",true);return}
-  box.innerHTML=`<p class="muted" style="margin:0">調べています…</p>`;
-  const st=await stationsNear(addr);
-  box.innerHTML=st.length
-   ?`<p class="muted" style="margin:0 0 4px">近い順です</p>`+st.map(x=>`<span class="chip">${esc(x.name)}駅 <span class="muted">${esc(x.line)}・${esc(x.distance||"")}</span></span>`).join("")
-   :`<p class="muted" style="margin:0">最寄り駅が見つかりませんでした</p>`;
- };
+ // v2.6.48 選べるようにする（前は表示するだけで選択できなかった）
+ if($("pf-station"))$("pf-station").onclick=()=>showStations("pf-stationbox","pf-addr");
  if($("pf-save"))$("pf-save").onclick=async()=>{
   const ph=$("pf-phone").value.trim(),eph=$("pf-ephone").value.trim();
   if(ph&&!phoneOk(ph)){toast("電話番号の桁数をご確認ください（10桁または11桁）",true);return}
@@ -4350,6 +4403,19 @@ function bindPage(){
    p_emergency_name:$("pf-ename").value.trim()||null,p_emergency_relation:$("pf-erel").value.trim()||null,p_emergency_phone:$("pf-ephone").value.trim()||null});
   $("pf-save").disabled=false;
   if(error){toast("保存エラー: "+error.message,true);return}
+  // v2.6.48 生年月日と最寄り駅も保存する（update_my_profile では扱えないため直接更新）
+  const birth=$("pf-birth")?$("pf-birth").value:"";
+  const st=pickedStation("pf-stationbox");
+  if(birth||st){
+   const rec={user_id:me.id,updated_at:new Date().toISOString()};
+   if(birth)rec.birth_date=birth;
+   if(st){
+    const {data:cur}=await sb.from("employee_profiles").select("extra").eq("user_id",me.id).maybeSingle();
+    rec.extra=Object.assign({},(cur&&cur.extra)||{},{最寄り駅:st});
+   }
+   const {error:e2}=await sb.from("employee_profiles").upsert(rec,{onConflict:"user_id"});
+   if(e2){toast("生年月日・最寄り駅を保存できませんでした: "+e2.message,true);return}
+  }
   me.name=name;myProf=null;toast("プロフィールを保存しました");render();
  };
  if($("pf-pwsave"))$("pf-pwsave").onclick=async()=>{

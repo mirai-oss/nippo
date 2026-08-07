@@ -345,7 +345,9 @@ function toast(msg,isErr){
  clearTimeout(t._tm);t._tm=setTimeout(()=>{t.style.opacity="0"},isErr?20000:2600);
 }
 const fmtAll=(role)=>((appSettings.formats&&appSettings.formats[role])||FORMATS[role]||[]);
-const fmtFor=(role)=>fmtAll(role).filter(f=>!f.kennin||isKennin());
+// v2.6.46 停止した項目は新しい日報では聞かない。
+// fmtAll（表示用）はそのままなので、過去の日報の回答は今までどおり見える
+const fmtFor=(role)=>fmtAll(role).filter(f=>(!f.kennin||isKennin())&&!f.off);
 // v2.6.26 週報も役職ごとに持てるようにする
 // 役職ぶんが未設定なら、これまでの共通（WEEKLY）→ 既定 の順に落ちるので、今までの設定はそのまま生きる
 const weeklyFmt=(role)=>{
@@ -576,6 +578,7 @@ async function renderApply(){
    <input type="email" inputmode="email" autocomplete="email" id="ap-email" placeholder="example@mail.com"
     style="font-size:17px;padding:14px;margin-top:0"></div>`;
  (f.fields||[]).forEach((fd,i)=>{
+  if(fd.off)return; // v2.6.46 停止した項目は出さない（番号はずらさない。ずらすと回答が入れ違う）
   h+=`<div class="card"><h3>${esc(fd.label)} ${fd.req?'<span class="req">必須</span>':""}</h3>`;
   h+=hintLine(fd.hint); // v2.6.22 記入例
   if(fd.type==="pull")h+=`<select class="inp" data-ap="${i}"><option value="">選択してください</option>${(fd.opts||[]).map(o=>`<option>${esc(o)}</option>`).join("")}</select>`+(hasOtherOpt(fd)?otherInput("apother",i):"");
@@ -638,6 +641,7 @@ async function doApply(){
  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){toast("メールアドレスの形をご確認ください",true);return}
  const answers={};let missing=null;
  (applyFormDef.fields||[]).forEach((fd,i)=>{
+  if(fd.off)return; // v2.6.46 停止した項目は集めない
   let v="";
   if(fd.type==="radio"){const r=document.querySelector(`input[data-apr="${i}"]:checked`);v=r?r.value:""}
   else if(fd.type==="multi"||fd.type==="check"){v=[...document.querySelectorAll(`.chip[data-apm="${i}"].on`)].map(x=>x.dataset.o).join("、")}
@@ -761,6 +765,7 @@ async function renderJoin(){
   if(cfg.custom.length){
    h+=`<div class="card" data-joinsec><h3>追加項目</h3>`;
    cfg.custom.forEach((c,i)=>{
+    if(c.off)return; // v2.6.46 停止した項目は出さない（番号はずらさない）
     const cv=joinPick(PA,[c.label]); // v2.6.32 同じ項目名で応募時に答えていれば入れておく
     h+=`<p class="muted" style="margin:8px 0 0">${esc(c.label)}${c.req?' <span class="req">必須</span>':""}</p>`;
     h+=hintLine(c.hint); // v2.6.22 記入例
@@ -784,7 +789,7 @@ async function renderJoin(){
  bindPhone("j-phone");bindPhone("j-ephone"); // v2.6.45
  document.querySelectorAll(".chip[data-jmc]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
  document.querySelectorAll(".chip.jgender").forEach(c=>c.onclick=()=>{joinGender=c.dataset.g;document.querySelectorAll(".chip.jgender").forEach(x=>x.classList.remove("on"));c.classList.add("on")}); // v2.6.7
- cfg.custom.forEach((c,i)=>{if(c.type==="photo")renderJoinPhoto(i)});
+ cfg.custom.forEach((c,i)=>{if(!c.off&&c.type==="photo")renderJoinPhoto(i)}); // v2.6.46
  joinSmSel=null;joinSmNo=false;joinGender=null;
  if(pfGender){ // v2.6.32 応募時に答えていれば性別も選んだ状態にしておく
   joinGender=pfGender;
@@ -1019,6 +1024,7 @@ async function doJoin(){
  if(!acctOnly)for(const [k,label] of JOIN_STD){if(F[k].on&&F[k].req&&!val("j-"+k)){toast(`「${label}」は必須です`,true);return}}
  const extra={};let missing=null;
  if(!acctOnly)joinCfgCur.custom.forEach((c,i)=>{
+  if(c.off)return; // v2.6.46 停止した項目は集めない
   if(c.type==="photo"){if(c.req&&!(joinPhotos[i]||[]).length)missing=missing||c.label;return}
   let v="";
   if(c.type==="radio"){const r=document.querySelector(`input[data-jcr="${i}"]:checked`);v=r?r.value:""}
@@ -3045,7 +3051,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.45</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.46</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3146,6 +3152,7 @@ async function settingsApplyView(){
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
    <select class="inp" data-aptype="${i}" style="width:auto;margin:0">${Object.entries(APPLY_TYPES).map(([t,n])=>`<option value="${t}" ${(f.type||"text")===t?"selected":""}>${n}</option>`).join("")}</select>
    <span class="chip ap-req ${f.req?"on":""}" data-i="${i}">必須</span>
+   <span class="chip ap-off ${f.off?"on":""}" data-i="${i}" title="停止すると新しい応募では聞きませんが、過去の回答はそのまま残ります">${f.off?"⏸ 停止中":"停止"}</span>
    <span class="chip" data-apup="${i}">↑</span><span class="chip" data-apdn="${i}">↓</span>
    <span class="chip" data-apdel="${i}" style="color:var(--red)">削除</span></div>
   <input type="text" data-apopts="${i}" value="${esc((f.opts||[]).join("、"))}" placeholder="選択肢を「、」区切りで入力（例: ホール、キッチン、どちらでも）" style="margin:8px 0 0;font-size:13px;display:${APPLY_OPT_TYPES.includes(f.type||"text")?"":"none"}">
@@ -3167,6 +3174,7 @@ function collectApplyDom(){
  });
  document.querySelectorAll("input[data-aphint]").forEach(inp=>cur.fields[+inp.dataset.aphint].hint=inp.value.trim()); // v2.6.22 記入例
  document.querySelectorAll(".chip.ap-req").forEach(c=>cur.fields[+c.dataset.i].req=c.classList.contains("on"));
+ document.querySelectorAll(".chip.ap-off").forEach(c=>cur.fields[+c.dataset.i].off=c.classList.contains("on")); // v2.6.46
 }
 async function saveApplyForm(){
  collectApplyDom();
@@ -3265,7 +3273,8 @@ function settingsJoinView(){
     <span class="fhandle jchandle" draggable="true" data-jci="${i}" title="ドラッグで並び替え">⠿</span>
     <span class="fnum">${i+1}</span>
     <input type="text" data-jclabel="${i}" value="${esc(c.label)}" placeholder="質問名（例: 制服サイズ）" style="flex:1;margin:0">
-    <span class="chip jc-req ${c.req?"on":""}" data-i="${i}">必須</span></div>
+    <span class="chip jc-req ${c.req?"on":""}" data-i="${i}">必須</span>
+    <span class="chip jc-off ${c.off?"on":""}" data-i="${i}" title="停止すると新しい登録では聞きませんが、過去の回答はそのまま残ります">${c.off?"⏸ 停止中":"停止"}</span></div>
    <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
     <select class="inp" data-jctype="${i}" style="width:auto;margin:0">${Object.entries(JC_TYPES).map(([t,n])=>`<option value="${t}" ${(c.type||"text")===t?"selected":""}>${n}</option>`).join("")}</select>
     <span class="chip" data-jcup="${i}">↑</span><span class="chip" data-jcdn="${i}">↓</span>
@@ -3284,6 +3293,7 @@ function collectJoinDom(){
  document.querySelectorAll("input[data-jfhint]").forEach(inp=>cfgJoin.fields[inp.dataset.jfhint].hint=inp.value.trim()); // v2.6.22 記入例
  document.querySelectorAll("input[data-jclabel]").forEach(inp=>cfgJoin.custom[+inp.dataset.jclabel].label=inp.value.trim());
  document.querySelectorAll(".chip.jc-req").forEach(c=>cfgJoin.custom[+c.dataset.i].req=c.classList.contains("on"));
+ document.querySelectorAll(".chip.jc-off").forEach(c=>cfgJoin.custom[+c.dataset.i].off=c.classList.contains("on")); // v2.6.46
  document.querySelectorAll("input[data-jchint]").forEach(inp=>cfgJoin.custom[+inp.dataset.jchint].hint=inp.value.trim()); // v2.6.22 記入例
  document.querySelectorAll("select[data-jctype]").forEach(s=>cfgJoin.custom[+s.dataset.jctype].type=s.value);
  document.querySelectorAll("input[data-jcopts]").forEach(inp=>{
@@ -3338,6 +3348,7 @@ function settingsFmtView(){
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
    <select class="inp" data-ftype="${i}" style="width:auto;margin:0">${Object.entries(TYPE_NAMES).map(([t,n])=>`<option value="${t}" ${f.type===t?"selected":""}>${n}</option>`).join("")}</select>
    <span class="chip f-req ${f.req?"on":""}" data-i="${i}">必須</span>
+   <span class="chip f-off ${f.off?"on":""}" data-i="${i}" title="停止すると新しい日報には出ませんが、過去の回答はそのまま残ります">${f.off?"⏸ 停止中":"停止"}</span>
    <span class="chip" data-fup="${i}">↑</span><span class="chip" data-fdn="${i}">↓</span>
    <span class="chip" data-fdel="${i}" style="color:var(--red)">削除</span></div>
   <input type="text" data-fopts="${i}" value="${esc((f.opts||[]).join("、"))}" placeholder="選択肢を「、」区切りで入力（例: 良い、普通、悪い）" style="margin:8px 0 0;font-size:13px;display:${OPT_TYPES.includes(f.type)?"":"none"}">
@@ -3357,6 +3368,7 @@ function collectFmtDom(){
  });
  document.querySelectorAll("input[data-fhint]").forEach(inp=>list[+inp.dataset.fhint].hint=inp.value.trim()); // v2.6.26 記入例
  document.querySelectorAll(".chip.f-req").forEach(c=>list[+c.dataset.i].req=c.classList.contains("on"));
+ document.querySelectorAll(".chip.f-off").forEach(c=>list[+c.dataset.i].off=c.classList.contains("on")); // v2.6.46
 }
 async function saveFmt(){
  collectFmtDom();
@@ -4200,7 +4212,7 @@ function bindPage(){
   render();
  };
  if($("perm-save"))$("perm-save").onclick=savePerm;
- document.querySelectorAll(".chip.jf-on,.chip.jf-req,.chip.jc-req,.chip.f-req").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
+ document.querySelectorAll(".chip.jf-on,.chip.jf-req,.chip.jc-req,.chip.f-req,.chip.f-off,.chip.ap-off,.chip.jc-off").forEach(c=>c.onclick=()=>{c.classList.toggle("on");if(c.classList.contains("f-off")||c.classList.contains("ap-off")||c.classList.contains("jc-off"))c.textContent=c.classList.contains("on")?"⏸ 停止中":"停止"}); // v2.6.46
  document.querySelectorAll("[data-jcdel]").forEach(c=>c.onclick=()=>{collectJoinDom();cfgJoin.custom.splice(+c.dataset.jcdel,1);render()});
  if($("jc-add"))$("jc-add").onclick=()=>{collectJoinDom();cfgJoin.custom.push({label:"",req:false,type:"text",opts:[],hint:""});render()};
  // v2.6.22 入社フォームの自由項目も ↑↓ で並び替えできるように

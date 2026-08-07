@@ -159,12 +159,28 @@ function rcAge(a){
  return null;
 }
 const rcNameAge=a=>{const n=rcAge(a);return esc(a.name)+(n!=null?`（${n}）`:"")};
-// v2.6.15 フォーム回答が届いてまだ開いていない応募者かどうか
-const rcFormNew=a=>!!(a&&a.form_received_at&&(!a.form_seen_at||new Date(a.form_seen_at)<new Date(a.form_received_at)));
+// v2.6.31 自分がこの応募者を最後に開いた日時（人ごとに持つ。誰かが開いても自分の未読は消えない）
+let rcReads={};
+const rcSeen=a=>{const t=a&&rcReads[a.id];return t?new Date(t).getTime():0};
+const rcNewer=(a,at)=>!!(at&&new Date(at).getTime()>rcSeen(a));
+// v2.6.15 フォーム回答が届いてまだ開いていない応募者かどうか（v2.6.31 自分が開いたかで判定）
+const rcFormNew=a=>!!(a&&rcNewer(a,a.form_received_at));
 // v2.6.21 面接日を過ぎたのに選考中のままの応募者かどうか
 const rcOverdue=a=>!!(a&&a.interview_at&&APPLICANT_ACTIVE.includes(a.status)&&new Date(a.interview_at)<new Date(Date.now()-12*3600e3));
-// v2.6.16 Indeedメッセージが届いてまだ開いていない応募者かどうか
-const rcMsgNew=a=>!!(a&&a.msg_received_at&&(!a.msg_seen_at||new Date(a.msg_seen_at)<new Date(a.msg_received_at)));
+// v2.6.16 Indeedメッセージが届いてまだ開いていない応募者かどうか（v2.6.31 自分が開いたかで判定）
+const rcMsgNew=a=>!!(a&&rcNewer(a,a.msg_received_at));
+// v2.6.31 応募者から来たまま、こちらが返していない＝要対応
+const rcWaiting=a=>!!(a&&APPLICANT_ACTIVE.includes(a.status)&&(a.last_msg_dir==="in"||rcFormNew(a)));
+// v2.6.31 最後に動いたのはどちらか（表示用）
+function rcLastMove(a){
+ if(!a)return "";
+ const mv=a.last_msg_at?new Date(a.last_msg_at).getTime():0;
+ const st=a.last_actor_at?new Date(a.last_actor_at).getTime():0;
+ if(mv>=st&&mv>0)return a.last_msg_dir==="in"?"応募者から":"こちらから返信";
+ if(st>0){const u=(tskUsers||[]).find(x=>x.id===a.last_actor_id);
+  return u?`${ROLE_NAME[u.role]||""} ${u.name}`:"担当者が操作";}
+ return "";
+}
 // v2.6.16 求人タイトルからの自動候補（登録画面で最初に選ばれた状態にするだけ。保存は人が押す）
 const jobGuessForm=t=>/幹部候補|社員|正社員|店長|マネージャ|マネージャー|管理職|新卒|中途/.test(String(t||""))?"shain":"al";
 const jobNorm=s=>String(s||"").replace(/[\s　]/g,"").replace(/店$/,"");
@@ -254,6 +270,7 @@ let chatQ="",tskQ="",chatMeta={}; // v2.1 検索・メッセージ操作
 let chatReply=null,chatInvite=false,chatInviteSel=[]; // v2.2 返信・招待
 let permMatrix=null,permUserSel=null,permUserVals=null,permUsersCache=null; // v2.4 権限設定
 let rcList=null,rcSeg="active",rcQ="",rcDetail=null,rcForms=null,applyFormDef=null; // v2.5 応募者管理
+let rcOnlyWait=false; // v2.6.31 未対応だけに絞るか
 let rcJobs=false,rcJobList=null,rcMsgs=null; // v2.6.16 求人タイトルの登録／Indeedメッセージ
 let rcVisible=[],rcShown=100,rcShownSig=""; // v2.6.18 一覧の表示件数（プルダウンが増えて重くならないように）
 // v2.6.17 一覧に出す店舗名。①店舗が決まっていればその名前 ②求人メールの店舗名から店舗を探す ③どちらも無ければ勤務地
@@ -1640,6 +1657,11 @@ async function recruitView(){
  if(error)return `<h2>📥 応募者管理</h2><div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
  rcList=as||[];
  await chatEnsureUsers();
+ // v2.6.31 自分が開いた記録を読む（人ごとに未読を管理する）
+ try{
+  const {data:rr}=await sb.from("applicant_reads").select("applicant_id,read_at").eq("user_id",me.id);
+  rcReads={};(rr||[]).forEach(x=>rcReads[x.applicant_id]=x.read_at);
+ }catch(e){rcReads={}}
  if(lineOa===null){const {data:oa}=await sb.rpc("line_oa_id");lineOa=oa||""} // v2.6.20
  if(rcDetail){ // v2.6.16 やりとりも一緒に読み込む
   const {data:ms}=await sb.from("applicant_messages").select("*").eq("applicant_id",rcDetail).order("sent_at",{ascending:true});
@@ -1732,8 +1754,15 @@ async function recruitView(){
  const mNewList=(rcList||[]).filter(rcMsgNew);
  if(mNewList.length)h+=`<div class="card" style="background:#ecfeff;border-left:4px solid #0e7490"><h3 style="margin:0">💬 Indeedにメッセージが届いています（${mNewList.length}件）</h3>
   <p style="font-size:13px;margin:6px 0 0">${mNewList.slice(0,12).map(a=>`<span style="color:var(--blue);cursor:pointer;white-space:nowrap" data-rca="${a.id}">${esc(a.name)}さん</span>`).join("　")}${mNewList.length>12?"　ほか":""}</p></div>`;
+ // v2.6.31 応募者から来たまま返せていない人（＝どこで止まっているか）
+ const waitList=(rcList||[]).filter(rcWaiting);
+ if(waitList.length)h+=`<div class="card" style="background:#fef2f2;border-left:4px solid #c0392b"><h3 style="margin:0">🔴 応募者から来たまま、まだ返していません（${waitList.length}件）</h3>
+  <p style="font-size:13px;margin:6px 0 0">${waitList.slice(0,12).map(a=>{const u=(tskUsers||[]).find(x=>x.id===a.assignee_id);return `<span style="color:var(--blue);cursor:pointer;white-space:nowrap" data-rca="${a.id}">${esc(a.name)}さん${u?`（${esc(u.name)}）`:"（担当なし）"}</span>`}).join("　")}${waitList.length>12?"　ほか":""}</p>
+  <p class="muted" style="margin:6px 0 0">こちらから返信すると、この表示は消えます</p></div>`;
  h+=`<div class="seg"><div class="${rcSeg==="active"?"on":""}" data-rcseg="active">選考中 ${act.length}</div><div class="${rcSeg==="hired"?"on":""}" data-rcseg="hired">採用 ${hired.length}</div><div class="${rcSeg==="closed"?"on":""}" data-rcseg="closed">不採用・辞退 ${closed.length}</div></div>`;
- const list=rcSeg==="active"?act:rcSeg==="hired"?hired:closed;
+ if(waitList.length)h+=`<p style="margin:8px 0 0"><span class="chip ${rcOnlyWait?"on":""}" id="rc-onlywait" style="font-size:12px">🔴 未対応だけ表示（${waitList.length}）</span></p>`;
+ let list=rcSeg==="active"?act:rcSeg==="hired"?hired:closed;
+ if(rcOnlyWait)list=list.filter(rcWaiting);
  if(!list.length)h+=`<p class="muted center" style="margin-top:16px">該当する応募者はいません</p>`;
  rcVisible=list; // v2.6.18 CSVは表示件数の制限に関係なく、絞り込んだ全件を出す
  // v2.6.18 1行ごとにプルダウンが2つ付くので、多すぎると重くなる。100件ずつ表示する
@@ -1759,8 +1788,15 @@ async function recruitView(){
        :storeSel("font-size:11px;padding:3px 6px;border:1.5px solid var(--blue);color:var(--blue);border-radius:8px;background:#fff;font-weight:600;max-width:140px")+`<span class="muted" style="font-size:11px">店舗を選ぶと発行できます</span>`)):"";
   // v2.6.18 ③ 店舗はプルダウンに（自動で拾えていないときはここで選べる）
   const hint=a.store_id?"":rcStoreName(a);
-  h+=`<div class="row" data-rcrow="${a.id}" style="cursor:default${od?";background:#fff1f2":(fNew||mNew)?";background:#fff7ed":""}"><span style="flex:1;min-width:0"><b>${rcNameAge(a)}</b>${a.line_user_id?LINE_ICON:""} <span style="display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;vertical-align:middle">${stSel}${ivIn}${invBtn}${fNew?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span>':""}${mNew?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span>':""}${od?'<span class="badge" style="background:#c0392b">⚠️ 面接日超過</span>':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</span><br>
-   <span class="muted">${form?esc(form.title.replace("応募フォーム","")):esc(a.job_type||"")}・${storeSel("font-size:11px;padding:1px 3px;border:1px solid var(--line);border-radius:6px;background:#fff;color:inherit;max-width:136px;font-family:inherit")}${hint?"<span> 求人: "+esc(hint.split("、")[0].split(",")[0].slice(0,14))+"</span>":""}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}${a.interview_at?`・面接 ${fmtDue(a.interview_at)}`:""}${a.updated_at?`・更新 ${fmtDue(a.updated_at)}`:""}</span></span><button class="btn sm sub" data-rcopen="${a.id}" style="flex-shrink:0;margin:0;font-size:12px;padding:6px 10px">詳細</button></div>`;
+  // v2.6.31 誰が担当で、どこで止まっているかを一行で分かるようにする
+  const wait=rcWaiting(a);
+  const asg=(tskUsers||[]).find(x=>x.id===a.assignee_id);
+  const asgTxt=asg?`👤 ${esc(asg.name)}`:'<span style="color:#c0392b">👤 担当なし</span>';
+  const move=rcLastMove(a);
+  const moveAt=a.last_msg_at||a.last_actor_at||a.updated_at;
+  const moveTxt=move?`・${move==="応募者から"?"🔴":"✅"} ${esc(move)} ${moveAt?fmtDue(moveAt):""}`:(a.updated_at?`・更新 ${fmtDue(a.updated_at)}`:"");
+  h+=`<div class="row" data-rcrow="${a.id}" style="cursor:default${od?";background:#fff1f2":wait?";background:#fff7ed":""}"><span style="flex:1;min-width:0"><b>${rcNameAge(a)}</b>${a.line_user_id?LINE_ICON:""} <span style="display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;vertical-align:middle">${stSel}${ivIn}${invBtn}${wait?'<span class="badge" style="background:#c0392b">🔴 未対応</span>':""}${fNew?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span>':""}${mNew?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span>':""}${od?'<span class="badge" style="background:#c0392b">⚠️ 面接日超過</span>':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</span><br>
+   <span class="muted">${form?esc(form.title.replace("応募フォーム","")):esc(a.job_type||"")}・${storeSel("font-size:11px;padding:1px 3px;border:1px solid var(--line);border-radius:6px;background:#fff;color:inherit;max-width:136px;font-family:inherit")}${hint?"<span> 求人: "+esc(hint.split("、")[0].split(",")[0].slice(0,14))+"</span>":""}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}${a.interview_at?`・面接 ${fmtDue(a.interview_at)}`:""}・${asgTxt}${moveTxt}</span></span><button class="btn sm sub" data-rcopen="${a.id}" style="flex-shrink:0;margin:0;font-size:12px;padding:6px 10px">詳細</button></div>`;
  });
  if(list.length>rcShown)h+=`<button class="btn sm sub" id="rc-more" style="margin-top:10px;width:100%">▼ さらに100件表示する（残り ${list.length-rcShown}件）</button>`;
  h+=`<button class="btn sm sub" id="rc-csv" style="margin-top:10px">📄 この条件の一覧をCSVダウンロード（${list.length}件）</button>`;
@@ -1849,14 +1885,11 @@ async function recruitView(){
  return h;
 }
 // v2.6.15／v2.6.16 応募者カードを開いたら「届きました」の印を消す
-async function rcMarkFormSeen(id){
- const a=(rcList||[]).find(x=>x.id===id);
- if(!a)return;
- const t=new Date().toISOString(),upd={};
- if(rcFormNew(a)){a.form_seen_at=t;upd.form_seen_at=t}
- if(rcMsgNew(a)){a.msg_seen_at=t;upd.msg_seen_at=t}
- if(!Object.keys(upd).length)return;
- try{await sb.from("applicants").update(upd).eq("id",id)}catch(e){}
+async function rcMarkFormSeen(id){ // v2.6.31 自分が開いた記録だけを残す（他の人の未読は消えない）
+ if(!id)return;
+ rcReads[id]=new Date().toISOString();
+ const {error}=await sb.rpc("mark_applicant_read",{p_applicant:id});
+ if(error)try{await sb.from("applicant_reads").upsert({applicant_id:id,user_id:me.id,read_at:rcReads[id]})}catch(e){}
 }
 // v2.6.21 招待リンク（入社登録フォーム）をLINEで自動送信する。連携済みのときだけ動く
 async function rcSendInviteLine(id){
@@ -1866,7 +1899,8 @@ async function rcSendInviteLine(id){
  const text=a.name+"さん\n\nこの度は面接にお越しいただきありがとうございました。\n採用が決まりましたので、下記より入社手続きのご登録をお願いいたします。\n\n"+url+"\n\nご不明な点があれば、このままご返信ください。";
  const r=await lineFn({action:"push",applicant_id:id,text});
  if(!r.ok){toast("LINEに送れませんでした: "+(r.error||"不明"),true);return false}
- await sb.from("applicants").update({invite_sent_at:new Date().toISOString()}).eq("id",id);
+ try{await sb.rpc("line_claim_last_out",{p_applicant:id})}catch(e){} // v2.6.31 送った人の名前を残す
+ await sb.from("applicants").update({invite_sent_at:new Date().toISOString(),last_actor_id:me.id,last_actor_at:new Date().toISOString()}).eq("id",id);
  return true;
 }
 // v2.6.20 LINE連携のEdge Functionを呼ぶ
@@ -1961,9 +1995,12 @@ function recruitDetailView(){
  if(!msgs.length)h+=`<p class="muted" style="margin:0">まだやりとりはありません。Indeedのメッセージは5分ごとに自動で取り込まれます（🔵Indeed／💚LINE）</p>`;
  else msgs.forEach(m=>{
   const mine=m.direction==="out";
+  // v2.6.31 こちらから送った分は、誰が送ったかを出す（例: こちらから（本部 中山））
+  const su=mine&&m.sent_by?(tskUsers||[]).find(x=>x.id===m.sent_by):null;
+  const who=mine?`こちらから${su?`（${esc(ROLE_NAME[su.role]||"")} ${esc(su.name)}）`:""}`:esc(a.name)+"さんから";
   h+=`<div style="margin:8px 0;display:flex;${mine?"justify-content:flex-end":""}">
    <div style="max-width:88%;background:${mine?"#e6f0ff":"#f2f4f7"};border-radius:10px;padding:8px 10px">
-    <div class="muted" style="font-size:11px;margin-bottom:2px">${m.channel==="line"?"💚":"🔵"}${mine?"こちらから":esc(a.name)+"さんから"}・${fmtDue(m.sent_at)}
+    <div class="muted" style="font-size:11px;margin-bottom:2px">${m.channel==="line"?"💚":"🔵"}${who}・${fmtDue(m.sent_at)}
      <span data-rcdir="${m.id}" data-rcdirto="${mine?"in":"out"}" style="color:var(--blue);cursor:pointer;white-space:nowrap">↔ ${mine?esc(a.name)+"さんから":"こちらから"}に直す</span></div>
     <div style="font-size:13px;white-space:pre-wrap;word-break:break-word">${esc(m.body)}</div>
    </div></div>`;
@@ -2026,7 +2063,8 @@ async function saveApplicant(){
  const iv=$("rc-interview").value?new Date($("rc-interview").value).toISOString():null;
  const upd={name,phone:$("rc-ephone").value.trim()||null,email:$("rc-eemail").value.trim()||null,
   job_type:$("rc-ejob").value.trim()||null,form_key:$("rc-eform").value||null,
-  status:st,interview_at:iv,assignee_id:$("rc-assignee").value||null,note:$("rc-note").value.trim()||null,updated_at:new Date().toISOString()};
+  status:st,interview_at:iv,assignee_id:$("rc-assignee").value||null,note:$("rc-note").value.trim()||null,updated_at:new Date().toISOString(),
+  last_actor_id:me.id,last_actor_at:new Date().toISOString()}; // v2.6.31 誰が最後に触ったかを残す
  if(st!==a.status)upd.status_changed_at=new Date().toISOString();
  $("rc-save").disabled=true;
  const {error}=await sb.from("applicants").update(upd).eq("id",a.id);
@@ -2482,7 +2520,7 @@ async function settingsView(){
  }
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.29</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.31</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3164,7 +3202,7 @@ function bindPage(){
   if(!a||st===a.status)return;
   el.disabled=true;
   const now=new Date().toISOString();
-  const {error}=await sb.from("applicants").update({status:st,status_changed_at:now,updated_at:now}).eq("id",id);
+  const {error}=await sb.from("applicants").update({status:st,status_changed_at:now,updated_at:now,last_actor_id:me.id,last_actor_at:now}).eq("id",id);
   el.disabled=false;
   if(error){toast("変更エラー: "+error.message,true);return}
   toast(a.name+"さんを「"+APPLICANT_STATUS[st]+"」にしました");
@@ -3175,7 +3213,7 @@ function bindPage(){
   e.stopPropagation();
   const id=el.dataset.rciv,v=el.value?new Date(el.value).toISOString():null;
   el.disabled=true;
-  const {error}=await sb.from("applicants").update({interview_at:v,updated_at:new Date().toISOString()}).eq("id",id);
+  const {error}=await sb.from("applicants").update({interview_at:v,updated_at:new Date().toISOString(),last_actor_id:me.id,last_actor_at:new Date().toISOString()}).eq("id",id);
   el.disabled=false;
   if(error){toast("保存エラー: "+error.message,true);return}
   toast(v?"面接日時を保存しました":"面接日時を消しました");render();
@@ -3185,7 +3223,7 @@ function bindPage(){
   const id=el.dataset.rcstore,v=el.value||null,a=rcList.find(x=>x.id===id);
   if(!a||v===(a.store_id||null))return;
   el.disabled=true;
-  const {error}=await sb.from("applicants").update({store_id:v,updated_at:new Date().toISOString()}).eq("id",id);
+  const {error}=await sb.from("applicants").update({store_id:v,updated_at:new Date().toISOString(),last_actor_id:me.id,last_actor_at:new Date().toISOString()}).eq("id",id);
   el.disabled=false;
   if(error){toast("保存エラー: "+error.message,true);return}
   const sn=(stores||[]).find(s=>s.id===v);
@@ -3211,6 +3249,7 @@ function bindPage(){
   if(a)rcShareInvite(a);
  });
  document.querySelectorAll("[data-rcseg]").forEach(el=>el.onclick=()=>{rcSeg=el.dataset.rcseg;if(rcFStatus&&rcSegOf(rcFStatus)!==rcSeg)rcFStatus="";render()});
+ if($("rc-onlywait"))$("rc-onlywait").onclick=()=>{rcOnlyWait=!rcOnlyWait;render()}; // v2.6.31
  document.querySelectorAll("[data-rccopy]").forEach(el=>el.onclick=e=>{e.stopPropagation();copyText(el.dataset.rccopy)});
  if($("rcq"))$("rcq").onkeydown=e=>{if(e.key==="Enter"){rcQ=$("rcq").value.trim();render()}};
  if($("rcqclear"))$("rcqclear").onclick=()=>{rcQ="";rcFForm="";rcFSrc="";rcFArea="";rcFStatus="";rcFrom="";rcTo="";render()};
@@ -3255,6 +3294,7 @@ function bindPage(){
   const r=await lineFn({action:"push",applicant_id:rcDetail,text:t});
   $("rc-linesend").disabled=false;
   if(!r.ok){toast("送信できませんでした: "+(r.error||"不明"),true);return}
+  try{await sb.rpc("line_claim_last_out",{p_applicant:rcDetail})}catch(e){} // v2.6.31 送った人の名前を残す
   toast("LINEを送信しました");render();
  };
  if($("rc-lineunlink"))$("rc-lineunlink").onclick=async()=>{
@@ -3277,7 +3317,7 @@ function bindPage(){
   const u=$("rc-url").value.trim();
   if(u&&!/^https?:\/\//.test(u)){toast("http から始まるURLを貼り付けてください",true);return}
   $("rc-urlsave").disabled=true;
-  const {error}=await sb.from("applicants").update({indeed_url:u||null,updated_at:new Date().toISOString()}).eq("id",rcDetail);
+  const {error}=await sb.from("applicants").update({indeed_url:u||null,updated_at:new Date().toISOString(),last_actor_id:me.id,last_actor_at:new Date().toISOString()}).eq("id",rcDetail);
   $("rc-urlsave").disabled=false;
   if(error){toast("保存エラー: "+error.message,true);return}
   rcList=null;toast(u?"リンクを保存しました":"リンクを削除しました");render();

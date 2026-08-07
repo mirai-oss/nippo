@@ -664,6 +664,7 @@ async function meetIssue(name,iso,eventId){
   res=await fetch(gasCfg.url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},
    body:JSON.stringify({key:gasCfg.key,action:"meet",name:name||"接続テスト",start:iso,minutes:30,
     event_id:eventId||"", // v2.6.39 あれば作り直さず日時だけ直す（MeetのURLが変わらない）
+    calendar_id:gasCfg.cal||"primary", // v2.6.42 面接専用カレンダーに作る
     note:"nippo の応募者管理から作成"})});
  }catch(e){return{ok:false,why:"GASに届かない",
   msg:"GASのウェブアプリに接続できませんでした。デプロイ設定の「アクセスできるユーザー＝全員」と、URLの末尾が /exec になっているかをご確認ください。"}}
@@ -2732,12 +2733,12 @@ async function adminToggle(){
 }
 
 // ===== 設定 =====
-let gasSaved=null; // v2.6.38 面接Meetの接続先が登録済みかどうか
+let gasSaved=null,gasCalNow=""; // v2.6.38 面接Meetの接続先が登録済みか／v2.6.42 いまのカレンダーID
 async function settingsView(){
  if(setMode==="join")return settingsJoinView();
  if(setMode==="fmt")return settingsFmtView();
  if(isAdmin()&&gasSaved===null){ // v2.6.38 登録状況を先に調べておく
-  try{const {data}=await sb.rpc("gas_config");gasSaved=!!(data&&data.url)}catch(e){gasSaved=false}
+  try{const {data}=await sb.rpc("gas_config");gasSaved=!!(data&&data.url);gasCalNow=(data&&data.cal&&data.cal!=="primary")?data.cal:""}catch(e){gasSaved=false}
  }
  if(isAdmin()&&larkUrl===null){ // v2.5.8／v2.6.9
   const {data:ss}=await sb.from("app_secrets").select("key,value").in("key",["lark_webhook","chatwork_token","smaregi_staff_url","line_channel_token","line_channel_secret","line_oa_id"]);
@@ -2819,15 +2820,31 @@ async function settingsView(){
   <p style="margin:0 0 6px;font-size:13px">いまの状態: ${gasSaved===null?'<span class="muted">確認中…</span>':gasSaved?'<b style="color:var(--green)">✅ 登録されています</b>':'<b style="color:var(--red)">⚠️ まだ登録されていません（このままではURLは発行されません）</b>'}</p>
   <input type="text" id="set-gasurl" placeholder="GASウェブアプリのURL（https://script.google.com/macros/s/.../exec）" style="font-size:12px">
   <input type="text" id="set-gaskey" placeholder="GAS側の GAS_KEY と同じ文字列" style="font-size:12px">
+  <input type="text" id="set-gascal" value="${esc(gasCalNow||"")}" placeholder="面接用カレンダーID（空ならご自分のカレンダー）" style="font-size:12px">
+  <p class="muted" style="margin:2px 0 6px;font-size:11px">ご自分の予定と混ざらないよう、面接専用のカレンダーを作って、そのIDを入れてください（作り方は下の説明）</p>
   <div style="display:flex;gap:6px;flex-wrap:wrap">
    <button class="btn sm sub" id="set-gassave" style="margin:0">保存する</button>
    <button class="btn sm" id="set-gastest" style="margin:0">🔍 接続をテストする</button></div>
   <div id="set-gasresult" style="margin-top:8px"></div>
-  <p class="muted" style="margin:6px 0 0;font-size:11px">保存済みの内容は安全のため表示されません。変えたいときだけ入力してください。<br>
-  テストを押すと、いまから1時間後で予定を1件作って確認します（カレンダーから消して構いません）</p></div>`;
+  <p class="muted" style="margin:6px 0 0;font-size:11px">URLと合言葉は安全のため表示されません。変えたいときだけ入力してください。<br>
+  テストを押すと、いまから1時間後で予定を1件作って確認します（カレンダーから消して構いません）</p>
+  <details style="margin-top:6px"><summary class="muted" style="font-size:12px">面接用カレンダーの作り方（3分）</summary>
+   <ol style="font-size:12px;margin:6px 0 0;padding-left:20px;line-height:1.9">
+    <li>Googleカレンダーを開き、左の「他のカレンダー」の <b>＋</b> →「<b>新しいカレンダーを作成</b>」</li>
+    <li>名前を「<b>面接</b>」にして作成</li>
+    <li>左の一覧でその「面接」にカーソルを合わせ、<b>⋮</b> →「<b>設定と共有</b>」</li>
+    <li>下のほうの「<b>カレンダーの統合</b>」にある <b>カレンダーID</b> をコピー<br>
+     （<span style="word-break:break-all">……@group.calendar.google.com</span> の形です）</li>
+    <li>上の欄に貼り付けて「保存する」→「接続をテストする」</li>
+   </ol>
+   <p class="muted" style="margin:6px 0 0;font-size:11px">面接担当の方にも見せたい場合は、同じ「設定と共有」から
+   その方のメールアドレスを追加してください（権限は「予定の表示」で十分です）。<br>
+   miraiなど別アカウントのカレンダーを使う場合は、そのカレンダーを中山さんに
+   <b>「予定の変更権限」</b>で共有したうえで、そのカレンダーIDを入れてください。</p>
+  </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.41</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.42</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3470,7 +3487,8 @@ function bindPage(){
   if(!u||!k){toast("URLと合言葉の両方を入れてください",true);return}
   if(!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(u)){
    toast("URLの形が違います。末尾が /exec のウェブアプリURLを貼ってください",true);return}
-  const {error}=await sb.rpc("set_gas_config",{p_url:u,p_key:k});
+  const c=($("set-gascal")&&$("set-gascal").value.trim())||"primary";
+  const {error}=await sb.rpc("set_gas_config",{p_url:u,p_key:k,p_cal:c});
   if(error){toast("保存エラー: "+error.message,true);return}
   gasCfg=null;gasSaved=null;$("set-gasurl").value="";$("set-gaskey").value="";
   toast("保存しました。続けて「🔍 接続をテストする」を押して確かめてください");

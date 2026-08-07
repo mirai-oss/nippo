@@ -674,7 +674,7 @@ async function meetIssue(name,iso,eventId){
  if(!j.ok)return{ok:false,why:"GAS側で失敗",msg:j.error||"不明なエラー"};
  if(!j.url)return{ok:false,why:"URLが空",
   msg:"予定は作られましたが、Meetのリンクが返りませんでした。GASの「サービス」に Google Calendar API があるかご確認ください。"};
- return{ok:true,url:j.url,event_id:j.event_id||""};
+ return{ok:true,url:j.url,event_id:j.event_id||"",updated:!!j.updated};
 }
 let lastMeetError=""; // v2.6.40 最後に出たMeetのエラー（画面に残して読めるようにする）
 // v2.6.39 カレンダーの予定の番号を控える（次に日時を変えたとき、この予定を直すため）
@@ -687,13 +687,12 @@ async function saveEventId(id,evid){
 // v2.6.39 面接URLを用意する。日時が変わったときはカレンダーの予定も直す
 // 返り値: {url, event_id}（発行できなければ url は空）
 async function makeMeet(a,iso){
- const had=a&&a.interview_at?new Date(a.interview_at).getTime():0;
- const now=new Date(iso).getTime();
- const changed=had&&had!==now;                 // 日時が変わったか
  const evid=(a&&a.interview_event_id)||"";
- // URLがまだ無い、または日時が変わったときだけGoogleカレンダーを触る
- if(a&&a.interview_url&&!changed)return{url:a.interview_url,event_id:evid};
- const r=await meetIssue(a&&a.name,iso,changed?evid:"");
+ // v2.6.41 「日時が変わったか」を見て判断するのはやめた。
+ //   一覧の日時欄は変更した瞬間に保存されるため、確定を押す頃には
+ //   「変わっていない」と判定されてしまい、カレンダーを直しに行かなかった。
+ //   予定の番号があるときは毎回その予定に日時を合わせに行く（同じ日時なら何も起きない）。
+ const r=await meetIssue(a&&a.name,iso,evid);
  if(!r.ok){
   // v2.6.40 消えてしまわないよう、応募者カードにも残す
   lastMeetError=`${r.why}: ${r.msg}`;
@@ -701,7 +700,7 @@ async function makeMeet(a,iso){
   return{url:(a&&a.interview_url)||"",event_id:evid};
  }
  lastMeetError="";
- return{url:r.url,event_id:r.event_id||evid};
+ return{url:r.url,event_id:r.event_id||evid,updated:!!r.updated};
 }
 // v2.6.35 本人に送る面接のご案内
 function interviewText(a){
@@ -2828,7 +2827,7 @@ async function settingsView(){
   テストを押すと、いまから1時間後で予定を1件作って確認します（カレンダーから消して構いません）</p></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.40</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.41</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3507,7 +3506,7 @@ function bindPage(){
   const {error}=await sb.rpc("set_interview",{p_applicant:a.id,p_at:iso,p_url:url||null});
   if(error){toast("確定できませんでした: "+error.message,true);return}
   await saveEventId(a.id,m.event_id);
-  toast(url?"面接日時を確定し、URLを発行しました":"面接日時を確定しました");
+  toast(url?(m.updated?"面接日時を確定し、カレンダーの予定も直しました":"面接日時を確定し、URLを発行しました"):"面接日時を確定しました");
   rcList=null;rcSimilar=[];rcPast=[];render();
  };
  document.querySelectorAll("[data-ivpick]").forEach(b=>b.onclick=async()=>{
@@ -3658,7 +3657,7 @@ function bindPage(){
    const r=await lineFn({action:"push",applicant_id:id,text:txt});
    if(!r.ok){b.disabled=false;toast("確定しましたが、LINEを送れませんでした: "+(r.error||"不明"),true);rcList=null;render();return}
    try{await sb.rpc("line_claim_last_out",{p_applicant:id})}catch(e){}
-   toast(url?"確定し、面接URLをLINEで送りました":"確定してLINEで送りました（URLは未発行）");
+   toast(url?(m.updated?"確定し、カレンダーの予定も直してLINEで送りました":"確定し、面接URLを発行してLINEで送りました"):"確定してLINEで送りました（URLは未発行）");
   }else{
    copyText(txt);
    toast("確定しました。案内文をコピーしたので、Indeedやメールに貼り付けて送ってください");

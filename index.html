@@ -645,17 +645,36 @@ async function renderJoin(){
 // v2.6.35 Google Meet のリンクを作る（GASのウェブアプリ経由）
 // 設定されていない・失敗した場合は空を返し、手で貼り付ける運用に落ちる
 let gasCfg=null;
-async function makeMeet(a,iso){
+// v2.6.38 どこで止まったかをはっきり返す（黙って諦めない）
+async function meetIssue(name,iso){
+ if(gasCfg===null){
+  const {data,error}=await sb.rpc("gas_config");
+  if(error){gasCfg=false;return{ok:false,why:"データベースが未対応",
+   msg:"面接Meetの仕組みがデータベースに入っていません。SQLの v2_6_35 を実行してください。（"+error.message+"）"}}
+  gasCfg=data||false;
+ }
+ if(!gasCfg||!gasCfg.url)return{ok:false,why:"未登録",
+  msg:"設定 →「📅 面接Meetの自動発行」に、GASのウェブアプリURLと合言葉がまだ登録されていません。"};
+ let res;
  try{
-  if(gasCfg===null){const {data}=await sb.rpc("gas_config");gasCfg=data||false}
-  if(!gasCfg||!gasCfg.url)return "";
-  const res=await fetch(gasCfg.url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},
-   body:JSON.stringify({key:gasCfg.key,action:"meet",name:a.name,start:iso,minutes:30,
-    note:`nippo の応募者管理から作成\n${a.phone||""} ${a.email||""}`})});
-  const j=await res.json().catch(()=>({}));
-  if(!j.ok){toast("Meetのリンクを作れませんでした: "+(j.error||"不明")+"（URLは手で貼り付けられます）",true);return ""}
-  return j.url||"";
- }catch(e){toast("Meetのリンクを作れませんでした（URLは手で貼り付けられます）",true);return ""}
+  res=await fetch(gasCfg.url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},
+   body:JSON.stringify({key:gasCfg.key,action:"meet",name:name||"接続テスト",start:iso,minutes:30,
+    note:"nippo の応募者管理から作成"})});
+ }catch(e){return{ok:false,why:"GASに届かない",
+  msg:"GASのウェブアプリに接続できませんでした。デプロイ設定の「アクセスできるユーザー＝全員」と、URLの末尾が /exec になっているかをご確認ください。"}}
+ const txt=await res.text().catch(()=>"");
+ let j=null;try{j=JSON.parse(txt)}catch(e){}
+ if(!j)return{ok:false,why:"返事が読めない",
+  msg:"GASからログイン画面のようなものが返ってきました。デプロイ設定の「アクセスできるユーザー＝全員」をご確認ください。（先頭: "+txt.slice(0,80)+"）"};
+ if(!j.ok)return{ok:false,why:"GAS側で失敗",msg:j.error||"不明なエラー"};
+ if(!j.url)return{ok:false,why:"URLが空",
+  msg:"予定は作られましたが、Meetのリンクが返りませんでした。GASの「サービス」に Google Calendar API があるかご確認ください。"};
+ return{ok:true,url:j.url};
+}
+async function makeMeet(a,iso){
+ const r=await meetIssue(a&&a.name,iso);
+ if(!r.ok){toast(`面接URLを発行できません（${r.why}）: ${r.msg}`,true);return ""}
+ return r.url;
 }
 // v2.6.35 本人に送る面接のご案内
 function interviewText(a){
@@ -2683,9 +2702,13 @@ async function adminToggle(){
 }
 
 // ===== 設定 =====
+let gasSaved=null; // v2.6.38 面接Meetの接続先が登録済みかどうか
 async function settingsView(){
  if(setMode==="join")return settingsJoinView();
  if(setMode==="fmt")return settingsFmtView();
+ if(isAdmin()&&gasSaved===null){ // v2.6.38 登録状況を先に調べておく
+  try{const {data}=await sb.rpc("gas_config");gasSaved=!!(data&&data.url)}catch(e){gasSaved=false}
+ }
  if(isAdmin()&&larkUrl===null){ // v2.5.8／v2.6.9
   const {data:ss}=await sb.from("app_secrets").select("key,value").in("key",["lark_webhook","chatwork_token","smaregi_staff_url","line_channel_token","line_channel_secret","line_oa_id"]);
   const m={};(ss||[]).forEach(x=>m[x.key]=x.value||"");
@@ -2763,13 +2786,18 @@ async function settingsView(){
  if(isAdmin())h+=`<div class="card"><h3>📅 面接Meetの自動発行</h3>
   <p class="muted" style="margin:0 0 6px">面接日時を確定したときに、Google Meet のリンクを自動で作る設定です。<br>
   設定しなくても、面接URLを手で貼り付ければ使えます。<b>手順は「面接Meet発行の設定手順.md」をご覧ください。</b></p>
+  <p style="margin:0 0 6px;font-size:13px">いまの状態: ${gasSaved===null?'<span class="muted">確認中…</span>':gasSaved?'<b style="color:var(--green)">✅ 登録されています</b>':'<b style="color:var(--red)">⚠️ まだ登録されていません（このままではURLは発行されません）</b>'}</p>
   <input type="text" id="set-gasurl" placeholder="GASウェブアプリのURL（https://script.google.com/macros/s/.../exec）" style="font-size:12px">
   <input type="text" id="set-gaskey" placeholder="GAS側の GAS_KEY と同じ文字列" style="font-size:12px">
-  <button class="btn sm sub" id="set-gassave">保存する</button>
-  <p class="muted" style="margin:6px 0 0;font-size:11px">保存済みの内容は安全のため表示されません。変えたいときだけ入力してください</p></div>`;
+  <div style="display:flex;gap:6px;flex-wrap:wrap">
+   <button class="btn sm sub" id="set-gassave" style="margin:0">保存する</button>
+   <button class="btn sm" id="set-gastest" style="margin:0">🔍 接続をテストする</button></div>
+  <div id="set-gasresult" style="margin-top:8px"></div>
+  <p class="muted" style="margin:6px 0 0;font-size:11px">保存済みの内容は安全のため表示されません。変えたいときだけ入力してください。<br>
+  テストを押すと、いまから1時間後で予定を1件作って確認します（カレンダーから消して構いません）</p></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.37</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.38</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3414,8 +3442,26 @@ function bindPage(){
    toast("URLの形が違います。末尾が /exec のウェブアプリURLを貼ってください",true);return}
   const {error}=await sb.rpc("set_gas_config",{p_url:u,p_key:k});
   if(error){toast("保存エラー: "+error.message,true);return}
-  gasCfg=null;$("set-gasurl").value="";$("set-gaskey").value="";
-  toast("保存しました。面接日時を確定するとMeetのリンクが作られます");
+  gasCfg=null;gasSaved=null;$("set-gasurl").value="";$("set-gaskey").value="";
+  toast("保存しました。続けて「🔍 接続をテストする」を押して確かめてください");
+  render();
+ };
+ if($("set-gastest"))$("set-gastest").onclick=async()=>{ // v2.6.38 どこで止まっているかをその場で出す
+  const box=$("set-gasresult");
+  box.innerHTML=`<p class="muted" style="margin:0">テスト中…</p>`;
+  $("set-gastest").disabled=true;
+  gasCfg=null; // 保存し直した直後でも最新を読みに行く
+  const iso=new Date(Date.now()+3600e3).toISOString();
+  const r=await meetIssue("接続テスト",iso);
+  $("set-gastest").disabled=false;
+  if(r.ok){
+   gasSaved=true;
+   box.innerHTML=`<div class="info" style="margin:0">✅ 成功しました。この設定でMeetのリンクが自動発行されます。<br>
+    <span style="word-break:break-all">${esc(r.url)}</span><br>
+    <span class="muted">※テスト用の予定がカレンダーに1件できています。消して構いません</span></div>`;
+  }else{
+   box.innerHTML=`<div class="alert" style="margin:0"><b>❌ ${esc(r.why)}</b><br>${esc(r.msg)}</div>`;
+  }
  };
  // v2.6.35 面接日時の確定（希望日時のタップ・自由入力のどちらも同じ処理）
  const ivConfirm=async iso=>{

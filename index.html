@@ -426,11 +426,15 @@ function answerHtml(fd,v){
 // v2.6.50 設定画面の上に出す「停止中の項目も表示する」切り替え
 // 停止した項目は普段は隠し、押したときだけ全部出す（編集しやすくするため）
 function offToggleBar(list){
+ // v2.6.51 停止中が0件でもボタンは必ず出す（店舗チェックと同じで、いつでも押せるように）
  const n=(list||[]).filter(x=>x&&x.off).length;
- if(!n&&!cfgShowOff)return "";
+ const msg=cfgShowOff
+  ? `🛠 <b>テンプレート編集モード</b>${n?`（停止中の ${n} 件も表示しています）`:"（停止中の項目はありません）"}`
+  : (n?`⏸ 停止中の項目が ${n} 件あります（いまは隠しています）`
+      :`表示中の項目だけを出しています。停止した項目は自動で隠れます`);
  return `<div class="info" style="margin:0 0 8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-  <span style="flex:1">${cfgShowOff?`🛠 <b>テンプレート編集モード</b>（停止中の ${n} 件も表示しています）`:`⏸ 停止中の項目が ${n} 件あります（いまは隠しています）`}</span>
-  <button class="btn sm ${cfgShowOff?"":"sub"}" id="cfg-showoff" style="margin:0">${cfgShowOff?"✔ 編集を終了":"🛠 テンプレート編集（停止中も表示）"}</button></div>`;
+  <span style="flex:1">${msg}</span>
+  <button class="btn sm ${cfgShowOff?"":"sub"}" id="cfg-showoff" style="margin:0">${cfgShowOff?"✔ 編集を終了":"🛠 テンプレート編集"}</button></div>`;
 }
 // v2.6.45 入社情報の編集カード（社長・本部は全員ぶん、本人は自分の分）
 // pre は入力欄のIDの頭文字（管理画面と設定画面で重ならないようにする）
@@ -3224,7 +3228,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.50</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.51</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====

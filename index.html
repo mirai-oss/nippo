@@ -284,6 +284,7 @@ let chatReply=null,chatInvite=false,chatInviteSel=[]; // v2.2 返信・招待
 let permMatrix=null,permUserSel=null,permUserVals=null,permUsersCache=null; // v2.4 権限設定
 let rcList=null,rcSeg="active",rcQ="",rcDetail=null,rcForms=null,applyFormDef=null; // v2.5 応募者管理
 let rcOnlyWait=false; // v2.6.31 未対応だけに絞るか
+let cfgShowOff=false; // v2.6.50 設定画面で「停止中の項目」も出すか（既定は隠す）
 let rcJobs=false,rcJobList=null,rcMsgs=null; // v2.6.16 求人タイトルの登録／Indeedメッセージ
 let rcSimilar=[],rcPast=[],rcDup=false,rcDupList=null; // v2.6.33 名寄せ（同じ方かもの候補・過去の応募・重複の確認）
 let rcVisible=[],rcShown=100,rcShownSig=""; // v2.6.18 一覧の表示件数（プルダウンが増えて重くならないように）
@@ -404,6 +405,32 @@ function pickedStation(boxId){
  const box=$(boxId);if(!box)return "";
  const on=box.querySelector(".chip.stpick.on");
  return on?on.dataset.st:"";
+}
+// v2.6.50 チェックリスト（複数選択）の回答を、付いた／付いていないが分かる形で出す
+// 選択肢が分かるとき（fd.opts）は、選ばれていないものも ☐ で並べる
+function answerHtml(fd,v){
+ const multi=fd&&(fd.type==="multi"||fd.type==="check");
+ if(multi&&fd.opts&&fd.opts.length){
+  const picked=(Array.isArray(v)?v:String(v==null?"":v).split(/[、,]/)).map(x=>String(x).trim()).filter(Boolean);
+  const rows=fd.opts.map(o=>{
+   const on=picked.includes(o);
+   return `<div style="font-size:13px;padding:2px 0;${on?"":"color:#98a2b3"}">${on?"☑":"☐"} ${esc(o)}${on?"":"<span style=\"font-size:11px\">（未チェック）</span>"}</div>`;
+  }).join("");
+  // 選択肢に無い自由記入（「他（○○）」など）も落とさず出す
+  const extra=picked.filter(x=>!fd.opts.includes(x));
+  return rows+(extra.length?`<div style="font-size:13px;padding:2px 0">☑ ${esc(extra.join("、"))}</div>`:"")
+   +`<p class="muted" style="margin:2px 0 0;font-size:11px">${picked.length}／${fd.opts.length} 件にチェック</p>`;
+ }
+ return esc(fmtAnswerVal(Array.isArray(v)?v.join("、"):v)).replace(/\n/g,"<br>");
+}
+// v2.6.50 設定画面の上に出す「停止中の項目も表示する」切り替え
+// 停止した項目は普段は隠し、押したときだけ全部出す（編集しやすくするため）
+function offToggleBar(list){
+ const n=(list||[]).filter(x=>x&&x.off).length;
+ if(!n&&!cfgShowOff)return "";
+ return `<div class="info" style="margin:0 0 8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+  <span style="flex:1">${cfgShowOff?`🛠 <b>テンプレート編集モード</b>（停止中の ${n} 件も表示しています）`:`⏸ 停止中の項目が ${n} 件あります（いまは隠しています）`}</span>
+  <button class="btn sm ${cfgShowOff?"":"sub"}" id="cfg-showoff" style="margin:0">${cfgShowOff?"✔ 編集を終了":"🛠 テンプレート編集（停止中も表示）"}</button></div>`;
 }
 // v2.6.45 入社情報の編集カード（社長・本部は全員ぶん、本人は自分の分）
 // pre は入力欄のIDの頭文字（管理画面と設定画面で重ならないようにする）
@@ -889,7 +916,17 @@ function interviewText(a){
  const w="日月火水木金土"[d.getDay()];
  const when=`${d.getMonth()+1}月${d.getDate()}日(${w}) ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
  let t=`${a.name}さん\n\nこの度はご応募いただきありがとうございます。\n面接の日時が決まりましたのでご連絡いたします。\n\n【面接日時】${when}`;
- if(a.interview_url)t+=`\n【面接URL】${a.interview_url}\n\nお時間になりましたら、上のリンクからご参加ください。`;
+ // v2.6.51 対面のときは住所を、オンラインのときはURLを送る
+ if(a.interview_mode==="onsite"){
+  const p=ivPlaceOf(a.interview_place);
+  const addr=a.interview_address||(p&&p.address)||"";
+  t+=`\n【場所】${a.interview_place||""}`;
+  if(addr)t+=`\n【住所】${addr}`;
+  if(p&&p.note)t+=`\n${p.note}`;
+  t+=`\n\nお気をつけてお越しください。`;
+ }else if(a.interview_url){
+  t+=`\n【面接URL】${a.interview_url}\n\nお時間になりましたら、上のリンクからご参加ください。`;
+ }
  t+=`\n\nご都合が悪くなった場合は、このままご返信ください。\nお会いできるのを楽しみにしております。`;
  return t;
 }
@@ -909,6 +946,9 @@ function hourMinValue(key,i){
  if(!h||!m||!h.value||!m.value)return "";
  return `${h.value}:${m.value}`;
 }
+// v2.6.51 登録されている面接場所（設定→🏪 面接場所）
+const ivPlaces=()=>{const v=appSettings&&appSettings.interview_places;return Array.isArray(v)?v:[]};
+const ivPlaceOf=name=>ivPlaces().find(p=>p.name===name)||null;
 // v2.6.36 こちらから面接の候補日時を出すときの文面
 function altSlotsText(a,list){
  const when=v=>{const d=new Date(v);
@@ -2045,6 +2085,10 @@ async function detailView(){
    h+=`<div class="card"><h3>${esc(f.label)}</h3><div class="photo-grid">${v.map(u=>`<a class="ph" href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}"></a>`).join("")}</div></div>`;
    return;
   }
+  // v2.6.50 チェックリストは、付いた／付いていないが分かる形で出す
+  if((f.type==="multi"||f.type==="check")&&f.opts&&f.opts.length){
+   h+=`<div class="card"><h3>${esc(f.label)}</h3>${answerHtml(f,v)}</div>`;return;
+  }
   let disp=Array.isArray(v)?v.join("、"):(f.type==="stars"?"★".repeat(v)+"☆".repeat(5-v):f.type==="num"?v+"点／10点":String(v));
   h+=`<div class="card"><h3>${esc(f.label)}</h3><div style="font-size:14px;white-space:pre-wrap">${esc(disp)}</div></div>`;
  });
@@ -2527,7 +2571,18 @@ function recruitDetailView(){
    <input type="datetime-local" id="rc-ivat" class="inp" style="margin:0;max-width:220px" value="${a.interview_at?new Date(new Date(a.interview_at).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):""}">
    <button class="btn sm" id="rc-ivset" style="margin:0">この日時で確定</button></div>
   ${a.interview_at?`<p style="margin:8px 0 0"><button class="btn sm sub" id="rc-ivclear" style="margin:0;color:var(--red);border-color:var(--red)">🗑 面接日時を取り消す</button></p>`:""}
-  <p class="muted" style="margin:8px 0 2px">面接URL（確定時に自動で発行されます。手で貼り付けてもOK）</p>
+  <p class="muted" style="margin:10px 0 2px">面接のやり方</p>
+  <div>${[["online","💻 オンライン（Meetを発行）"],["onsite","🏪 対面（住所を送る）"]]
+   .map(([v,l])=>`<span class="chip ivmodepick ${(a.interview_mode||"online")===v?"on":""}" data-mode="${v}">${l}</span>`).join("")}</div>
+  <div id="rc-placewrap" style="display:${a.interview_mode==="onsite"?"":"none"};margin-top:6px">
+   <select class="inp" id="rc-ivplace" style="margin:0;font-size:14px">
+    <option value="">面接場所を選ぶ</option>
+    ${ivPlaces().map(p=>`<option value="${esc(p.name)}"${a.interview_place===p.name?" selected":""}>${esc(p.name)}</option>`).join("")}
+   </select>
+   ${ivPlaces().length?"":`<p class="muted" style="margin:4px 0 0;font-size:12px">まだ面接場所が登録されていません。設定 →「🏪 面接場所」で登録してください</p>`}
+   ${a.interview_address?`<p class="muted" style="margin:4px 0 0;font-size:12px">${esc(a.interview_address)}</p>`:""}
+  </div>
+  <p class="muted" style="margin:8px 0 2px">面接URL（オンラインのとき、確定時に自動で発行されます。手で貼り付けてもOK）</p>
   <input type="text" id="rc-ivurl" value="${esc(a.interview_url||"")}" placeholder="https://meet.google.com/..." style="font-size:12px">
   <div style="display:flex;gap:6px;flex-wrap:wrap">
    <button class="btn sm sub" id="rc-ivurlsave" style="margin:0">URLを保存</button>
@@ -2640,7 +2695,7 @@ function recruitDetailView(){
  h+=`<div class="card"><details><summary style="cursor:pointer"><b style="font-size:15px">📝 応募内容</b> <span class="muted" style="font-size:11px">（タップで開く）</span></summary>`;
  const seen={};
  if(form)(form.fields||[]).forEach(f=>{const v=(a.answers||{})[f.k];seen[f.k]=1;if(v==null||v==="")return;
-  h+=`<p style="margin:8px 0 0;font-size:13px"><span class="muted">${esc(f.label)}</span><br>${esc(fmtAnswerVal(v)).replace(/\n/g,"<br>")}</p>`;});
+  h+=`<p style="margin:8px 0 0;font-size:13px"><span class="muted">${esc(f.label)}</span><br>${answerHtml(f,v)}</p>`;}); // v2.6.50
  Object.entries(a.answers||{}).forEach(([k,v])=>{if(seen[k]||v==null||v===""||String(k).startsWith("_"))return;
   h+=`<p style="margin:8px 0 0;font-size:13px"><span class="muted">${esc(k)}</span><br>${esc(fmtAnswerVal(v)).replace(/\n/g,"<br>")}</p>`;});
  if(!Object.keys(a.answers||{}).length)h+=`<p class="muted" style="margin:0">回答はありません（手動追加）</p>`;
@@ -3123,6 +3178,21 @@ async function settingsView(){
    <p class="muted" style="margin:0 0 8px">役職ごとに使える機能と、特定の人だけの例外を設定できます</p>
    <button class="btn sm" id="set-perm">権限設定を開く</button></div>`;
  }
+ // v2.6.51 面接場所（対面のときに応募者へ送る住所。社長・本部のみ）
+ if(isAdmin()){
+  const pl=ivPlaces();
+  h+=`<div class="card"><h3>🏪 面接場所</h3>
+   <p class="muted" style="margin:0 0 6px">対面での面接を確定したときに、応募者へお送りする場所と住所です。何か所でも登録できます。<br>
+   <b>応募者に送る内容です。公開してよい住所だけを入れてください。</b></p>
+   ${pl.map((x,i)=>`<div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px">
+     <input type="text" data-ivpname="${i}" value="${esc(x.name||"")}" placeholder="場所の名前（例: 鶏武者 新横浜）" style="margin:0">
+     <input type="text" data-ivpaddr="${i}" value="${esc(x.address||"")}" placeholder="住所（例: 神奈川県横浜市港北区…）" style="margin:6px 0 0;font-size:13px">
+     <input type="text" data-ivpnote="${i}" value="${esc(x.note||"")}" placeholder="ひとこと（例: ビル2階、駐車場はありません）" style="margin:6px 0 0;font-size:13px">
+     <button class="btn sm sub" data-ivpdel="${i}" style="margin:6px 0 0;color:var(--red);border-color:var(--red)">この場所を削除</button>
+    </div>`).join("")}
+   <button class="btn sm sub" id="ivp-add" style="margin:0">＋ 面接場所を追加</button>
+   <button class="btn sm" id="ivp-save" style="margin:8px 0 0">この内容で保存する</button></div>`;
+ }
  // v2.6.35 面接のGoogle Meetを自動発行するための接続先（社長・本部のみ）
  if(isAdmin())h+=`<div class="card"><h3>📅 面接Meetの自動発行</h3>
   <p class="muted" style="margin:0 0 6px">面接日時を確定したときに、Google Meet のリンクを自動で作る設定です。<br>
@@ -3154,7 +3224,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.49</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.50</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3246,7 +3316,7 @@ async function settingsApplyView(){
  <div class="card" style="padding:12px"><h3>フォームの見出し</h3>
   <input type="text" id="ap-title" value="${esc(cur.title)}" placeholder="例: アルバイト応募フォーム" style="margin:0"></div>`;
  h+=`<p class="muted" style="font-size:12px">⠿ をドラッグ、または ↑↓ で並び替えできます。選択肢に「他」を入れると、選んだ人が自由に書ける欄が出ます。</p>`;
- h+=cur.fields.map((f,i)=>`<div class="card apcard" data-api="${i}" style="padding:12px">
+ h+=offToggleBar(cur.fields)+cur.fields.map((f,i)=>(f.off&&!cfgShowOff)?"":`<div class="card apcard" data-api="${i}" style="padding:12px">
   <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
    <span class="fhandle aphandle" draggable="true" data-api="${i}" title="ドラッグで並び替え">⠿</span>
    <span class="fnum">${i+1}</span>
@@ -3370,8 +3440,8 @@ function settingsJoinView(){
     <span class="chip jf-req ${f.req?"on":""}" data-k="${k}">必須</span></div>
    <input type="text" data-jfhint="${k}" value="${esc(f.hint||"")}" placeholder="記入例・補足（任意）" style="margin:4px 0 0;font-size:12px"></div>`;
  }).join("")+`</div>`;
- h+=`<div class="card"><h3>自由項目（追加の質問）</h3>`+cfg.custom.map((c,i)=>
-  `<div class="jccard" data-jci="${i}" style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px">
+ h+=`<div class="card"><h3>自由項目（追加の質問）</h3>`+offToggleBar(cfg.custom)+cfg.custom.map((c,i)=>
+  (c.off&&!cfgShowOff)?"":`<div class="jccard" data-jci="${i}" style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px">
    <div style="display:flex;align-items:center;gap:8px">
     <span class="fhandle jchandle" draggable="true" data-jci="${i}" title="ドラッグで並び替え">⠿</span>
     <span class="fnum">${i+1}</span>
@@ -3442,7 +3512,7 @@ function settingsFmtView(){
    <div>${FMT_ROLES.map(r=>`<span class="chip fmtrole ${fmtRole==="WEEKLY_"+r?"on":""}" data-r="WEEKLY_${r}">${ROLE_NAME[r]}</span>`).join("")}
     <span class="chip fmtrole ${fmtRole==="WEEKLY"?"on":""}" data-r="WEEKLY">共通</span></div></div>`;
  h+=`<p class="muted" style="font-size:12px">⠿ をドラッグ、または ↑↓ で並び替えできます。</p>`;
- h+=list.map((f,i)=>`<div class="card fcard" data-fi="${i}" style="padding:12px">
+ h+=offToggleBar(list)+list.map((f,i)=>(f.off&&!cfgShowOff)?"":`<div class="card fcard" data-fi="${i}" style="padding:12px">
   <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
    <span class="fhandle" draggable="true" data-fi="${i}" title="ドラッグで並び替え">⠿</span>
    <span class="fnum">${i+1}</span>
@@ -3798,6 +3868,31 @@ function bindPage(){
  if($("adstores"))$("adstores").onclick=()=>{adminMode="stores";stList=null;stSmaregi=undefined;lastIssued=null;lastInvite=null;render()};
  // v2.5 応募者管理
  if($("rcback"))$("rcback").onclick=()=>{rcDetail=null;rcMsgs=null;rcSimilar=[];rcPast=[];render()};
+ // v2.6.51 面接場所の登録
+ const ivpCollect=()=>{
+  const out=[];
+  document.querySelectorAll("[data-ivpname]").forEach(el=>{
+   const i=+el.dataset.ivpname;
+   const g=k=>{const x=document.querySelector(`[data-ivp${k}="${i}"]`);return x?x.value.trim():""};
+   const name=el.value.trim();
+   if(name)out.push({name,address:g("addr"),note:g("note")});
+  });
+  return out;
+ };
+ if($("ivp-add"))$("ivp-add").onclick=()=>{
+  appSettings.interview_places=[...ivpCollect(),{name:"",address:"",note:""}];render();
+ };
+ document.querySelectorAll("[data-ivpdel]").forEach(b2=>b2.onclick=()=>{
+  const i=+b2.dataset.ivpdel;const cur=ivPlaces().slice();cur.splice(i,1);
+  appSettings.interview_places=cur;render();
+ });
+ if($("ivp-save"))$("ivp-save").onclick=async()=>{
+  const list=ivpCollect();
+  if(list.some(x=>!x.address)){toast("住所が空の場所があります",true);return}
+  const {error}=await sb.rpc("set_interview_places",{p_places:list});
+  if(error){toast("保存エラー: "+error.message,true);return}
+  appSettings.interview_places=list;toast("面接場所を保存しました");render();
+ };
  if($("set-gassave"))$("set-gassave").onclick=async()=>{ // v2.6.35 面接Meetの接続先を保存
   const u=$("set-gasurl").value.trim(),k=$("set-gaskey").value.trim();
   if(!u||!k){toast("URLと合言葉の両方を入れてください",true);return}
@@ -3834,16 +3929,25 @@ function bindPage(){
   // v2.6.40 欄には保存済みのURLが最初から入っている。
   // それを「手で貼った」と誤解して自動発行を飛ばしていたため、日時を変えても予定が直らなかった。
   // 中身を書き換えたときだけ、手入力として扱う
+  // v2.6.51 対面ならMeetは発行しない（オンラインのときだけ）
+  const modeEl=document.querySelector(".chip.ivmodepick.on");
+  const mode=modeEl?modeEl.dataset.mode:(a.interview_mode||"online");
+  const placeName=($("rc-ivplace")&&$("rc-ivplace").value)||"";
+  const place=ivPlaceOf(placeName);
+  if(mode==="onsite"&&!placeName){toast("面接場所を選んでください",true);return}
   const manual=field&&field!==(a.interview_url||"");
-  const m=manual?{url:field,event_id:a.interview_event_id||""}:await makeMeet(a,iso);
+  const m=(mode==="onsite")?{url:"",event_id:a.interview_event_id||""}
+        :(manual?{url:field,event_id:a.interview_event_id||""}:await makeMeet(a,iso));
   const url=m.url;
-  const {error}=await sb.rpc("set_interview",{p_applicant:a.id,p_at:iso,p_url:url||null});
+  const {error}=await sb.rpc("set_interview",{p_applicant:a.id,p_at:iso,p_url:url||null,
+   p_mode:mode,p_place:placeName||null,p_address:(place&&place.address)||null});
   if(error){toast("確定できませんでした: "+error.message,true);return}
   await saveEventId(a.id,m.event_id);
   // v2.6.44 LINE連携済みなら、確定と同時にご案内（面接URL入り）を自動送信する
   let sent="";
   if(a.line_user_id){
-   const txt=interviewText({...a,interview_at:iso,interview_url:url});
+   const txt=interviewText({...a,interview_at:iso,interview_url:url,
+    interview_mode:mode,interview_place:placeName,interview_address:(place&&place.address)||""});
    const r=await lineFn({action:"push",applicant_id:a.id,text:txt});
    if(r.ok){
     try{await sb.rpc("line_claim_last_out",{p_applicant:a.id})}catch(e){}
@@ -3869,6 +3973,12 @@ function bindPage(){
   $("rc-ivset").disabled=true;await ivConfirm(new Date(v).toISOString());
  };
  if($("rc-iverrclose"))$("rc-iverrclose").onclick=()=>{lastMeetError="";render()}; // v2.6.40
+ // v2.6.51 オンライン／対面の切り替え
+ document.querySelectorAll(".chip.ivmodepick").forEach(c=>c.onclick=()=>{
+  document.querySelectorAll(".chip.ivmodepick").forEach(x=>x.classList.remove("on"));
+  c.classList.add("on");
+  const w=$("rc-placewrap");if(w)w.style.display=c.dataset.mode==="onsite"?"":"none";
+ });
  // v2.6.45 面接日時の取り消し（日時欄を空にしても消えなかったため、はっきりしたボタンを用意）
  if($("rc-ivclear"))$("rc-ivclear").onclick=async()=>{
   const a=rcList.find(x=>x.id===rcDetail);if(!a)return;
@@ -4330,6 +4440,7 @@ function bindPage(){
   render();
  };
  if($("perm-save"))$("perm-save").onclick=savePerm;
+ if($("cfg-showoff"))$("cfg-showoff").onclick=()=>{cfgShowOff=!cfgShowOff;render()}; // v2.6.50
  document.querySelectorAll(".chip.jf-on,.chip.jf-req,.chip.jc-req,.chip.f-req,.chip.f-off,.chip.ap-off,.chip.jc-off").forEach(c=>c.onclick=()=>{c.classList.toggle("on");if(c.classList.contains("f-off")||c.classList.contains("ap-off")||c.classList.contains("jc-off"))c.textContent=c.classList.contains("on")?"⏸ 停止中":"停止"}); // v2.6.46
  document.querySelectorAll("[data-jcdel]").forEach(c=>c.onclick=()=>{collectJoinDom();cfgJoin.custom.splice(+c.dataset.jcdel,1);render()});
  if($("jc-add"))$("jc-add").onclick=()=>{collectJoinDom();cfgJoin.custom.push({label:"",req:false,type:"text",opts:[],hint:""});render()};

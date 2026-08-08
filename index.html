@@ -423,6 +423,40 @@ function answerHtml(fd,v){
  }
  return esc(fmtAnswerVal(Array.isArray(v)?v.join("、"):v)).replace(/\n/g,"<br>");
 }
+// v2.6.52 フォームのプレビュー（送る相手にどう見えるかを確認する）
+// 実際の入力欄と同じ形で描くが、押しても何も起きない見本
+let cfgPreview=false;
+function previewFields(list,title){
+ const shown=(list||[]).filter(f=>f&&!f.off&&f.label);
+ let h=`<div class="card" style="background:#f7fbff;border:2px dashed var(--blue)">
+  <h3 style="margin:0">👀 プレビュー（相手にはこう見えます）</h3>
+  <p class="muted" style="margin:4px 0 10px">${esc(title||"")}　※ 見本です。ここで入力しても保存されません</p>`;
+ if(!shown.length)h+=`<p class="muted" style="margin:0">表示する項目がありません（すべて停止中か、項目名が空です）</p>`;
+ shown.forEach(f=>{
+  const req=f.req?' <span class="req">必須</span>':"";
+  h+=`<div style="border-top:1px solid var(--line);padding-top:10px;margin-top:10px">
+   <p style="margin:0 0 4px;font-weight:600;font-size:14px">${esc(f.label)}${req}</p>`;
+  if(f.hint)h+=`<p class="muted" style="margin:0 0 4px;font-size:12px">記入例: ${esc(f.hint)}</p>`;
+  const opts=f.opts||[];
+  if(f.type==="pull"||f.type==="select")
+   h+=`<select class="inp" style="margin:0" disabled><option>${f.type==="select"?"店舗を選ぶ":"選択してください"}</option>${opts.map(o=>`<option>${esc(o)}</option>`).join("")}</select>`;
+  else if(f.type==="radio")
+   h+=opts.map(o=>`<label class="radio-row"><input type="radio" disabled>${esc(o)}</label>`).join("")||`<p class="muted" style="margin:0">選択肢が未設定です</p>`;
+  else if(f.type==="multi"||f.type==="check"||f.type==="select2")
+   h+=`<div>${opts.map(o=>`<span class="chip">${esc(o)}</span>`).join("")||`<span class="muted">選択肢が未設定です</span>`}</div>`;
+  else if(f.type==="date")h+=`<input type="date" class="inp" style="margin:0" disabled>`;
+  else if(f.type==="time")h+=`<div style="display:flex;gap:6px;align-items:center"><select class="inp" style="margin:0;max-width:88px" disabled><option>--</option></select><span>時</span><select class="inp" style="margin:0;max-width:88px" disabled><option>--</option></select><span>分</span></div>`;
+  else if(f.type==="stars")h+=`<div style="font-size:22px;letter-spacing:4px;color:#f0a020">☆☆☆☆☆</div>`;
+  else if(f.type==="num")h+=`<div>${[1,2,3,4,5,6,7,8,9,10].map(n=>`<span class="chip">${n}</span>`).join("")}</div>`;
+  else if(f.type==="photo")h+=`<div class="photo-grid"><label class="addph">＋</label></div><p class="muted" style="margin:2px 0 0;font-size:12px">写真を選ぶ欄です</p>`;
+  else if(f.type==="task")h+=`<textarea rows="2" disabled placeholder="報告（タスクとして登録されます）"></textarea>`;
+  else h+=`<textarea rows="2" disabled placeholder="ご記入ください"></textarea>`;
+  h+=`</div>`;
+ });
+ return h+`</div>`;
+}
+// プレビューの開け閉めボタン
+const previewBar=()=>`<button class="btn sm ${cfgPreview?"":"sub"}" id="cfg-preview" style="margin:0 0 8px">${cfgPreview?"✔ プレビューを閉じる":"👀 プレビューを見る（相手の画面）"}</button>`;
 // v2.6.50 設定画面の上に出す「停止中の項目も表示する」切り替え
 // 停止した項目は普段は隠し、押したときだけ全部出す（編集しやすくするため）
 function offToggleBar(list){
@@ -3228,7 +3262,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.51</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.52</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3320,7 +3354,7 @@ async function settingsApplyView(){
  <div class="card" style="padding:12px"><h3>フォームの見出し</h3>
   <input type="text" id="ap-title" value="${esc(cur.title)}" placeholder="例: アルバイト応募フォーム" style="margin:0"></div>`;
  h+=`<p class="muted" style="font-size:12px">⠿ をドラッグ、または ↑↓ で並び替えできます。選択肢に「他」を入れると、選んだ人が自由に書ける欄が出ます。</p>`;
- h+=offToggleBar(cur.fields)+cur.fields.map((f,i)=>(f.off&&!cfgShowOff)?"":`<div class="card apcard" data-api="${i}" style="padding:12px">
+ h+=previewBar()+(cfgPreview?previewFields(cur.fields,`📥 ${esc(cur.title||"応募フォーム")}`):"")+offToggleBar(cur.fields)+cur.fields.map((f,i)=>(f.off&&!cfgShowOff)?"":`<div class="card apcard" data-api="${i}" style="padding:12px">
   <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
    <span class="fhandle aphandle" draggable="true" data-api="${i}" title="ドラッグで並び替え">⠿</span>
    <span class="fnum">${i+1}</span>
@@ -3444,6 +3478,7 @@ function settingsJoinView(){
     <span class="chip jf-req ${f.req?"on":""}" data-k="${k}">必須</span></div>
    <input type="text" data-jfhint="${k}" value="${esc(f.hint||"")}" placeholder="記入例・補足（任意）" style="margin:4px 0 0;font-size:12px"></div>`;
  }).join("")+`</div>`;
+ h+=previewBar()+(cfgPreview?previewFields(cfg.custom,"📋 入社登録フォームの追加項目"):"");
  h+=`<div class="card"><h3>自由項目（追加の質問）</h3>`+offToggleBar(cfg.custom)+cfg.custom.map((c,i)=>
   (c.off&&!cfgShowOff)?"":`<div class="jccard" data-jci="${i}" style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px">
    <div style="display:flex;align-items:center;gap:8px">
@@ -3516,7 +3551,7 @@ function settingsFmtView(){
    <div>${FMT_ROLES.map(r=>`<span class="chip fmtrole ${fmtRole==="WEEKLY_"+r?"on":""}" data-r="WEEKLY_${r}">${ROLE_NAME[r]}</span>`).join("")}
     <span class="chip fmtrole ${fmtRole==="WEEKLY"?"on":""}" data-r="WEEKLY">共通</span></div></div>`;
  h+=`<p class="muted" style="font-size:12px">⠿ をドラッグ、または ↑↓ で並び替えできます。</p>`;
- h+=offToggleBar(list)+list.map((f,i)=>(f.off&&!cfgShowOff)?"":`<div class="card fcard" data-fi="${i}" style="padding:12px">
+ h+=previewBar()+(cfgPreview?previewFields(list,editKind):"")+offToggleBar(list)+list.map((f,i)=>(f.off&&!cfgShowOff)?"":`<div class="card fcard" data-fi="${i}" style="padding:12px">
   <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
    <span class="fhandle" draggable="true" data-fi="${i}" title="ドラッグで並び替え">⠿</span>
    <span class="fnum">${i+1}</span>
@@ -4445,6 +4480,7 @@ function bindPage(){
  };
  if($("perm-save"))$("perm-save").onclick=savePerm;
  if($("cfg-showoff"))$("cfg-showoff").onclick=()=>{cfgShowOff=!cfgShowOff;render()}; // v2.6.50
+ if($("cfg-preview"))$("cfg-preview").onclick=()=>{cfgPreview=!cfgPreview;render()}; // v2.6.52
  document.querySelectorAll(".chip.jf-on,.chip.jf-req,.chip.jc-req,.chip.f-req,.chip.f-off,.chip.ap-off,.chip.jc-off").forEach(c=>c.onclick=()=>{c.classList.toggle("on");if(c.classList.contains("f-off")||c.classList.contains("ap-off")||c.classList.contains("jc-off"))c.textContent=c.classList.contains("on")?"⏸ 停止中":"停止"}); // v2.6.46
  document.querySelectorAll("[data-jcdel]").forEach(c=>c.onclick=()=>{collectJoinDom();cfgJoin.custom.splice(+c.dataset.jcdel,1);render()});
  if($("jc-add"))$("jc-add").onclick=()=>{collectJoinDom();cfgJoin.custom.push({label:"",req:false,type:"text",opts:[],hint:""});render()};

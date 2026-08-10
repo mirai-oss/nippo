@@ -73,6 +73,12 @@
   .photo-grid .ph img{width:100%;height:100%;object-fit:cover}
   .photo-grid .ph .del{position:absolute;top:2px;right:2px;background:rgba(0,0,0,.55);color:#fff;border-radius:50%;width:20px;height:20px;line-height:20px;text-align:center;font-size:12px;cursor:pointer}
   .addph{width:84px;height:84px;border:2px dashed #bbb;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#8a93a2;font-size:26px;cursor:pointer}
+  /* v2.6.62 マニュアルの閲覧画面: 写真は大きく・手順は枠で囲む */
+  .manual-photo{width:100%;max-width:100%;border-radius:10px;margin-top:8px;display:block;cursor:zoom-in;border:1px solid var(--line)}
+  .manual-step{border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0;background:#fafafa}
+  .manual-step .steplabel{display:inline-block;background:var(--blue);color:#fff;font-weight:600;font-size:12px;padding:3px 12px;border-radius:20px}
+  #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:999;display:none;align-items:center;justify-content:center;padding:16px;cursor:zoom-out}
+  #lightbox img{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px}
   /* v1.6 フォームデザイナー */
   .fhandle{cursor:grab;color:#8a93a2;font-size:18px;padding:0 6px;user-select:none}
   .fnum{display:inline-block;background:#eaf3fd;color:var(--blue);border-radius:6px;font-size:12px;padding:2px 8px;font-weight:600}
@@ -1864,6 +1870,7 @@ function bindManualsPage(){
  if($("mvq"))$("mvq").onkeydown=e=>{if(e.key==="Enter"){mvQ=$("mvq").value;render()}};
  if($("mvadmin"))$("mvadmin").onclick=()=>{mvAdminMode=!mvAdminMode;manualItems=null;render()};
  document.querySelectorAll("[data-mvopen]").forEach(el=>el.onclick=()=>{mvViewId=el.dataset.mvopen;render()});
+ document.querySelectorAll("[data-lightbox]").forEach(img=>img.onclick=()=>openLightbox(img.dataset.lightbox)); // v2.6.62
  if($("mvBack"))$("mvBack").onclick=()=>{mvViewId=null;render()};
  document.querySelectorAll("[data-medit]").forEach(b=>b.onclick=()=>{mvEditId=b.dataset.medit;mvEditContent=null;mvPreviewOn=false;render()});
  // ---- v2.6.61 本文（部品）の編集 ----
@@ -1912,16 +1919,30 @@ function bindManualsPage(){
  };
 }
 // v2.6.61 マニュアル本文（部品の配列）を組み立てて表示するだけの部分（編集・プレビュー・実際の閲覧の3か所で共用）
+// v2.6.62 写真は画面幅いっぱいに大きく表示し、タップで拡大できるようにする（data-lightbox）。
+// 手順は枠で囲んで、STEP番号と写真の対応がひと目で分かるようにする
 function manualBlocksInnerHtml(content){
  let h="";
  (content||[]).forEach(b=>{
   if(b.type==="heading")h+=`<h3 style="margin:14px 0 6px">${esc(b.text||"")}</h3>`;
   else if(b.type==="text")h+=`<p style="margin:6px 0;white-space:pre-wrap">${esc(b.text||"")}</p>`;
   else if(b.type==="video")h+=b.url?`<p style="margin:10px 0"><a href="${esc(b.url)}" target="_blank" rel="noopener">🎬 動画を見る</a></p>`:"";
-  else if(b.type==="photo")h+=(b.urls||[]).length?`<div class="photo-grid">${b.urls.map(u=>`<div class="ph"><img src="${esc(u)}"></div>`).join("")}</div>`:"";
-  else if(b.type==="steps")h+=(b.items||[]).map((s,j)=>`<div style="margin:10px 0"><b>STEP ${j+1}</b><p style="margin:4px 0;white-space:pre-wrap">${esc(s.text||"")}</p>${s.photo_url?`<div class="photo-grid"><div class="ph"><img src="${esc(s.photo_url)}"></div></div>`:""}</div>`).join("");
+  else if(b.type==="photo")h+=(b.urls||[]).map(u=>`<img src="${esc(u)}" class="manual-photo" data-lightbox="${esc(u)}">`).join("");
+  else if(b.type==="steps")h+=(b.items||[]).map((s,j)=>`<div class="manual-step"><span class="steplabel">STEP ${j+1}</span><p style="margin:8px 0 0;white-space:pre-wrap">${esc(s.text||"")}</p>${s.photo_url?`<img src="${esc(s.photo_url)}" class="manual-photo" data-lightbox="${esc(s.photo_url)}">`:""}</div>`).join("");
  });
  return h||`<p class="muted" style="margin:0">まだ部品がありません</p>`;
+}
+// タップで写真を全画面表示（もう一度タップで閉じる）
+function openLightbox(url){
+ let lb=$("lightbox");
+ if(!lb){
+  lb=document.createElement("div");lb.id="lightbox";
+  lb.innerHTML=`<img id="lightboximg">`;
+  lb.onclick=()=>{lb.style.display="none"};
+  document.body.appendChild(lb);
+ }
+ $("lightboximg").src=url;
+ lb.style.display="flex";
 }
 function manualBlockViewHtml(content){ // 編集画面用のプレビュー（点線カード）
  return `<div class="card" style="background:#f7fbff;border:2px dashed var(--blue)"><h3 style="margin:0 0 8px">👀 プレビュー（実際の見え方）</h3>${manualBlocksInnerHtml(content)}</div>`;
@@ -3611,7 +3632,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.61</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.62</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====

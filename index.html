@@ -310,6 +310,7 @@ let ivSkipSm=false; // v2.6.1
 let joinGender=null; // v2.6.7
 let cwToken=null,smUrlTpl=null; // v2.6.9 Chatwork・スマレジURL
 let lineToken=null,lineSecret=null,lineOa=null; // v2.6.20 求人用LINE
+let dashId=null,dashPw=null,dashLog; // v2.6.57 売上ダッシュボード連携
 let teams=[],euTeam=null,lrList=null,lrEdit=null; // v2.6.2 チーム・日報Lark通知
 // v2.6.3 Lark通知のイベント（この動きがあったら通知する）
 const LARK_EVENTS={
@@ -1470,6 +1471,43 @@ async function homeView(){
  return h;
 }
 
+// v2.6.57 所属店舗の売上・FL（目標／実績）。社員以上にだけ表示（アルバイト・外販には出さない）。
+// データがまだ無ければ何も出さない（連携前のうちは今までどおりの画面のまま）
+async function dashPanelHtml(){
+ if(!me||me.role==="AL"||me.role==="GAIHAN")return "";
+ const storeIds=(me.stores||[]).map(s=>s.id);
+ if(!storeIds.length)return "";
+ const jst=new Date(Date.now()+9*3600e3);
+ const y=new Date(Date.UTC(jst.getUTCFullYear(),jst.getUTCMonth(),jst.getUTCDate()-1));
+ const yStr=y.toISOString().slice(0,10);
+ const mStart=yStr.slice(0,7)+"-01";
+ let act,tgt,tm;
+ try{
+  const [r1,r2,r3]=await Promise.all([
+   sb.from("dash_sales_daily").select("store_id,biz_date,sales,cost,labor").in("store_id",storeIds).gte("biz_date",mStart).lte("biz_date",yStr),
+   sb.from("dash_sales_target_daily").select("store_id,biz_date,sales_target").in("store_id",storeIds).gte("biz_date",mStart).lte("biz_date",yStr),
+   sb.from("dash_target_monthly").select("store_id,ym,pa_rate,emp_rate,cost_rate").in("store_id",storeIds).eq("ym",mStart)
+  ]);
+  act=r1.data;tgt=r2.data;tm=r3.data;
+ }catch(e){return ""} // 連携前・エラー時は静かに何も出さない（設定画面には別途エラーが出る）
+ if(!act||!act.length)return "";
+ const sum=(arr,k)=>(arr||[]).reduce((s,x)=>s+(Number(x[k])||0),0);
+ const yestAct=(act||[]).filter(x=>x.biz_date===yStr),yestTgt=(tgt||[]).filter(x=>x.biz_date===yStr);
+ const flPct=(cost,labor,sales)=>sales>0?Math.round((cost+labor)/sales*1000)/10:null;
+ const flTgtPct=(tm&&tm.length)?Math.round((sum(tm,"pa_rate")+sum(tm,"emp_rate")+sum(tm,"cost_rate"))/tm.length*10)/10:null;
+ const yen=n=>"¥"+Math.round(n).toLocaleString("ja-JP");
+ const row=(label,salesAct,salesTgt,flAct)=>{
+  const rate=salesTgt>0?Math.round(salesAct/salesTgt*100):null;
+  return `<p style="margin:8px 0 0;font-size:13px"><b>${label}</b><br>
+   売上: ${yen(salesAct)}${salesTgt?`／目標 ${yen(salesTgt)}（達成率 ${rate}%）`:""}<br>
+   FL: ${flAct!=null?flAct+"%":"—"}${flTgtPct!=null?`／目標 ${flTgtPct}%`:""}</p>`;
+ };
+ const storeLabel=storeIds.length>1?"所属店舗":esc((me.stores[0]||{}).name||"");
+ return `<div class="card" style="background:#f7fafc"><h3 style="margin:0">📊 ${storeLabel} の売上・FL</h3>
+  ${row("前日（"+fmtDate(yStr)+"）",sum(yestAct,"sales"),sum(yestTgt,"sales_target"),flPct(sum(yestAct,"cost"),sum(yestAct,"labor"),sum(yestAct,"sales")))}
+  ${row("当月累計",sum(act,"sales"),sum(tgt,"sales_target"),flPct(sum(act,"cost"),sum(act,"labor"),sum(act,"sales")))}
+  <p class="muted" style="margin:8px 0 0;font-size:11px">FL＝原価＋人件費（売上に対する割合）。売上ダッシュボードのデータを1日1回取り込んだものです</p></div>`;
+}
 // ===== 日報・週報 入力 =====
 async function writeView(kind){
  writeKind=kind;
@@ -1483,6 +1521,7 @@ async function writeView(kind){
  }else form={...er.answers};
  let h=`<span class="back" data-nav="home">← ホーム</span><h2>${kind==="weekly"?"週報":"日報"} ${fmtDate(todayStr())}${er?"（修正）":""}</h2>`;
  if(isEarlyMorning())h+=`<div class="info" style="margin-top:-4px">🌙 深夜のご入力ありがとうございます。朝6時までは<b>前日（${fmtDate(todayStr())}）の日報</b>として受け付けます。</div>`;
+ h+=await dashPanelHtml(); // v2.6.57 所属店舗の売上・FL
  fmt.forEach(f=>{
   h+=`<div class="card"><h3>${esc(f.label)} ${f.req?'<span class="req">必須</span>':""}</h3>`;
   h+=hintLine(f.hint); // v2.6.26 記入例
@@ -2569,6 +2608,20 @@ async function lineFn(body){
   return {ok:false,error:"LINE連携の受け口（line-webhook）に届きませんでした。まだ作られていないか、Verify JWTがオンのままの可能性があります"};
  }
 }
+// v2.6.57 売上ダッシュボード連携（dash-sync）を呼ぶ
+async function dashFn(body){
+ try{
+  const {data:{session}}=await sb.auth.getSession();
+  const res=await fetch(SUPA_URL+"/functions/v1/dash-sync",{method:"POST",
+   headers:{Authorization:"Bearer "+(session?session.access_token:SUPA_KEY),apikey:SUPA_KEY,"Content-Type":"application/json"},
+   body:JSON.stringify(body)});
+  const j=await res.json().catch(()=>({}));
+  if(!res.ok&&!j.error)j.error=res.status===404?"売上ダッシュボード連携の受け口（dash-sync）がまだ作られていません":"サーバーの応答: "+res.status;
+  return j;
+ }catch(e){
+  return {ok:false,error:"売上ダッシュボード連携の受け口（dash-sync）に届きませんでした"};
+ }
+}
 // v2.6.17 招待リンクを本人に送る。端末の共有メニュー（LINE・SMS・メールなど）を開く
 async function rcShareInvite(a){
  if(!a||!a.invite_token){toast("先に招待リンクを発行してください",true);return}
@@ -2968,7 +3021,7 @@ async function smaregiStores(){ // スマレジ店舗一覧（紐付け用）
 async function adminStoresView(){
  if(!stList){
   const {data}=await sb.from("stores").select("*").order("sort_order");
-  stList=(data||[]).map(s=>({id:s.id,name:s.name,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||"",interviewer_id:s.interviewer_id||""}));
+  stList=(data||[]).map(s=>({id:s.id,name:s.name,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||"",interviewer_id:s.interviewer_id||"",dash_store_name:s.dash_store_name||""}));
   await chatEnsureUsers(); // v2.6.36 面接担当を選ぶため
  }
  if(stSmaregi===undefined)stSmaregi=await smaregiStores();
@@ -2985,6 +3038,8 @@ async function adminStoresView(){
   </div>
   <select class="inp" data-stiv="${i}" style="font-size:13px"><option value="">📅 面接担当: 決めない</option>${(tskUsers||[]).map(u=>`<option value="${u.id}" ${s.interviewer_id===u.id?"selected":""}>📅 面接担当: ${esc(u.name)}（${ROLE_NAME[u.role]||""}）</option>`).join("")}</select>
   ${stSmaregi?`<select class="inp" data-stsm="${i}" style="font-size:13px"><option value="">スマレジ店舗と紐付けない</option>${stSmaregi.map(m=>`<option value="${esc(m.id)}" ${s.smaregi_store_id===m.id?"selected":""}>スマレジ: ${esc(m.name)}</option>`).join("")}</select>`:`<p class="muted" style="margin:8px 0 0">スマレジ店舗一覧を取得できませんでした（紐付けは後で設定できます）</p>`}
+  <p class="muted" style="margin:8px 0 2px;font-size:12px">📊 売上ダッシュボード側の店舗名（日報・週報の売上表示に使います。空欄なら上の店舗名と同じ名前で自動対応）</p>
+  <input type="text" data-stdash="${i}" value="${esc(s.dash_store_name)}" placeholder="例: 鳥一代 はなれ" style="font-size:13px;margin-top:0">
  </div>`).join("");
  h+=`<div class="card"><h3>＋ 店舗を追加</h3><input type="text" id="st-newname" placeholder="店舗名（例: 鳥一代 渋谷店）"><button class="btn sm" id="st-add">追加する</button><p class="muted">追加すると店舗チャットも自動で作成されます</p></div>
  <button class="btn" id="st-save">この内容で保存する</button>`;
@@ -2995,6 +3050,7 @@ function collectStoresDom(){
  document.querySelectorAll(".chip.st-act").forEach(c=>stList[+c.dataset.i].is_active=c.classList.contains("on"));
  document.querySelectorAll("select[data-stsm]").forEach(s=>stList[+s.dataset.stsm].smaregi_store_id=s.value);
  document.querySelectorAll("select[data-stiv]").forEach(s=>stList[+s.dataset.stiv].interviewer_id=s.value); // v2.6.36
+ document.querySelectorAll("input[data-stdash]").forEach(inp=>stList[+inp.dataset.stdash].dash_store_name=inp.value.trim()); // v2.6.57
 }
 async function addStore(){
  const name=$("st-newname").value.trim();
@@ -3003,7 +3059,7 @@ async function addStore(){
  $("st-add").disabled=true;
  const {data:ns,error}=await sb.from("stores").insert({name,sort_order:stList.length+1}).select().single();
  if(error){toast("追加エラー: "+(error.message.includes("duplicate")?"同じ名前の店舗がすでにあります":error.message),true);$("st-add").disabled=false;return}
- stList.push({id:ns.id,name:ns.name,is_active:true,smaregi_store_id:"",interviewer_id:""});
+ stList.push({id:ns.id,name:ns.name,is_active:true,smaregi_store_id:"",interviewer_id:"",dash_store_name:""});
  toast("店舗を追加しました（チャットも自動作成）");render();
 }
 async function saveStores(){
@@ -3011,7 +3067,7 @@ async function saveStores(){
  if(stList.some(s=>!s.name)){toast("店舗名を入力してください",true);return}
  $("st-save").disabled=true;
  for(const [i,s] of stList.entries()){
-  const {error}=await sb.from("stores").update({name:s.name,sort_order:i+1,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||null,interviewer_id:s.interviewer_id||null}).eq("id",s.id);
+  const {error}=await sb.from("stores").update({name:s.name,sort_order:i+1,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||null,interviewer_id:s.interviewer_id||null,dash_store_name:s.dash_store_name||null}).eq("id",s.id);
   if(error){toast("保存エラー: "+error.message,true);$("st-save").disabled=false;return}
  }
  const {data:st2}=await sb.from("stores").select("id,name").eq("is_active",true).order("sort_order");
@@ -3211,10 +3267,14 @@ async function settingsView(){
   try{const {data}=await sb.rpc("gas_config");gasSaved=!!(data&&data.url);gasCalNow=(data&&data.cal&&data.cal!=="primary")?data.cal:""}catch(e){gasSaved=false}
  }
  if(isAdmin()&&larkUrl===null){ // v2.5.8／v2.6.9
-  const {data:ss}=await sb.from("app_secrets").select("key,value").in("key",["lark_webhook","chatwork_token","smaregi_staff_url","line_channel_token","line_channel_secret","line_oa_id"]);
+  const {data:ss}=await sb.from("app_secrets").select("key,value").in("key",["lark_webhook","chatwork_token","smaregi_staff_url","line_channel_token","line_channel_secret","line_oa_id","dash_id","dash_pw"]);
   const m={};(ss||[]).forEach(x=>m[x.key]=x.value||"");
   larkUrl=m.lark_webhook||"";cwToken=m.chatwork_token||"";smUrlTpl=m.smaregi_staff_url||"";
   lineToken=m.line_channel_token||"";lineSecret=m.line_channel_secret||"";lineOa=m.line_oa_id||""; // v2.6.20
+  dashId=m.dash_id||"";dashPw=m.dash_pw||""; // v2.6.57 売上ダッシュボード連携
+ }
+ if(isAdmin()&&dashLog===undefined){ // v2.6.57 前回の同期結果
+  try{const {data}=await sb.from("dash_sync_log").select("ran_at,ok,detail").order("ran_at",{ascending:false}).limit(1).maybeSingle();dashLog=data||null}catch(e){dashLog=null}
  }
  if(setMode==="perm")return await settingsPermView(); // v2.4
  if(setMode==="guide")return settingsGuideView(); // v2.6.53 入社案内・マニュアル
@@ -3289,6 +3349,23 @@ async function settingsView(){
    <p class="muted" style="margin:0">日報・応募・入社登録など、<b>どの動きをどのグループに通知するか</b>を細かく設定できます</p>
    <button class="btn sm" id="lark-routes" style="margin-top:6px">🔔 通知先を設定する</button></div>`;
  }
+ // v2.6.57 売上ダッシュボード連携（日報・週報に所属店舗の売上・FLを自動表示）
+ if(isAdmin()){
+  h+=`<div class="card"><h3>📊 売上ダッシュボード連携</h3>
+   <p class="muted" style="margin:0 0 8px">日報・週報に、所属店舗の<b>前日の売上・FL</b>（原価＋人件費率）と<b>当月の累計</b>を、目標と並べて自動表示します。<b>社員以上にだけ表示され、アルバイトには出ません。</b><br>
+   売上ダッシュボードに<b>nippo連携用の専用アカウント</b>を作り、そのID・パスワードを入力してください。1日1回、自動で数字を取り込みます（貼り付けたID・パスワードはこの画面には出ません）。</p>
+   <p class="muted" style="margin:8px 0 2px">ID</p>
+   <input type="text" id="dash-id" placeholder="${dashId?"（設定済み。変えるときだけ入力）":"ダッシュボードのログインID"}" autocomplete="off">
+   <p class="muted" style="margin:8px 0 2px">パスワード</p>
+   <input type="password" id="dash-pw" placeholder="${dashPw?"（設定済み。変えるときだけ入力）":"パスワード"}" autocomplete="off">
+   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+    <button class="btn sm sub" id="dash-save">保存する</button>
+    <button class="btn sm sub" id="dash-test">つながるか確認する</button>
+    <button class="btn sm sub" id="dash-syncnow">今すぐ同期する</button>
+   </div>
+   ${dashLog?`<p class="muted" style="margin:8px 0 0;font-size:12px">${dashLog.ok?"✅":"⚠️"} 前回の同期: ${fmtDue(dashLog.ran_at)}<br>${esc(dashLog.detail||"")}</p>`:`<p class="muted" style="margin:8px 0 0;font-size:12px">まだ一度も同期されていません</p>`}
+   <p class="muted" style="margin:8px 0 0;font-size:11px">店舗ごとの対応は 管理 →「店舗管理」の「📊 売上ダッシュボード側の店舗名」で設定します（未設定なら店舗名の完全一致で自動対応）</p></div>`;
+ }
  if(isAdmin()){ // v2.4 権限設定はCEO/HQのみ
   h+=`<div class="card"><h3>🔐 権限設定</h3>
    <p class="muted" style="margin:0 0 8px">役職ごとに使える機能と、特定の人だけの例外を設定できます</p>
@@ -3340,7 +3417,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.56</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.57</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -4576,6 +4653,35 @@ function bindPage(){
   if(!r.ok){toast("確認できませんでした: "+(r.error||"不明"),true);return}
   if(r.basicId){await sb.from("app_secrets").upsert({key:"line_oa_id",value:r.basicId,updated_by:me.id,updated_at:new Date().toISOString()});lineOa=r.basicId}
   toast("つながりました: "+(r.name||"")+"（"+(r.basicId||"")+"）");render();
+ };
+ // v2.6.57 売上ダッシュボード連携
+ if($("dash-save"))$("dash-save").onclick=async()=>{
+  const id=$("dash-id").value.trim(),pw=$("dash-pw").value.trim();
+  if(!id&&!pw){toast("入力してください",true);return}
+  const now=new Date().toISOString(),rows=[];
+  if(id)rows.push({key:"dash_id",value:id,updated_by:me.id,updated_at:now});
+  if(pw)rows.push({key:"dash_pw",value:pw,updated_by:me.id,updated_at:now});
+  const {error}=await sb.from("app_secrets").upsert(rows);
+  if(error){toast("保存エラー: "+error.message,true);return}
+  if(id)dashId=id;
+  if(pw)dashPw=pw;
+  toast("保存しました");render();
+ };
+ if($("dash-test"))$("dash-test").onclick=async()=>{
+  $("dash-test").disabled=true;
+  const r=await dashFn({action:"test"});
+  $("dash-test").disabled=false;
+  if(!r.ok){toast("確認できませんでした: "+(r.error||"不明"),true);return}
+  toast("つながりました: "+(r.name||"")+"（"+(ROLE_NAME[r.role]||r.role||"")+"）");
+ };
+ if($("dash-syncnow"))$("dash-syncnow").onclick=async()=>{
+  $("dash-syncnow").disabled=true;
+  toast("同期しています…（数分かかることがあります）");
+  const r=await dashFn({action:"sync_now"});
+  $("dash-syncnow").disabled=false;
+  if(!r.ok){toast("同期できませんでした: "+(r.error||"不明"),true);return}
+  toast(`同期しました（実績${r.daily??0}件・売上目標${r.target??0}件・FL目標${r.targetM??0}件）`+((r.unmatched||[]).length?`／店舗名が対応表に無い: ${r.unmatched.join("、")}`:""),!!(r.unmatched||[]).length);
+  dashLog=undefined;render(); // 未読み込み状態に戻して、次のrenderで最新のログを取り直す
  };
  if($("cw-save"))$("cw-save").onclick=async()=>{ // v2.6.9
   const v=$("cw-token").value.trim();

@@ -2304,23 +2304,26 @@ async function recruitView(){
  //   ・退職・不採用・辞退・バックレの人は status が hired ではないので、そもそも出ない
  //   ※ invite_remind_count はSQL未実行のうちは undefined。0として扱うので画面は壊れません
  {
+  // v2.6.54 ② 対応済みにした人（システム導入前に採用した方など）はお知らせから外す
   const stuckSince=a=>Date.parse(a.invite_sent_at||a.status_changed_at||a.updated_at||a.applied_at||0)||0;
-  const stuck=rcList.filter(a=>a.status==="hired"&&!a.user_id&&(Date.now()-stuckSince(a))>20*3600e3);
+  const stuck=rcList.filter(a=>a.status==="hired"&&!a.user_id&&!a.invite_remind_dismissed_at&&(Date.now()-stuckSince(a))>20*3600e3);
   const noLine=stuck.filter(a=>!a.line_user_id);
   const gaveUp=stuck.filter(a=>a.line_user_id&&(a.invite_remind_count||0)>=3);
   const auto=stuck.length-noLine.length-gaveUp.length;
   if(noLine.length||gaveUp.length){
    const days=a=>Math.floor((Date.now()-stuckSince(a))/864e5);
+   // v2.6.54 ① 名前をタップすると、その方の詳細を開ける（申請日・面接メモ・応募内容などが見られる）
+   //        ② 「対応済み」を押すと、このお知らせから消える（招待リンクを送る予定がない方向け・あとで戻せる）
    const row=(a,why)=>{
     const btn=a.invite_token
      ?`<button class="btn sm" data-rcsend="${a.id}" style="font-size:11px;padding:3px 8px;margin:0;background:var(--green)">📤 リンクを送る</button>`
      :(a.store_id
        ?`<button class="btn sm" data-rcissue="${a.id}" style="font-size:11px;padding:3px 8px;margin:0">🔗 招待リンクを発行</button>`
        :`<span class="muted" style="font-size:11px">先に店舗を選んでください</span>`);
-    return `<div class="row" style="align-items:center"><span><b>${esc(a.name)}</b> <span class="muted">${days(a)}日経過</span><br><span class="muted" style="font-size:12px">${why}</span></span><span>${btn}</span></div>`;
+    return `<div class="row" style="align-items:center"><span><b data-rcopen="${a.id}" style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted">${esc(a.name)}</b> <span class="muted">${days(a)}日経過</span><br><span class="muted" style="font-size:12px">${why}</span></span><span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">${btn}<button class="btn sm sub" data-rcremindoff="${a.id}" style="font-size:11px;padding:3px 8px;margin:0" title="招待リンクを送る予定がない方（例: システム導入前に採用した方）はこちら">✅ 対応済み</button></span></div>`;
    };
    h+=`<div class="card" style="background:#fff7ed;border-color:#f59e0b"><h3>📌 入社登録がまだの方（${noLine.length+gaveUp.length}名）</h3>
-    <p class="muted" style="margin:0 0 8px">採用になっているのに、入社登録フォームがまだ届いていない方です。<b>この方たちには自動のLINEリマインドが届きません。</b>お手数ですが、下のボタンからご案内をお送りください。</p>
+    <p class="muted" style="margin:0 0 8px">採用になっているのに、入社登録フォームがまだ届いていない方です。<b>この方たちには自動のLINEリマインドが届きません。</b>お手数ですが、下のボタンからご案内をお送りください。<br>システム導入前に採用した方など、<b>招待リンクを送る予定がない方</b>は「対応済み」を押すとこのお知らせから消えます（あとで戻せます）。</p>
     ${noLine.map(a=>row(a,"LINEが連携されていません（自動リマインドを送れません）")).join("")}
     ${gaveUp.map(a=>row(a,"LINEリマインドを3回お送りしましたが、まだ提出されていません")).join("")}
     ${auto>0?`<p class="muted" style="margin:8px 0 0">このほか <b>${auto}名</b> にはLINEで自動リマインドを送っています（3日おきに最大3回）。</p>`:""}</div>`;
@@ -2774,6 +2777,14 @@ function recruitDetailView(){
     <button class="btn sm sub" data-rccopy="${esc(url)}">📋 コピー</button>
    </div>
    <p class="muted" style="margin:6px 0 0">「リンクを送る」を押すと、この端末の共有メニューからLINE・SMS・メールなどを選んで送れます${a.email?"":"（メールアドレスが未登録のため「メールで送る」は出ていません）"}</p>`}</div>`;
+ }
+ // v2.6.54 ②「入社登録がまだの方」のお知らせを対応済みにする（システム導入前に採用した方など）
+ if(a.status==="hired"&&!a.user_id){
+  h+=`<div class="card"><h3>📌 入社登録がまだの方へのお知らせ</h3>
+   <p class="muted" style="margin:0">応募者一覧の上に出る「入社登録がまだの方」のお知らせに、この方が出ています。<b>招待リンクを送る予定がない方</b>（このシステムを作る前に採用した方など）は、対応済みにするとお知らせから消えます。</p>
+   ${a.invite_remind_dismissed_at
+     ?`<p style="margin:8px 0 0;font-size:13px">✅ 対応済み（${esc(fmtDue(a.invite_remind_dismissed_at))}）　<span style="color:var(--blue);cursor:pointer" id="rc-remindon">お知らせに戻す</span></p>`
+     :`<button class="btn sm sub" id="rc-remindoff" style="margin-top:4px">✅ 対応済みにする（お知らせから消す）</button>`}</div>`;
  }
  // v2.6.53 ① 入社登録が完了した方への「このあとの流れ＋マニュアル」のご案内
  //   登録完了の瞬間に自動で送りますが、届かないこともあるので状態をここに出し、
@@ -3325,7 +3336,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.53</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.54</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -4332,6 +4343,15 @@ function bindPage(){
   if(error){toast("変更できませんでした: "+error.message,true);return}
   toast("未対応に戻しました");rcList=null;render();
  });
+ // v2.6.54 ②「入社登録がまだの方」のお知らせを、その場で対応済みにする
+ document.querySelectorAll("[data-rcremindoff]").forEach(b=>b.onclick=async e=>{
+  e.stopPropagation();
+  b.disabled=true;
+  const {error}=await sb.rpc("mark_invite_reminder_dismissed",{p_applicant:b.dataset.rcremindoff,p_on:true});
+  if(error){b.disabled=false;toast("変更できませんでした: "+error.message+"（SQLの v2_6_54 が未実行の可能性があります）",true);return}
+  toast("対応済みにしました。このお知らせからは消えます（あとで応募者カードから戻せます）");
+  rcList=null;render();
+ });
  document.querySelectorAll("[data-rccopy]").forEach(el=>el.onclick=e=>{e.stopPropagation();copyText(el.dataset.rccopy)});
  if($("rcq"))$("rcq").onkeydown=e=>{if(e.key==="Enter"){rcQ=$("rcq").value.trim();render()}};
  if($("rcqclear"))$("rcqclear").onclick=()=>{rcQ="";rcFForm="";rcFSrc="";rcFArea="";rcFStatus="";rcFrom="";rcTo="";render()};
@@ -4371,6 +4391,20 @@ function bindPage(){
   a.join_msg_sent_at=now;a.updated_at=now;
   toast(e2?"LINEは送れましたが、送信済みの記録に失敗しました: "+e2.message:"入社案内をLINEで送りました",!!e2);
   render();
+ };
+ // v2.6.54 ②「入社登録がまだの方」のお知らせを対応済み⇔戻すの切り替え
+ if($("rc-remindoff"))$("rc-remindoff").onclick=async()=>{
+  const b=$("rc-remindoff");b.disabled=true;
+  const {error}=await sb.rpc("mark_invite_reminder_dismissed",{p_applicant:rcDetail,p_on:true});
+  if(error){b.disabled=false;toast("変更できませんでした: "+error.message+"（SQLの v2_6_54 が未実行の可能性があります）",true);return}
+  const a=rcList.find(x=>x.id===rcDetail);if(a)a.invite_remind_dismissed_at=new Date().toISOString();
+  toast("対応済みにしました。お知らせからは消えます");render();
+ };
+ if($("rc-remindon"))$("rc-remindon").onclick=async()=>{
+  const {error}=await sb.rpc("mark_invite_reminder_dismissed",{p_applicant:rcDetail,p_on:false});
+  if(error){toast("変更できませんでした: "+error.message,true);return}
+  const a=rcList.find(x=>x.id===rcDetail);if(a)a.invite_remind_dismissed_at=null;
+  toast("お知らせに戻しました");render();
  };
  // v2.6.20 求人用LINE
  if($("rc-lineissue"))$("rc-lineissue").onclick=async()=>{

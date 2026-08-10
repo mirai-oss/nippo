@@ -111,6 +111,7 @@
   <button data-p="check"><i>☑️</i>チェック</button>
   <button data-p="tasks"><i>✅</i>タスク<span class="ndot" id="taskdot" style="display:none"></span></button>
   <button data-p="chat"><i>💬</i>チャット<span class="ndot" id="chatdot" style="display:none"></span></button>
+  <button data-p="manuals"><i>📎</i>マニュアル</button>
   <button data-p="recruit" id="navrecruit" style="display:none"><i>📥</i>応募<span class="ndot" id="recruitdot" style="display:none"></span></button>
   <button data-p="admin" id="navadmin" style="display:none"><i>👥</i>管理<span class="ndot" id="admdot" style="display:none"></span></button>
   <button data-p="settings"><i>⚙️</i>設定</button>
@@ -1379,7 +1380,7 @@ async function render(){
  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.p===page||(page==="weekly"&&b.dataset.p==="write")));
  document.getElementById("navadmin").style.display=(can("staff_admin")||can("store_admin"))?"":"none";
  // v2.6.25 外販の人は ホーム・日報・一覧・タスク・応募・設定 だけ
- if(me.role==="GAIHAN")document.querySelectorAll('nav button[data-p="check"],nav button[data-p="chat"],nav button[data-p="weekly"]').forEach(b=>b.style.display="none");
+ if(me.role==="GAIHAN")document.querySelectorAll('nav button[data-p="check"],nav button[data-p="chat"],nav button[data-p="weekly"],nav button[data-p="manuals"]').forEach(b=>b.style.display="none");
  document.getElementById("navrecruit").style.display=can("recruit")?"":"none"; // v2.5.2 応募は独立タブ
  updateDots();
  let body="";
@@ -1388,6 +1389,7 @@ async function render(){
  else if(page==="weekly")body=await writeView("weekly");
  else if(page==="list")body=detail?await detailView():await listView();
  else if(page==="check")body=await checkView();
+ else if(page==="manuals")body=await manualsView(); // v2.6.59
  else if(page==="tasks")body=await tasksView();
  else if(page==="chat")body=await chatView();
  else if(page==="dash")body=await dashView();
@@ -1803,6 +1805,33 @@ function bindCheckPage(){
   if(error){toast("変更エラー: "+error.message,true);return}
   render();
  });
+}
+// v2.6.59 マニュアル一覧（誰でも見られる。入社案内のマニュアル一覧＝manual_items と同じデータ）
+let mvStore=null;
+async function manualsView(){
+ const pickable=isAdmin()?stores:(me.stores||[]); // v2.6.33のckCanManageと同じ考え方: 社長・本部は全店舗を選べる
+ if(!pickable.length)return `<h2>📎 マニュアル</h2><p class="muted">所属店舗がありません。本部までお問い合わせください。</p>`;
+ if(!mvStore||!pickable.find(s=>s.id===mvStore))mvStore=pickable[0].id;
+ let h=`<h2>📎 マニュアル</h2>`;
+ if(pickable.length>1)h+=`<div class="card" style="padding:10px 12px">
+  <select class="inp" id="mvstore" style="margin:0">${pickable.map(s=>`<option value="${s.id}"${s.id===mvStore?" selected":""}>${esc(s.name)}</option>`).join("")}</select></div>`;
+ const {data:items,error}=await sb.from("manual_items").select("*").eq("is_active",true).or(`store_id.is.null,store_id.eq.${mvStore}`).order("category").order("sort_order").order("created_at");
+ if(error)return h+`<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
+ if(!(items||[]).length)return h+`<p class="muted" style="margin-top:14px">まだマニュアルが登録されていません。</p>`;
+ const cats={};(items||[]).forEach(m=>{const c=(m.category||"").trim()||"その他";(cats[c]=cats[c]||[]).push(m)});
+ Object.keys(cats).forEach(c=>{
+  h+=`<div class="card"><h3 style="margin:0 0 8px">${esc(c)}</h3>`;
+  cats[c].forEach(m=>{
+   h+=m.url
+    ?`<a href="${esc(m.url)}" target="_blank" rel="noopener" style="display:block;text-decoration:none;color:inherit"><div class="row" style="cursor:pointer"><span>${m.icon||"📄"} ${esc(m.label)}${m.store_id?"":' <span class="badge b">全店舗共通</span>'}</span><span class="muted">開く ›</span></div></a>`
+    :`<div class="row" style="cursor:default"><span>${m.icon||"📄"} ${esc(m.label)}${m.store_id?"":' <span class="badge b">全店舗共通</span>'}</span><span class="muted" style="font-size:12px">準備中</span></div>`;
+  });
+  h+=`</div>`;
+ });
+ return h;
+}
+function bindManualsPage(){
+ if($("mvstore"))$("mvstore").onchange=e=>{mvStore=e.target.value;render()};
 }
 async function tasksView(){
  const [{data:ts,error},{data:us}]=await Promise.all([
@@ -3438,7 +3467,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.58</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.59</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3662,7 +3691,7 @@ function settingsGuideView(){
   <button class="btn" id="gd-save">文面を保存する</button>
   <p class="muted" style="margin:8px 0 0;font-size:12px">※ この設定の保存は社長アカウントで行えます。保存できないときはエラーの内容が出ます。</p>
   <div class="card" style="margin-top:14px"><h3>📎 マニュアル一覧</h3>
-   <p class="muted" style="margin:0 0 8px">「タイムカードの押し方」「ドリンク一覧表」など、複数のマニュアルを登録できます。ファイルのアップロード、またはURLの貼り付けのどちらでも使えます。<b>店舗ごと・全店舗共通</b>を分けて管理でき、停止・非表示にもできます。</p>
+   <p class="muted" style="margin:0 0 8px">「タイムカードの押し方」「ドリンク一覧表」など、複数のマニュアルを登録できます。ファイルのアップロード、またはURLの貼り付けのどちらでも使えます。<b>店舗ごと・全店舗共通</b>を分けて管理でき、停止・非表示にもできます。<br>ここで登録したものは、入社案内のLINEと、下部ナビの「📎 マニュアル」タブ（ログインした人なら誰でも見られます）の両方に使われます。</p>
    <button class="btn sm" id="set-manuals">マニュアル一覧を編集する</button></div>
   <div class="card" style="margin-top:14px;background:#f7fbff;border:2px dashed var(--blue)"><h3 style="margin:0">👀 プレビュー（実際にLINEで送られる画面）</h3>
    <p class="muted" style="margin:6px 0 8px">②の文面と、選んだ店舗向けのマニュアル一覧をあわせて、実際に届く見た目で確認できます。<b>保存前の内容でも見られます。</b></p>
@@ -3691,10 +3720,12 @@ function manualPreviewBubble(c,storeId){
 // v2.6.58 マニュアル一覧の編集（チェック管理と同じ考え方: 店舗ごと／全店舗共通・停止非表示）
 function settingsManualItemsView(){
  let h=`<span class="back" id="mback">← 入社案内・マニュアルの設定</span><h2>📎 マニュアル一覧</h2>
-  <p class="muted" style="margin-top:-8px;font-size:13px">入社登録が完了した方に届くマニュアルの一覧です。<b>店舗ごと</b>と<b>全店舗共通</b>を分けて登録できます。停止すると届かなくなりますが、消えずに残ります。</p>
+  <p class="muted" style="margin-top:-8px;font-size:13px">入社登録が完了した方へのLINEと、下部ナビ「📎 マニュアル」タブ（誰でも見られます）の両方で使われる一覧です。<b>店舗ごと</b>と<b>全店舗共通</b>を分けて登録できます。停止すると届かなくなりますが、消えずに残ります。</p>
   <div class="card"><h3>＋ 新しいマニュアルを追加</h3>
    <p class="muted" style="margin:0 0 2px">名前</p>
    <input type="text" id="m-label" placeholder="例: タイムカードの押し方" style="margin-top:0">
+   <p class="muted" style="margin:8px 0 2px">カテゴリ（「📎 マニュアル」タブでの見出しになります。空欄なら「その他」）</p>
+   <input type="text" id="m-cat" placeholder="例: レジ操作／接客／衛生管理" style="margin-top:0">
    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
     <select class="inp" id="m-icon" style="flex:1;min-width:120px;margin:0">${Object.entries(MANUAL_ICONS).map(([k,v])=>`<option value="${k}"${mAddIcon===k?" selected":""}>${k} ${v}</option>`).join("")}</select>
     <select class="inp" id="m-store" style="flex:1;min-width:140px;margin:0"><option value=""${mAddStore===""?" selected":""}>全店舗共通</option>${stores.map(s=>`<option value="${s.id}"${mAddStore===s.id?" selected":""}>${esc(s.name)}のみ</option>`).join("")}</select>
@@ -3716,6 +3747,7 @@ function settingsManualItemsView(){
      <input type="text" data-mlabel="${m.id}" value="${esc(m.label)}" style="flex:1;margin:0">
     </div>
     <input type="url" data-murl="${m.id}" value="${esc(m.url||"")}" placeholder="URLが未設定です" style="margin:6px 0 0;font-size:12px">
+    <input type="text" data-mcat="${m.id}" value="${esc(m.category||"")}" placeholder="カテゴリ（空欄なら「その他」）" style="margin:6px 0 0;font-size:12px">
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center">
      <button class="btn sm" data-msave="${m.id}" style="margin:0">保存</button>
      <label class="btn sm sub" style="margin:0"><span>📎 ファイルを差し替え</span><input type="file" data-mfile="${m.id}" style="display:none"></label>
@@ -3886,6 +3918,7 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset
 function bindPage(){
  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=()=>{page=el.dataset.nav;detail=null;editId=null;render()});
  if(page==="check")bindCheckPage();
+ if(page==="manuals")bindManualsPage(); // v2.6.59
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
  if($("goweekly"))$("goweekly").onclick=()=>{page="weekly";render()};
  if($("editdaily"))$("editdaily").onclick=()=>{editId=todayDaily.id;page="write";render()};
@@ -4725,12 +4758,13 @@ function bindPage(){
   const label=$("m-label").value.trim();
   if(!label){toast("名前を入力してください",true);return}
   const url=$("m-url").value.trim();
+  const category=$("m-cat").value.trim();
   const icon=$("m-icon").value,storeId=$("m-store").value||null;
   mAddIcon=icon;mAddStore=storeId||"";
   $("m-add").disabled=true;
-  const {data,error}=await sb.from("manual_items").insert({label,url:url||null,icon,store_id:storeId,updated_by:me.id}).select().single();
+  const {data,error}=await sb.from("manual_items").insert({label,url:url||null,icon,category:category||null,store_id:storeId,updated_by:me.id}).select().single();
   $("m-add").disabled=false;
-  if(error){toast("追加エラー: "+error.message,true);return}
+  if(error){toast("追加エラー: "+error.message+"（SQLの v2_6_59 が未実行の可能性があります）",true);return}
   manualItems=(manualItems||[]).concat([data]);
   toast(url?"マニュアルを追加しました":"マニュアルを追加しました（URLは後で入力できます）");render();
  };
@@ -4738,13 +4772,14 @@ function bindPage(){
   const id=b.dataset.msave;
   const label=document.querySelector(`[data-mlabel="${id}"]`).value.trim();
   const url=document.querySelector(`[data-murl="${id}"]`).value.trim();
+  const category=document.querySelector(`[data-mcat="${id}"]`).value.trim();
   const icon=document.querySelector(`[data-micon="${id}"]`).value;
   if(!label){toast("名前を入力してください",true);return}
   b.disabled=true;
-  const {error}=await sb.from("manual_items").update({label,url:url||null,icon,updated_by:me.id,updated_at:new Date().toISOString()}).eq("id",id);
+  const {error}=await sb.from("manual_items").update({label,url:url||null,icon,category:category||null,updated_by:me.id,updated_at:new Date().toISOString()}).eq("id",id);
   b.disabled=false;
   if(error){toast("保存エラー: "+error.message,true);return}
-  const m=(manualItems||[]).find(x=>x.id===id);if(m){m.label=label;m.url=url;m.icon=icon}
+  const m=(manualItems||[]).find(x=>x.id===id);if(m){m.label=label;m.url=url;m.icon=icon;m.category=category}
   toast("保存しました");render();
  });
  document.querySelectorAll("[data-mtoggle]").forEach(b=>b.onclick=async()=>{

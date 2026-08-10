@@ -2615,7 +2615,10 @@ function recruitDetailView(){
  let h=`<span class="back" id="rcback">← 応募者一覧</span>
  <h2>${rcNameAge(a)} ${rcFormNew(a)?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span> ':""}${rcMsgNew(a)?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span> ':""}${rcLineNew(a)?'<span class="badge" style="background:#06c755">💚 LINEが連携されました</span> ':""}${a.user_id?'<span class="badge g">入社済み</span>':""}${rcWaiting(a)?'<span class="badge" style="background:#c0392b">🔴 未対応</span>':""}</h2>
  ${rcWaiting(a)?`<p style="margin:-4px 0 8px"><button class="btn sm sub" data-rcdone="${a.id}" style="margin:0;font-size:12px">✅ 対応済みにする</button></p>`:(a.handled_at?`<p class="muted" style="margin:-4px 0 8px;font-size:12px">✅ 対応済み（${fmtDue(a.handled_at)}）　<span style="color:var(--blue);cursor:pointer" data-rcundone="${a.id}">未対応に戻す</span></p>`:"")}
- <p class="muted" style="margin-top:-8px">${form?esc(form.title):esc(a.job_type||"")}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}<br>
+ <p class="muted" style="margin-top:-8px">
+ <span class="badge" style="background:${APPLICANT_COLOR[a.status]||"#666"};color:#fff">${APPLICANT_STATUS[a.status]||esc(a.status||"")}</span>
+ ・🏪 ${a.store_id?esc(rcStoreName(a)):'<span style="color:var(--red)">店舗未設定</span>'}
+ ・${form?esc(form.title):esc(a.job_type||"")}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}<br>
  ${a.phone?`📞 <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>　`:""}${a.email?`✉️ ${esc(a.email)}`:""}</p>`;
  // v2.6.35 面接の日程調整（希望日時をタップするだけで確定できる）
  h+=`<div class="card"${a.interview_at?'':' style="background:#fffbeb;border-left:4px solid #d97706"'}>
@@ -2683,9 +2686,10 @@ function recruitDetailView(){
      :s.sim_strength===2?'<span class="badge" style="background:#d97706">同姓同名</span>'
      :'<span class="badge">似ています</span>';
    h+=`<div class="row" style="cursor:default"><span style="flex:1;min-width:0"><b>${esc(s.sim_name)}</b> ${badge} <span class="badge b">${esc(s.sim_reason)}</span><br>
-    <span class="muted">${APPLICANT_STATUS[s.sim_status]||esc(s.sim_status||"")}・${APPLICANT_SOURCE[s.sim_source]||esc(s.sim_source||"")}・応募 ${fmtDue(s.sim_applied)}</span></span>
-    <span style="display:flex;gap:6px;flex-shrink:0"><button class="btn sm sub" data-rcopen="${s.sim_id}" style="margin:0;font-size:12px;padding:6px 10px">中身を見る</button>
-    <button class="btn sm" data-rcmerge="${s.sim_id}" data-rcmergename="${esc(s.sim_name)}" style="margin:0;font-size:12px;padding:6px 10px">まとめる</button></span></div>`;
+    <span class="muted">${APPLICANT_STATUS[s.sim_status]||esc(s.sim_status||"")}・🏪 ${s.sim_store?esc(s.sim_store):"店舗未設定"}・${APPLICANT_SOURCE[s.sim_source]||esc(s.sim_source||"")}・応募 ${fmtDue(s.sim_applied)}</span></span>
+    <span style="display:flex;gap:6px;flex-wrap:wrap;flex-shrink:0;justify-content:flex-end"><button class="btn sm sub" data-rcopen="${s.sim_id}" style="margin:0;font-size:12px;padding:6px 10px">中身を見る</button>
+    <button class="btn sm" data-rcmerge="${s.sim_id}" data-rcmergename="${esc(s.sim_name)}" style="margin:0;font-size:12px;padding:6px 10px">まとめる</button>
+    <button class="btn sm sub" data-rcnotsame="${s.sim_id}" style="margin:0;font-size:12px;padding:6px 10px;color:var(--red);border-color:var(--red)" title="別の人だと分かった場合はこちら。次回からこの候補には出ません">🙅 別の人です</button></span></div>`;
   });
   h+=`</div>`;
  }
@@ -3336,7 +3340,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.54</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.56</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -4188,6 +4192,17 @@ function bindPage(){
   if(error){toast("まとめられませんでした: "+error.message,true);return}
   toast(`「${nm}」さんをまとめました（やりとり ${(data&&data.moved_messages)||0}件を移動）`);
   rcList=null;rcMsgs=null;rcSimilar=[];rcPast=[];rcDupList=null;render();
+ });
+ // v2.6.56 「🙅 別の人です」→ この組み合わせは今後この候補に出さない
+ document.querySelectorAll("[data-rcnotsame]").forEach(b=>b.onclick=async()=>{
+  const otherId=b.dataset.rcnotsame;
+  b.disabled=true;
+  const {error}=await sb.rpc("mark_applicants_not_same",{p_a:rcDetail,p_b:otherId});
+  b.disabled=false;
+  if(error){toast("変更できませんでした: "+error.message+"（SQLの v2_6_56 が未実行の可能性があります）",true);return}
+  rcSimilar=(rcSimilar||[]).filter(x=>x.sim_id!==otherId); // その場で候補から消す
+  toast("別の人として記録しました。次回からこの候補には出ません");
+  render();
  });
  // v2.6.33 重複の確認
  if($("rc-dup"))$("rc-dup").onclick=()=>{rcDup=true;rcDupList=null;render()};

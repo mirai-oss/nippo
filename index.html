@@ -74,7 +74,7 @@
   .photo-grid .ph .del{position:absolute;top:2px;right:2px;background:rgba(0,0,0,.55);color:#fff;border-radius:50%;width:20px;height:20px;line-height:20px;text-align:center;font-size:12px;cursor:pointer}
   .addph{width:84px;height:84px;border:2px dashed #bbb;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#8a93a2;font-size:26px;cursor:pointer}
   /* v2.6.62 マニュアルの閲覧画面: 写真は大きく・手順は枠で囲む */
-  .manual-photo{width:100%;max-width:100%;border-radius:10px;margin-top:8px;display:block;cursor:zoom-in;border:1px solid var(--line)}
+  .manual-photo{width:100%;max-width:100%;height:220px;object-fit:cover;border-radius:10px;margin-top:8px;display:block;cursor:zoom-in;border:1px solid var(--line)}
   .manual-step{border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0;background:#fafafa}
   .manual-step .steplabel{display:inline-block;background:var(--blue);color:#fff;font-weight:600;font-size:12px;padding:3px 12px;border-radius:20px}
   #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:999;display:none;align-items:center;justify-content:center;padding:16px;cursor:zoom-out}
@@ -1678,6 +1678,14 @@ function taskUserName(id){const u=(tskUsers||[]).find(x=>x.id===id);return u?u.n
 const CK_PERIODS={open:"オープン",prep:"仕込み",close:"クローズ",other:"その他"};
 let ckStore=null,ckDate=null,ckAdminMode=false;
 const ckCanManage=()=>can("store_admin")||me.role==="CEO"||me.role==="HQ"||me.is_master;
+// v2.6.63 マニュアル: マスター・管理アカウント・社長・本部は全部編集可。店長・チーム長は自分の店舗のみ
+const manualFullAdmin=()=>can("store_admin")||me.role==="CEO"||me.role==="HQ"||me.is_master;
+const manualCanEditAny=()=>manualFullAdmin()||me.role==="TENCHO"||me.role==="TEAM";
+const manualCanEditItem=m=>{
+ if(manualFullAdmin())return true;
+ if((me.role==="TENCHO"||me.role==="TEAM")&&m&&m.store_id)return (me.stores||[]).some(s=>s.id===m.store_id);
+ return false;
+};
 async function checkView(){
  if(!ckDate)ckDate=todayStr();
  const myStores=me.stores&&me.stores.length?me.stores:[];
@@ -1813,21 +1821,25 @@ function bindCheckPage(){
  });
 }
 // v2.6.60 マニュアル一覧（誰でも見られる。入社案内のマニュアル一覧＝manual_items と同じデータ）
-//   ・店舗チェックと同じ考え方で「🛠 テンプレート編集」を付けた（can("recruit")の人だけ）
+//   ・店舗チェックと同じ考え方で「🛠 テンプレート編集」を付けた
 //   ・編集中は完成・下書きが分かるようにし、下書きは通常表示（入社案内LINEにも）には出さない
+// v2.6.63 従業員は自分の店舗＋店舗共通だけ表示。本部専用は本部・社長・マスター・管理アカウントのみ。
+//   編集は上記に加え店長・チーム長も自分の店舗のぶんだけ可能
 let mvStore=null,mvAdminMode=false,mvQ="",mvEditId=null,mvEditContent=null,mvPreviewOn=false,mvViewId=null;
 // v2.6.61 マニュアル本文の部品（少ない種類からスタート。あとで追加できる）
 const MANUAL_BLOCK_TYPES={heading:{label:"見出し",icon:"🔤"},text:{label:"本文",icon:"📝"},photo:{label:"写真",icon:"🖼"},steps:{label:"手順（番号付き）",icon:"🔢"},video:{label:"動画",icon:"🎬"}};
+const manualScopeBadge=m=>m.hq_only?' <span class="badge" style="background:#7c3aed">🏢 本部専用</span>':(m.store_id?"":' <span class="badge b">🏪 店舗共通</span>');
 async function manualsView(){
- const canEdit=can("recruit");
+ const canEdit=manualCanEditAny();
  // v2.6.61 本文（部品）の編集中・プレビュー中は、そちらの画面を優先して出す
  if(canEdit&&mvEditId){
   if(manualItems===null){const {data}=await sb.from("manual_items").select("*").order("store_id",{ascending:true,nullsFirst:true}).order("sort_order").order("created_at");manualItems=data||[]}
   return manualBlockEditorHtml();
  }
- const pickable=isAdmin()?stores:(me.stores||[]); // v2.6.33のckCanManageと同じ考え方: 社長・本部は全店舗を選べる
+ const fullAdmin=manualFullAdmin();
+ const pickable=fullAdmin?stores:(me.stores||[]); // v2.6.33のckCanManageと同じ考え方: 本部権限は全店舗を選べる
  if(!pickable.length&&!canEdit)return `<h2>📎 マニュアル</h2><p class="muted">所属店舗がありません。本部までお問い合わせください。</p>`;
- if(!mvStore||!pickable.find(s=>s.id===mvStore))mvStore=pickable[0]&&pickable[0].id;
+ if(!mvStore||!(pickable.find(s=>s.id===mvStore)||(fullAdmin&&(mvStore==="HQ"||mvStore==="COMMON"))))mvStore=pickable[0]&&pickable[0].id;
  if(mvViewId){ // v2.6.61 本文（部品）を組んだマニュアルの閲覧
   const {data:item,error}=await sb.from("manual_items").select("*").eq("id",mvViewId).maybeSingle();
   if(error||!item)return `<span class="back" id="mvBack">← マニュアル一覧</span><div class="alert">読み込めませんでした</div>`;
@@ -1838,17 +1850,23 @@ async function manualsView(){
   <button class="btn sm ${mvAdminMode?"":"sub"}" id="mvadmin">${mvAdminMode?"✔ 編集を終了":"🛠 テンプレート編集"}</button></div>`;
  if(mvAdminMode){
   if(manualItems===null){const {data}=await sb.from("manual_items").select("*").order("store_id",{ascending:true,nullsFirst:true}).order("sort_order").order("created_at");manualItems=data||[]}
-  return h+`<div class="info">🛠 編集モード（全店舗分を管理できます。ここで作ったものが、この一覧と入社案内LINEの両方に使われます）</div>`+manualAdminHtml();
+  return h+`<div class="info">🛠 編集モード（${fullAdmin?"全店舗分を管理できます":"自分の所属店舗ぶんだけ編集できます"}。ここで作ったものが、この一覧と入社案内LINEの両方に使われます）</div>`+manualAdminHtml();
  }
- if(pickable.length>1)h+=`<div class="card" style="padding:10px 12px">
-  <select class="inp" id="mvstore" style="margin:0">${pickable.map(s=>`<option value="${s.id}"${s.id===mvStore?" selected":""}>${esc(s.name)}</option>`).join("")}</select></div>`;
- h+=`<div class="card" style="padding:10px 12px"><input type="text" id="mvq" value="${esc(mvQ)}" placeholder="🔍 マニュアルを名前で検索" style="margin:0"></div>`;
+ if(pickable.length>1||fullAdmin)h+=`<div class="card" style="padding:10px 12px">
+  <select class="inp" id="mvstore" style="margin:0">${pickable.map(s=>`<option value="${s.id}"${s.id===mvStore?" selected":""}>${esc(s.name)}</option>`).join("")}${fullAdmin?`<option value="COMMON"${mvStore==="COMMON"?" selected":""}>🏪 店舗共通</option><option value="HQ"${mvStore==="HQ"?" selected":""}>🏢 本部</option>`:""}</select></div>`;
+ h+=`<div class="card" style="padding:10px 12px"><input type="text" id="mvq" value="${esc(mvQ)}" placeholder="🔍 マニュアルを名前・カテゴリで検索" style="margin:0"></div>`;
  if(!mvStore)return h+`<p class="muted" style="margin-top:14px">所属店舗がありません。本部までお問い合わせください。</p>`;
- const {data:items,error}=await sb.from("manual_items").select("*").eq("is_active",true).eq("is_draft",false)
-  .or(`store_id.is.null,store_id.eq.${mvStore}`).order("category").order("sort_order").order("created_at");
+ let q=sb.from("manual_items").select("*").eq("is_active",true).eq("is_draft",false);
+ if(mvStore==="HQ")q=q.eq("hq_only",true).is("store_id",null);
+ else if(mvStore==="COMMON")q=q.eq("hq_only",false).is("store_id",null);
+ else q=q.eq("hq_only",false).or(`store_id.is.null,store_id.eq.${mvStore}`);
+ const {data:items,error}=await q.order("category").order("sort_order").order("created_at");
  if(error)return h+`<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
  let list=items||[];
- if(mvQ.trim())list=list.filter(m=>(m.label||"").toLowerCase().includes(mvQ.trim().toLowerCase()));
+ if(mvQ.trim()){
+  const qq=mvQ.trim().toLowerCase();
+  list=list.filter(m=>(m.label||"").toLowerCase().includes(qq)||(m.category||"").toLowerCase().includes(qq));
+ }
  if(!list.length)return h+`<p class="muted" style="margin-top:14px">${mvQ.trim()?"見つかりませんでした":"まだマニュアルが登録されていません。"}</p>`;
  const cats={};list.forEach(m=>{const c=(m.category||"").trim()||"その他";(cats[c]=cats[c]||[]).push(m)});
  Object.keys(cats).forEach(c=>{
@@ -1856,10 +1874,10 @@ async function manualsView(){
   cats[c].forEach(m=>{
    const hasContent=(m.content||[]).length>0;
    h+=hasContent
-    ?`<div class="row" style="cursor:pointer" data-mvopen="${m.id}"><span>${m.icon||"📄"} ${esc(m.label)}${m.store_id?"":' <span class="badge b">全店舗共通</span>'}</span><span class="muted">見る ›</span></div>`
+    ?`<div class="row" style="cursor:pointer" data-mvopen="${m.id}"><span>${m.icon||"📄"} ${esc(m.label)}${manualScopeBadge(m)}</span><span class="muted">見る ›</span></div>`
     :m.url
-    ?`<a href="${esc(m.url)}" target="_blank" rel="noopener" style="display:block;text-decoration:none;color:inherit"><div class="row" style="cursor:pointer"><span>${m.icon||"📄"} ${esc(m.label)}${m.store_id?"":' <span class="badge b">全店舗共通</span>'}</span><span class="muted">開く ›</span></div></a>`
-    :`<div class="row" style="cursor:default"><span>${m.icon||"📄"} ${esc(m.label)}${m.store_id?"":' <span class="badge b">全店舗共通</span>'}</span><span class="muted" style="font-size:12px">準備中</span></div>`;
+    ?`<a href="${esc(m.url)}" target="_blank" rel="noopener" style="display:block;text-decoration:none;color:inherit"><div class="row" style="cursor:pointer"><span>${m.icon||"📄"} ${esc(m.label)}${manualScopeBadge(m)}</span><span class="muted">開く ›</span></div></a>`
+    :`<div class="row" style="cursor:default"><span>${m.icon||"📄"} ${esc(m.label)}${manualScopeBadge(m)}</span><span class="muted" style="font-size:12px">準備中</span></div>`;
   });
   h+=`</div>`;
  });
@@ -3632,7 +3650,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.62</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.63</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3884,25 +3902,35 @@ function manualPreviewBubble(c,storeId){
 }
 // v2.6.58 マニュアル一覧の編集（チェック管理と同じ考え方: 店舗ごと／全店舗共通・停止非表示）
 // v2.6.60 マニュアルの追加・編集フォーム本体（設定画面と「📎 マニュアル」タブの編集モードで共用）
+// v2.6.63 hq_only=true→本部専用／store_id null→店舗共通／それ以外→その店舗、の3種類でグループ分け
+const manualGroupKey=m=>m.hq_only?"HQ":(m.store_id||"COMMON");
 function manualAdminHtml(){
- let h=`<p class="muted" style="font-size:13px">入社登録が完了した方へのLINEと、下部ナビ「📎 マニュアル」タブ（誰でも見られます）の両方で使われる一覧です。<b>店舗ごと</b>と<b>全店舗共通</b>を分けて登録できます。<b>「完成」にするまでは、通常の一覧・入社案内には出ません。</b></p>
+ const fullAdmin=manualFullAdmin();
+ const myStores=me.stores||[];
+ const catList=[...new Set((manualItems||[]).map(m=>(m.category||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ja"));
+ let h=`<p class="muted" style="font-size:13px">入社登録が完了した方へのLINEと、下部ナビ「📎 マニュアル」タブの両方で使われる一覧です。<b>店舗ごと・店舗共通・本部専用</b>を分けて登録できます。<b>「完成」にするまでは、通常の一覧・入社案内には出ません。</b>${fullAdmin?"":"　※自分の所属店舗のぶんだけ編集できます"}</p>
+  <datalist id="mcatlist">${catList.map(c=>`<option value="${esc(c)}">`).join("")}</datalist>
   <div class="card"><h3>＋ 新しいマニュアルを追加</h3>
    <p class="muted" style="margin:0 0 2px">名前</p>
    <input type="text" id="m-label" placeholder="例: タイムカードの押し方" style="margin-top:0">
-   <p class="muted" style="margin:8px 0 2px">カテゴリ（「📎 マニュアル」タブでの見出しになります。空欄なら「その他」）</p>
-   <input type="text" id="m-cat" placeholder="例: レジ操作／接客／衛生管理" style="margin-top:0">
+   <p class="muted" style="margin:8px 0 2px">カテゴリ（「📎 マニュアル」タブでの見出しになります。既存の一覧から選ぶか、新しく入力できます。空欄なら「その他」）</p>
+   <input type="text" id="m-cat" list="mcatlist" placeholder="例: レジ操作／接客／衛生管理" style="margin-top:0">
    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
     <select class="inp" id="m-icon" style="flex:1;min-width:120px;margin:0">${Object.entries(MANUAL_ICONS).map(([k,v])=>`<option value="${k}"${mAddIcon===k?" selected":""}>${k} ${v}</option>`).join("")}</select>
-    <select class="inp" id="m-store" style="flex:1;min-width:140px;margin:0"><option value=""${mAddStore===""?" selected":""}>全店舗共通</option>${stores.map(s=>`<option value="${s.id}"${mAddStore===s.id?" selected":""}>${esc(s.name)}のみ</option>`).join("")}</select>
+    <select class="inp" id="m-store" style="flex:1;min-width:140px;margin:0">${fullAdmin
+      ?`<option value=""${mAddStore===""?" selected":""}>🏪 店舗共通</option><option value="HQ"${mAddStore==="HQ"?" selected":""}>🏢 本部専用</option>${stores.map(s=>`<option value="${s.id}"${mAddStore===s.id?" selected":""}>${esc(s.name)}のみ</option>`).join("")}`
+      :myStores.map(s=>`<option value="${s.id}"${mAddStore===s.id?" selected":""}>${esc(s.name)}のみ</option>`).join("")}</select>
    </div>
    <p class="muted" style="margin:8px 0 2px">URL、またはファイルをアップロード</p>
    <input type="url" id="m-url" placeholder="例: https://youtu.be/xxxxxxxx（URLを貼り付ける場合）" style="margin-top:0">
    <label class="btn sm sub" id="m-filelabel" style="display:inline-block;margin-top:8px"><span>📎 ファイルを選ぶ（動画・PDF・画像・Office文書）</span><input type="file" id="m-file" style="display:none"></label>
    <p class="muted" style="margin:4px 0 0;font-size:11px">大きい動画はアップロードに時間がかかります。YouTube等にアップして、URLを貼るほうが確実です</p>
    <button class="btn sm" id="m-add" style="margin-top:10px">追加する（下書きとして追加されます）</button></div>`;
- const groups=[{key:null,title:"🏢 全店舗共通"}].concat(stores.map(s=>({key:s.id,title:"🏪 "+s.name})));
+ const groups=fullAdmin
+  ?[{key:"HQ",title:"🏢 本部専用"},{key:"COMMON",title:"🏪 店舗共通"}].concat(stores.map(s=>({key:s.id,title:"🏪 "+s.name})))
+  :myStores.map(s=>({key:s.id,title:"🏪 "+s.name}));
  groups.forEach(g=>{
-  const its=(manualItems||[]).filter(m=>m.store_id===g.key);
+  const its=(manualItems||[]).filter(m=>manualGroupKey(m)===g.key);
   if(!its.length)return;
   h+=`<div class="card"><h3>${esc(g.title)}</h3>`;
   its.forEach(m=>{
@@ -3913,7 +3941,7 @@ function manualAdminHtml(){
      <span class="badge" style="background:${m.is_draft?"#b58a00":"#1e8e5a"}">${m.is_draft?"📝 下書き":"✅ 完成"}</span>
     </div>
     <input type="url" data-murl="${m.id}" value="${esc(m.url||"")}" placeholder="URLが未設定です（本文を作る場合は空欄でもOK）" style="margin:6px 0 0;font-size:12px">
-    <input type="text" data-mcat="${m.id}" value="${esc(m.category||"")}" placeholder="カテゴリ（空欄なら「その他」）" style="margin:6px 0 0;font-size:12px">
+    <input type="text" data-mcat="${m.id}" list="mcatlist" value="${esc(m.category||"")}" placeholder="カテゴリ（空欄なら「その他」）" style="margin:6px 0 0;font-size:12px">
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center">
      <button class="btn sm" data-msave="${m.id}" style="margin:0">保存</button>
      <button class="btn sm sub" data-medit="${m.id}" style="margin:0">📝 ${(m.content||[]).length?"本文を編集する（"+m.content.length+"個の部品）":"本文を作成する"}</button>
@@ -4926,12 +4954,13 @@ function bindPage(){
   if(!label){toast("名前を入力してください",true);return}
   const url=$("m-url").value.trim();
   const category=$("m-cat").value.trim();
-  const icon=$("m-icon").value,storeId=$("m-store").value||null;
-  mAddIcon=icon;mAddStore=storeId||"";
+  const icon=$("m-icon").value,sel=$("m-store").value;
+  const hqOnly=sel==="HQ",storeId=hqOnly?null:(sel||null); // v2.6.63 「HQ」は本部専用の合言葉。空欄は店舗共通
+  mAddIcon=icon;mAddStore=sel;
   $("m-add").disabled=true;
-  const {data,error}=await sb.from("manual_items").insert({label,url:url||null,icon,category:category||null,store_id:storeId,is_draft:true,updated_by:me.id}).select().single();
+  const {data,error}=await sb.from("manual_items").insert({label,url:url||null,icon,category:category||null,store_id:storeId,hq_only:hqOnly,is_draft:true,updated_by:me.id}).select().single();
   $("m-add").disabled=false;
-  if(error){toast("追加エラー: "+error.message+"（SQLの v2_6_59 が未実行の可能性があります）",true);return}
+  if(error){toast("追加エラー: "+error.message+"（SQLの v2_6_63 が未実行の可能性があります）",true);return}
   manualItems=(manualItems||[]).concat([data]);
   toast(url?"マニュアルを追加しました":"マニュアルを追加しました（URLは後で入力できます）");render();
  };

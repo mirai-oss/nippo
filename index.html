@@ -1806,23 +1806,52 @@ function bindCheckPage(){
   render();
  });
 }
-// v2.6.59 マニュアル一覧（誰でも見られる。入社案内のマニュアル一覧＝manual_items と同じデータ）
-let mvStore=null;
+// v2.6.60 マニュアル一覧（誰でも見られる。入社案内のマニュアル一覧＝manual_items と同じデータ）
+//   ・店舗チェックと同じ考え方で「🛠 テンプレート編集」を付けた（can("recruit")の人だけ）
+//   ・編集中は完成・下書きが分かるようにし、下書きは通常表示（入社案内LINEにも）には出さない
+let mvStore=null,mvAdminMode=false,mvQ="",mvEditId=null,mvEditContent=null,mvPreviewOn=false,mvViewId=null;
+// v2.6.61 マニュアル本文の部品（少ない種類からスタート。あとで追加できる）
+const MANUAL_BLOCK_TYPES={heading:{label:"見出し",icon:"🔤"},text:{label:"本文",icon:"📝"},photo:{label:"写真",icon:"🖼"},steps:{label:"手順（番号付き）",icon:"🔢"},video:{label:"動画",icon:"🎬"}};
 async function manualsView(){
+ const canEdit=can("recruit");
+ // v2.6.61 本文（部品）の編集中・プレビュー中は、そちらの画面を優先して出す
+ if(canEdit&&mvEditId){
+  if(manualItems===null){const {data}=await sb.from("manual_items").select("*").order("store_id",{ascending:true,nullsFirst:true}).order("sort_order").order("created_at");manualItems=data||[]}
+  return manualBlockEditorHtml();
+ }
  const pickable=isAdmin()?stores:(me.stores||[]); // v2.6.33のckCanManageと同じ考え方: 社長・本部は全店舗を選べる
- if(!pickable.length)return `<h2>📎 マニュアル</h2><p class="muted">所属店舗がありません。本部までお問い合わせください。</p>`;
- if(!mvStore||!pickable.find(s=>s.id===mvStore))mvStore=pickable[0].id;
+ if(!pickable.length&&!canEdit)return `<h2>📎 マニュアル</h2><p class="muted">所属店舗がありません。本部までお問い合わせください。</p>`;
+ if(!mvStore||!pickable.find(s=>s.id===mvStore))mvStore=pickable[0]&&pickable[0].id;
+ if(mvViewId){ // v2.6.61 本文（部品）を組んだマニュアルの閲覧
+  const {data:item,error}=await sb.from("manual_items").select("*").eq("id",mvViewId).maybeSingle();
+  if(error||!item)return `<span class="back" id="mvBack">← マニュアル一覧</span><div class="alert">読み込めませんでした</div>`;
+  return manualViewerHtml(item);
+ }
  let h=`<h2>📎 マニュアル</h2>`;
+ if(canEdit)h+=`<div class="card" style="padding:10px 12px;display:flex;justify-content:flex-end">
+  <button class="btn sm ${mvAdminMode?"":"sub"}" id="mvadmin">${mvAdminMode?"✔ 編集を終了":"🛠 テンプレート編集"}</button></div>`;
+ if(mvAdminMode){
+  if(manualItems===null){const {data}=await sb.from("manual_items").select("*").order("store_id",{ascending:true,nullsFirst:true}).order("sort_order").order("created_at");manualItems=data||[]}
+  return h+`<div class="info">🛠 編集モード（全店舗分を管理できます。ここで作ったものが、この一覧と入社案内LINEの両方に使われます）</div>`+manualAdminHtml();
+ }
  if(pickable.length>1)h+=`<div class="card" style="padding:10px 12px">
   <select class="inp" id="mvstore" style="margin:0">${pickable.map(s=>`<option value="${s.id}"${s.id===mvStore?" selected":""}>${esc(s.name)}</option>`).join("")}</select></div>`;
- const {data:items,error}=await sb.from("manual_items").select("*").eq("is_active",true).or(`store_id.is.null,store_id.eq.${mvStore}`).order("category").order("sort_order").order("created_at");
+ h+=`<div class="card" style="padding:10px 12px"><input type="text" id="mvq" value="${esc(mvQ)}" placeholder="🔍 マニュアルを名前で検索" style="margin:0"></div>`;
+ if(!mvStore)return h+`<p class="muted" style="margin-top:14px">所属店舗がありません。本部までお問い合わせください。</p>`;
+ const {data:items,error}=await sb.from("manual_items").select("*").eq("is_active",true).eq("is_draft",false)
+  .or(`store_id.is.null,store_id.eq.${mvStore}`).order("category").order("sort_order").order("created_at");
  if(error)return h+`<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
- if(!(items||[]).length)return h+`<p class="muted" style="margin-top:14px">まだマニュアルが登録されていません。</p>`;
- const cats={};(items||[]).forEach(m=>{const c=(m.category||"").trim()||"その他";(cats[c]=cats[c]||[]).push(m)});
+ let list=items||[];
+ if(mvQ.trim())list=list.filter(m=>(m.label||"").toLowerCase().includes(mvQ.trim().toLowerCase()));
+ if(!list.length)return h+`<p class="muted" style="margin-top:14px">${mvQ.trim()?"見つかりませんでした":"まだマニュアルが登録されていません。"}</p>`;
+ const cats={};list.forEach(m=>{const c=(m.category||"").trim()||"その他";(cats[c]=cats[c]||[]).push(m)});
  Object.keys(cats).forEach(c=>{
   h+=`<div class="card"><h3 style="margin:0 0 8px">${esc(c)}</h3>`;
   cats[c].forEach(m=>{
-   h+=m.url
+   const hasContent=(m.content||[]).length>0;
+   h+=hasContent
+    ?`<div class="row" style="cursor:pointer" data-mvopen="${m.id}"><span>${m.icon||"📄"} ${esc(m.label)}${m.store_id?"":' <span class="badge b">全店舗共通</span>'}</span><span class="muted">見る ›</span></div>`
+    :m.url
     ?`<a href="${esc(m.url)}" target="_blank" rel="noopener" style="display:block;text-decoration:none;color:inherit"><div class="row" style="cursor:pointer"><span>${m.icon||"📄"} ${esc(m.label)}${m.store_id?"":' <span class="badge b">全店舗共通</span>'}</span><span class="muted">開く ›</span></div></a>`
     :`<div class="row" style="cursor:default"><span>${m.icon||"📄"} ${esc(m.label)}${m.store_id?"":' <span class="badge b">全店舗共通</span>'}</span><span class="muted" style="font-size:12px">準備中</span></div>`;
   });
@@ -1832,6 +1861,122 @@ async function manualsView(){
 }
 function bindManualsPage(){
  if($("mvstore"))$("mvstore").onchange=e=>{mvStore=e.target.value;render()};
+ if($("mvq"))$("mvq").onkeydown=e=>{if(e.key==="Enter"){mvQ=$("mvq").value;render()}};
+ if($("mvadmin"))$("mvadmin").onclick=()=>{mvAdminMode=!mvAdminMode;manualItems=null;render()};
+ document.querySelectorAll("[data-mvopen]").forEach(el=>el.onclick=()=>{mvViewId=el.dataset.mvopen;render()});
+ if($("mvBack"))$("mvBack").onclick=()=>{mvViewId=null;render()};
+ document.querySelectorAll("[data-medit]").forEach(b=>b.onclick=()=>{mvEditId=b.dataset.medit;mvEditContent=null;mvPreviewOn=false;render()});
+ // ---- v2.6.61 本文（部品）の編集 ----
+ if($("mvebBack"))$("mvebBack").onclick=()=>{mvEditId=null;mvEditContent=null;mvPreviewOn=false;render()};
+ document.querySelectorAll("[data-baddtype]").forEach(b=>b.onclick=()=>{
+  collectBlocksDom();
+  const type=b.dataset.baddtype;
+  const blank={heading:{type,text:""},text:{type,text:""},video:{type,url:""},photo:{type,urls:[]},steps:{type,items:[{text:""}]}}[type];
+  mvEditContent=(mvEditContent||[]).concat([blank]);render();
+ });
+ document.querySelectorAll("[data-bup]").forEach(b=>b.onclick=()=>{collectBlocksDom();const i=+b.dataset.bup;if(i>0){[mvEditContent[i-1],mvEditContent[i]]=[mvEditContent[i],mvEditContent[i-1]]}render()});
+ document.querySelectorAll("[data-bdn]").forEach(b=>b.onclick=()=>{collectBlocksDom();const i=+b.dataset.bdn;if(i<mvEditContent.length-1){[mvEditContent[i+1],mvEditContent[i]]=[mvEditContent[i],mvEditContent[i+1]]}render()});
+ document.querySelectorAll("[data-bdel]").forEach(b=>b.onclick=()=>{collectBlocksDom();mvEditContent.splice(+b.dataset.bdel,1);render()});
+ document.querySelectorAll("[data-bstepadd]").forEach(b=>b.onclick=()=>{collectBlocksDom();const i=+b.dataset.bstepadd;(mvEditContent[i].items=mvEditContent[i].items||[]).push({text:""});render()});
+ document.querySelectorAll("[data-bstepdel]").forEach(b=>b.onclick=()=>{collectBlocksDom();const[i,j]=b.dataset.bstepdel.split("-").map(Number);mvEditContent[i].items.splice(j,1);render()});
+ document.querySelectorAll("[data-bphadd]").forEach(inp=>inp.onchange=async e=>{
+  const files=[...e.target.files];if(!files.length)return;
+  const i=+inp.dataset.bphadd;collectBlocksDom();
+  for(const f of files){const url=await uploadManualFile(f);if(url)(mvEditContent[i].urls=mvEditContent[i].urls||[]).push(url)}
+  render();
+ });
+ document.querySelectorAll("[data-bphdel]").forEach(el=>el.onclick=()=>{collectBlocksDom();const[i,k]=el.dataset.bphdel.split("-").map(Number);mvEditContent[i].urls.splice(k,1);render()});
+ document.querySelectorAll("[data-bstepph]").forEach(inp=>inp.onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  const[i,j]=inp.dataset.bstepph.split("-").map(Number);collectBlocksDom();
+  const url=await uploadManualFile(f,inp.closest("label"));
+  if(url){mvEditContent[i].items[j].photo_url=url;render()}
+ });
+ document.querySelectorAll("[data-bstepphdel]").forEach(el=>el.onclick=()=>{collectBlocksDom();const[i,j]=el.dataset.bstepphdel.split("-").map(Number);mvEditContent[i].items[j].photo_url=null;render()});
+ document.querySelectorAll("[data-bvideofile]").forEach(inp=>inp.onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  const i=+inp.dataset.bvideofile;collectBlocksDom();
+  const url=await uploadManualFile(f,inp.closest("label"));
+  if(url){mvEditContent[i].url=url;render()}
+ });
+ if($("mveb-preview"))$("mveb-preview").onclick=()=>{collectBlocksDom();mvPreviewOn=!mvPreviewOn;render()};
+ if($("mveb-save"))$("mveb-save").onclick=async()=>{
+  collectBlocksDom();
+  const b=$("mveb-save");b.disabled=true;
+  const {error}=await sb.from("manual_items").update({content:mvEditContent,updated_by:me.id,updated_at:new Date().toISOString()}).eq("id",mvEditId);
+  b.disabled=false;
+  if(error){toast("保存エラー: "+error.message+"（SQLの v2_6_61 が未実行の可能性があります）",true);return}
+  const m=(manualItems||[]).find(x=>x.id===mvEditId);if(m)m.content=mvEditContent;
+  toast("本文を保存しました");
+  mvEditId=null;mvEditContent=null;mvPreviewOn=false;render();
+ };
+}
+// v2.6.61 マニュアル本文（部品の配列）を組み立てて表示するだけの部分（編集・プレビュー・実際の閲覧の3か所で共用）
+function manualBlocksInnerHtml(content){
+ let h="";
+ (content||[]).forEach(b=>{
+  if(b.type==="heading")h+=`<h3 style="margin:14px 0 6px">${esc(b.text||"")}</h3>`;
+  else if(b.type==="text")h+=`<p style="margin:6px 0;white-space:pre-wrap">${esc(b.text||"")}</p>`;
+  else if(b.type==="video")h+=b.url?`<p style="margin:10px 0"><a href="${esc(b.url)}" target="_blank" rel="noopener">🎬 動画を見る</a></p>`:"";
+  else if(b.type==="photo")h+=(b.urls||[]).length?`<div class="photo-grid">${b.urls.map(u=>`<div class="ph"><img src="${esc(u)}"></div>`).join("")}</div>`:"";
+  else if(b.type==="steps")h+=(b.items||[]).map((s,j)=>`<div style="margin:10px 0"><b>STEP ${j+1}</b><p style="margin:4px 0;white-space:pre-wrap">${esc(s.text||"")}</p>${s.photo_url?`<div class="photo-grid"><div class="ph"><img src="${esc(s.photo_url)}"></div></div>`:""}</div>`).join("");
+ });
+ return h||`<p class="muted" style="margin:0">まだ部品がありません</p>`;
+}
+function manualBlockViewHtml(content){ // 編集画面用のプレビュー（点線カード）
+ return `<div class="card" style="background:#f7fbff;border:2px dashed var(--blue)"><h3 style="margin:0 0 8px">👀 プレビュー（実際の見え方）</h3>${manualBlocksInnerHtml(content)}</div>`;
+}
+function manualViewerHtml(item){ // 実際にタップして開いたときの画面
+ let h=`<span class="back" id="mvBack">← マニュアル一覧</span><h2>${item.icon||"📄"} ${esc(item.label)}</h2>
+  <div class="card">${manualBlocksInnerHtml(item.content||[])}</div>`;
+ if(item.url)h+=`<p class="muted" style="margin-top:8px"><a href="${esc(item.url)}" target="_blank" rel="noopener">🔗 添付ファイルを開く</a></p>`;
+ return h;
+}
+// 入力中の値をDOMから読み取ってmvEditContentに反映する（render()で画面を作り直す前に必ず呼ぶ。
+// 呼ばずに構造だけ変えると、入力していた文章が消えてしまうため）
+function collectBlocksDom(){
+ if(!mvEditContent)return;
+ mvEditContent.forEach((b,i)=>{
+  if(b.type==="heading"){const el=document.querySelector(`[data-bhead="${i}"]`);if(el)b.text=el.value}
+  else if(b.type==="text"){const el=document.querySelector(`[data-btext="${i}"]`);if(el)b.text=el.value}
+  else if(b.type==="video"){const el=document.querySelector(`[data-bvideo="${i}"]`);if(el)b.url=el.value.trim()}
+  else if(b.type==="steps"){(b.items||[]).forEach((s,j)=>{const el=document.querySelector(`[data-bstep="${i}-${j}"]`);if(el)s.text=el.value})}
+ });
+}
+function manualBlockEditorHtml(){
+ const item=(manualItems||[]).find(x=>x.id===mvEditId);
+ if(!item){mvEditId=null;return `<p class="muted">マニュアルが見つかりません</p>`}
+ if(!mvEditContent)mvEditContent=JSON.parse(JSON.stringify(item.content||[]));
+ let h=`<span class="back" id="mvebBack">← マニュアル一覧</span><h2>📝 ${esc(item.label)}</h2>
+  <p class="muted" style="margin-top:-8px;font-size:13px">部品を組み合わせて本文を作れます。「URL」の代わりに、この内容がタップした人に表示されます。保存を忘れずに。</p>`;
+ (mvEditContent||[]).forEach((b,i)=>{
+  const t=MANUAL_BLOCK_TYPES[b.type]||{label:b.type,icon:"❔"};
+  h+=`<div class="card" style="padding:10px 12px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+   <b style="font-size:13px">${t.icon} ${t.label}</b>
+   <span style="display:flex;gap:6px"><span class="chip" data-bup="${i}">↑</span><span class="chip" data-bdn="${i}">↓</span><span class="chip" data-bdel="${i}" style="color:var(--red)">削除</span></span></div>`;
+  if(b.type==="heading")h+=`<input type="text" data-bhead="${i}" value="${esc(b.text||"")}" placeholder="見出しの文字" style="margin:0">`;
+  else if(b.type==="text")h+=`<textarea data-btext="${i}" rows="4" placeholder="本文">${esc(b.text||"")}</textarea>`;
+  else if(b.type==="video")h+=`<input type="url" data-bvideo="${i}" value="${esc(b.url||"")}" placeholder="動画のURL（貼り付け）" style="margin:0">
+    <label class="btn sm sub" style="display:inline-block;margin-top:6px"><span>📎 動画をアップロード</span><input type="file" accept="video/*" data-bvideofile="${i}" style="display:none"></label>`;
+  else if(b.type==="photo")h+=`<div class="photo-grid">${(b.urls||[]).map((u,k)=>`<div class="ph"><img src="${esc(u)}"><span class="del" data-bphdel="${i}-${k}">✕</span></div>`).join("")}<label class="addph">＋<input type="file" accept="image/*" multiple data-bphadd="${i}" style="display:none"></label></div>`;
+  else if(b.type==="steps"){
+   (b.items||[]).forEach((s,j)=>{
+    h+=`<div style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px">
+     <div style="display:flex;justify-content:space-between;align-items:center"><b class="muted" style="font-size:12px">STEP ${j+1}</b><span class="chip" data-bstepdel="${i}-${j}" style="color:var(--red);font-size:11px">削除</span></div>
+     <textarea data-bstep="${i}-${j}" rows="2" placeholder="手順の説明">${esc(s.text||"")}</textarea>
+     ${s.photo_url?`<div class="photo-grid"><div class="ph"><img src="${esc(s.photo_url)}"><span class="del" data-bstepphdel="${i}-${j}">✕</span></div></div>`:`<label class="btn sm sub" style="margin-top:4px;display:inline-block"><span>📷 写真を追加</span><input type="file" accept="image/*" data-bstepph="${i}-${j}" style="display:none"></label>`}
+    </div>`;
+   });
+   h+=`<button class="btn sm sub" data-bstepadd="${i}" style="margin-top:8px">＋ ステップを追加</button>`;
+  }
+  h+=`</div>`;
+ });
+ h+=`<div class="card"><h3 style="margin:0 0 8px">＋ 部品を追加</h3>
+  <div>${Object.entries(MANUAL_BLOCK_TYPES).map(([k,v])=>`<button class="btn sm sub" data-baddtype="${k}" style="margin:0 6px 6px 0">${v.icon} ${v.label}</button>`).join("")}</div></div>
+  <button class="btn" id="mveb-save">保存する</button>
+  <button class="btn sm sub" id="mveb-preview">${mvPreviewOn?"✔ プレビューを閉じる":"👀 プレビュー"}</button>`;
+ if(mvPreviewOn){collectBlocksDom();h+=manualBlockViewHtml(mvEditContent)}
+ return h;
 }
 async function tasksView(){
  const [{data:ts,error},{data:us}]=await Promise.all([
@@ -3322,12 +3467,11 @@ async function settingsView(){
   try{const {data}=await sb.from("dash_sync_log").select("ran_at,ok,detail").order("ran_at",{ascending:false}).limit(1).maybeSingle();dashLog=data||null}catch(e){dashLog=null}
  }
  if(setMode==="perm")return await settingsPermView(); // v2.4
- if((setMode==="guide"||setMode==="manualitems")&&manualItems===null){ // v2.6.58
+ if(setMode==="guide"&&manualItems===null){ // v2.6.58 プレビュー用に読み込む（編集は「📎 マニュアル」タブへ）
   const {data}=await sb.from("manual_items").select("*").order("store_id",{ascending:true,nullsFirst:true}).order("sort_order").order("created_at");
   manualItems=data||[];
  }
  if(setMode==="guide")return settingsGuideView(); // v2.6.53 入社案内・マニュアル
- if(setMode==="manualitems")return settingsManualItemsView(); // v2.6.58
  if(setMode==="apply")return await settingsApplyView(); // v2.5.8
  if(setMode==="lark")return await settingsLarkView(); // v2.6.2
  if(myProf===null){const {data:p}=await sb.rpc("get_my_profile");myProf=p||{}} // v2.6.0
@@ -3467,7 +3611,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.59</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.61</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3691,8 +3835,8 @@ function settingsGuideView(){
   <button class="btn" id="gd-save">文面を保存する</button>
   <p class="muted" style="margin:8px 0 0;font-size:12px">※ この設定の保存は社長アカウントで行えます。保存できないときはエラーの内容が出ます。</p>
   <div class="card" style="margin-top:14px"><h3>📎 マニュアル一覧</h3>
-   <p class="muted" style="margin:0 0 8px">「タイムカードの押し方」「ドリンク一覧表」など、複数のマニュアルを登録できます。ファイルのアップロード、またはURLの貼り付けのどちらでも使えます。<b>店舗ごと・全店舗共通</b>を分けて管理でき、停止・非表示にもできます。<br>ここで登録したものは、入社案内のLINEと、下部ナビの「📎 マニュアル」タブ（ログインした人なら誰でも見られます）の両方に使われます。</p>
-   <button class="btn sm" id="set-manuals">マニュアル一覧を編集する</button></div>
+   <p class="muted" style="margin:0 0 8px">「タイムカードの押し方」「ドリンク一覧表」など、複数のマニュアルを登録できます。ファイルのアップロード、またはURLの貼り付けのどちらでも使えます。<b>店舗ごと・全店舗共通</b>を分けて管理でき、停止・非表示にもできます。<br>編集は、下部ナビの「📎 マニュアル」タブの「🛠 テンプレート編集」から行います（ここで登録したものが、入社案内のLINEと、そのタブ＝誰でも見られる一覧の両方に使われます）。</p>
+   <button class="btn sm" id="set-manuals">📎 マニュアルを編集する</button></div>
   <div class="card" style="margin-top:14px;background:#f7fbff;border:2px dashed var(--blue)"><h3 style="margin:0">👀 プレビュー（実際にLINEで送られる画面）</h3>
    <p class="muted" style="margin:6px 0 8px">②の文面と、選んだ店舗向けのマニュアル一覧をあわせて、実際に届く見た目で確認できます。<b>保存前の内容でも見られます。</b></p>
    <select class="inp" id="gd-pvstore" style="margin:0 0 8px">${stores.map(s=>`<option value="${s.id}"${gdPreviewStore===s.id?" selected":""}>${esc(s.name)} の方が受け取る内容</option>`).join("")}</select>
@@ -3704,7 +3848,7 @@ function settingsGuideView(){
 function composeGuidePreviewText(c,storeId){
  const name="山田 太郎";
  let out=(c.done_text||GUIDE_DEF.done_text||"入社登録の手続きが完了しました。ありがとうございます。").replace(/\{name\}/g,name);
- const items=(manualItems||[]).filter(m=>m.is_active&&(m.url||"").trim()&&(m.store_id===null||m.store_id===storeId))
+ const items=(manualItems||[]).filter(m=>m.is_active&&!m.is_draft&&(m.url||"").trim()&&(m.store_id===null||m.store_id===storeId))
   .sort((a,b)=>(a.store_id!==null)-(b.store_id!==null)||(a.sort_order||0)-(b.sort_order||0));
  items.forEach(m=>{out+="\n\n"+(m.icon||"📄")+" "+m.label+"\n"+m.url});
  if((c.note||"").trim())out+="\n\n"+c.note.trim();
@@ -3718,9 +3862,9 @@ function manualPreviewBubble(c,storeId){
   <p class="muted" style="margin:8px 0 0;font-size:11px">💚 求人用LINEから、このままの文面で届きます（URLはリンクとして開けます）</p></div>`;
 }
 // v2.6.58 マニュアル一覧の編集（チェック管理と同じ考え方: 店舗ごと／全店舗共通・停止非表示）
-function settingsManualItemsView(){
- let h=`<span class="back" id="mback">← 入社案内・マニュアルの設定</span><h2>📎 マニュアル一覧</h2>
-  <p class="muted" style="margin-top:-8px;font-size:13px">入社登録が完了した方へのLINEと、下部ナビ「📎 マニュアル」タブ（誰でも見られます）の両方で使われる一覧です。<b>店舗ごと</b>と<b>全店舗共通</b>を分けて登録できます。停止すると届かなくなりますが、消えずに残ります。</p>
+// v2.6.60 マニュアルの追加・編集フォーム本体（設定画面と「📎 マニュアル」タブの編集モードで共用）
+function manualAdminHtml(){
+ let h=`<p class="muted" style="font-size:13px">入社登録が完了した方へのLINEと、下部ナビ「📎 マニュアル」タブ（誰でも見られます）の両方で使われる一覧です。<b>店舗ごと</b>と<b>全店舗共通</b>を分けて登録できます。<b>「完成」にするまでは、通常の一覧・入社案内には出ません。</b></p>
   <div class="card"><h3>＋ 新しいマニュアルを追加</h3>
    <p class="muted" style="margin:0 0 2px">名前</p>
    <input type="text" id="m-label" placeholder="例: タイムカードの押し方" style="margin-top:0">
@@ -3734,7 +3878,7 @@ function settingsManualItemsView(){
    <input type="url" id="m-url" placeholder="例: https://youtu.be/xxxxxxxx（URLを貼り付ける場合）" style="margin-top:0">
    <label class="btn sm sub" id="m-filelabel" style="display:inline-block;margin-top:8px"><span>📎 ファイルを選ぶ（動画・PDF・画像・Office文書）</span><input type="file" id="m-file" style="display:none"></label>
    <p class="muted" style="margin:4px 0 0;font-size:11px">大きい動画はアップロードに時間がかかります。YouTube等にアップして、URLを貼るほうが確実です</p>
-   <button class="btn sm" id="m-add" style="margin-top:10px">追加する</button></div>`;
+   <button class="btn sm" id="m-add" style="margin-top:10px">追加する（下書きとして追加されます）</button></div>`;
  const groups=[{key:null,title:"🏢 全店舗共通"}].concat(stores.map(s=>({key:s.id,title:"🏪 "+s.name})));
  groups.forEach(g=>{
   const its=(manualItems||[]).filter(m=>m.store_id===g.key);
@@ -3742,15 +3886,18 @@ function settingsManualItemsView(){
   h+=`<div class="card"><h3>${esc(g.title)}</h3>`;
   its.forEach(m=>{
    h+=`<div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px${m.is_active?"":";opacity:.55"}">
-    <div style="display:flex;gap:8px;align-items:center">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
      <select class="inp" data-micon="${m.id}" style="width:auto;margin:0">${Object.keys(MANUAL_ICONS).map(k=>`<option value="${k}"${m.icon===k?" selected":""}>${k}</option>`).join("")}</select>
-     <input type="text" data-mlabel="${m.id}" value="${esc(m.label)}" style="flex:1;margin:0">
+     <input type="text" data-mlabel="${m.id}" value="${esc(m.label)}" style="flex:1;min-width:100px;margin:0">
+     <span class="badge" style="background:${m.is_draft?"#b58a00":"#1e8e5a"}">${m.is_draft?"📝 下書き":"✅ 完成"}</span>
     </div>
-    <input type="url" data-murl="${m.id}" value="${esc(m.url||"")}" placeholder="URLが未設定です" style="margin:6px 0 0;font-size:12px">
+    <input type="url" data-murl="${m.id}" value="${esc(m.url||"")}" placeholder="URLが未設定です（本文を作る場合は空欄でもOK）" style="margin:6px 0 0;font-size:12px">
     <input type="text" data-mcat="${m.id}" value="${esc(m.category||"")}" placeholder="カテゴリ（空欄なら「その他」）" style="margin:6px 0 0;font-size:12px">
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center">
      <button class="btn sm" data-msave="${m.id}" style="margin:0">保存</button>
+     <button class="btn sm sub" data-medit="${m.id}" style="margin:0">📝 ${(m.content||[]).length?"本文を編集する（"+m.content.length+"個の部品）":"本文を作成する"}</button>
      <label class="btn sm sub" style="margin:0"><span>📎 ファイルを差し替え</span><input type="file" data-mfile="${m.id}" style="display:none"></label>
+     <button class="btn sm sub" data-mdraft="${m.id}" data-on="${m.is_draft?1:0}" style="margin:0">${m.is_draft?"✅ 完成にする":"📝 下書きに戻す"}</button>
      <button class="btn sm sub" data-mtoggle="${m.id}" data-on="${m.is_active?1:0}" style="margin:0">${m.is_active?"停止":"再開"}</button>
      <button class="btn sm sub" data-mdel="${m.id}" style="margin:0;color:var(--red);border-color:var(--red)">削除</button>
     </div></div>`;
@@ -4736,9 +4883,8 @@ function bindPage(){
   toast("入社案内・マニュアルの設定を保存しました");render();
  };
  if($("gd-pvstore"))$("gd-pvstore").onchange=()=>{gdPreviewStore=$("gd-pvstore").value;render()};
- // v2.6.58 マニュアル一覧
- if($("set-manuals"))$("set-manuals").onclick=()=>{setMode="manualitems";render()};
- if($("mback"))$("mback").onclick=()=>{setMode="guide";render()};
+ // v2.6.60 マニュアル一覧の編集は「📎 マニュアル」タブへ
+ if($("set-manuals"))$("set-manuals").onclick=()=>{page="manuals";setMode="main";mvAdminMode=true;manualItems=null;render()};
  if($("m-file"))$("m-file").onchange=async e=>{
   const f=e.target.files[0];if(!f)return;
   const url=await uploadManualFile(f,$("m-filelabel"));
@@ -4762,7 +4908,7 @@ function bindPage(){
   const icon=$("m-icon").value,storeId=$("m-store").value||null;
   mAddIcon=icon;mAddStore=storeId||"";
   $("m-add").disabled=true;
-  const {data,error}=await sb.from("manual_items").insert({label,url:url||null,icon,category:category||null,store_id:storeId,updated_by:me.id}).select().single();
+  const {data,error}=await sb.from("manual_items").insert({label,url:url||null,icon,category:category||null,store_id:storeId,is_draft:true,updated_by:me.id}).select().single();
   $("m-add").disabled=false;
   if(error){toast("追加エラー: "+error.message+"（SQLの v2_6_59 が未実行の可能性があります）",true);return}
   manualItems=(manualItems||[]).concat([data]);
@@ -4788,6 +4934,15 @@ function bindPage(){
   if(error){toast("変更できませんでした: "+error.message,true);return}
   const m=(manualItems||[]).find(x=>x.id===id);if(m)m.is_active=on;
   toast(on?"再開しました":"停止しました（届かなくなります）");render();
+ });
+ // v2.6.60 完成／下書きの切り替え（完成にするまで通常の一覧・入社案内には出ない）
+ document.querySelectorAll("[data-mdraft]").forEach(b=>b.onclick=async()=>{
+  const id=b.dataset.mdraft;
+  const isDraft=b.dataset.on==="1"; // 1=今は下書き（→完成にする）、0=今は完成（→下書きに戻す）
+  const {error}=await sb.from("manual_items").update({is_draft:!isDraft,updated_by:me.id,updated_at:new Date().toISOString()}).eq("id",id);
+  if(error){toast("変更できませんでした: "+error.message+"（SQLの v2_6_60 が未実行の可能性があります）",true);return}
+  const m=(manualItems||[]).find(x=>x.id===id);if(m)m.is_draft=!isDraft;
+  toast(isDraft?"完成にしました。一覧・入社案内に出るようになります":"下書きに戻しました");render();
  });
  document.querySelectorAll("[data-mdel]").forEach(b=>b.onclick=async()=>{
   const id=b.dataset.mdel;

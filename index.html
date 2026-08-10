@@ -274,6 +274,7 @@ let page="home",detail=null,form={},seg="daily",editId=null,writeKind="daily";
 let todayDaily=null,todayWeekly=null;
 let appSettings={},setMode="main",fmtRole="AL",cfgJoin=null,cfgFmts=null,joinCfgCur=null;
 let cfgGuide=null; // v2.6.53 入社案内・マニュアルの文面設定
+let manualItems=null,gdPreviewStore="",mAddStore="",mAddIcon="📄"; // v2.6.58 マニュアル一覧
 let searchQ="",fRole="",fStore="";                       // v1.7 検索
 let joinPhotos={},joinSmStaffs=null,joinInfoCur=null;    // v1.7 入社フォーム写真＋スマレジ選択
 let smStaffsCache=null,smSel=null,smRole=null,smStores=[],smResult=null; // v1.7 スマレジ連携招待
@@ -1634,6 +1635,21 @@ async function saveDraft(){
  toast("一時保存しました");
 }
 
+// v2.6.58 マニュアルのファイルをアップロード → 公開URLを返す（失敗時はnull・トーストで理由を出す）
+async function uploadManualFile(f,labelEl){ // labelEl: クリックされた「ファイルを選ぶ」のlabel要素（あれば）。
+ // v2.6.58 途中でrender()すると、入力中の名前欄などが消えてしまうため、
+ // アップロード中は該当ボタンの文字だけ直接書き換える（画面全体は再描画しない）
+ const orig=labelEl?labelEl.firstChild.textContent:null;
+ if(labelEl)labelEl.firstChild.textContent="アップロード中…";
+ const ext=((f.name.split(".").pop()||"dat").toLowerCase().replace(/[^a-z0-9]/g,""))||"dat";
+ const path=me.id+"/"+Date.now()+"_"+Math.random().toString(36).slice(2,8)+"."+ext;
+ const {error}=await sb.storage.from("manual-files").upload(path,f,{contentType:f.type||"application/octet-stream"});
+ if(labelEl&&orig!=null)labelEl.firstChild.textContent=orig;
+ if(error){toast("アップロードエラー: "+error.message+"（SQLの v2_6_58 が未実行、または対応していないファイル形式の可能性があります）",true);return null}
+ const {data}=sb.storage.from("manual-files").getPublicUrl(path);
+ toast("アップロードしました");
+ return data.publicUrl;
+}
 // ===== v1.8 タスク =====
 async function taskUpload(f,prefix){ // 添付ファイルをStorageへ → {url,name,type}（v1.9: prefix指定でチャット等にも利用）
  const ext=((f.name.split(".").pop()||"dat").toLowerCase().replace(/[^a-z0-9]/g,""))||"dat";
@@ -3277,7 +3293,12 @@ async function settingsView(){
   try{const {data}=await sb.from("dash_sync_log").select("ran_at,ok,detail").order("ran_at",{ascending:false}).limit(1).maybeSingle();dashLog=data||null}catch(e){dashLog=null}
  }
  if(setMode==="perm")return await settingsPermView(); // v2.4
+ if((setMode==="guide"||setMode==="manualitems")&&manualItems===null){ // v2.6.58
+  const {data}=await sb.from("manual_items").select("*").order("store_id",{ascending:true,nullsFirst:true}).order("sort_order").order("created_at");
+  manualItems=data||[];
+ }
  if(setMode==="guide")return settingsGuideView(); // v2.6.53 入社案内・マニュアル
+ if(setMode==="manualitems")return settingsManualItemsView(); // v2.6.58
  if(setMode==="apply")return await settingsApplyView(); // v2.5.8
  if(setMode==="lark")return await settingsLarkView(); // v2.6.2
  if(myProf===null){const {data:p}=await sb.rpc("get_my_profile");myProf=p||{}} // v2.6.0
@@ -3417,7 +3438,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.57</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.58</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3623,27 +3644,88 @@ async function saveLarkRoute(){
 // v2.6.53 ① 入社案内・マニュアルの設定
 // 既定の文面はデータベース側（join_invite_message / join_guide_message）が持っています。
 // ここを空のままにしておけば、その既定の文面がそのまま使われます。
-const GUIDE_DEF={invite_text:"",done_text:"",video_url:"",doc_url:"",note:""};
+const GUIDE_DEF={invite_text:"",done_text:"",note:""};
+// v2.6.58 マニュアルのアイコン（見出し代わり。自由に選べる）
+const MANUAL_ICONS={"📹":"動画","📄":"資料（PDF等）","📊":"一覧表","📋":"チェック表","📎":"その他"};
 function settingsGuideView(){
  const c=cfgGuide||GUIDE_DEF;
  let h=`<span class="back" id="setback">← 設定</span><h2>📘 入社案内・マニュアルの設定</h2>
-  <p class="muted" style="margin-top:-8px;font-size:13px">採用が決まった方に、LINEで自動でお送りする文面です。<b>空欄のままにすると、あらかじめ用意してある文面が使われます。</b>マニュアルが出来てから、下のURL欄に貼り付けてください。</p>
+  <p class="muted" style="margin-top:-8px;font-size:13px">採用が決まった方に、LINEで自動でお送りする文面です。<b>空欄のままにすると、あらかじめ用意してある文面が使われます。</b></p>
   <div class="card"><h3>① 入社登録のご案内（招待リンクを送るとき）</h3>
    <p class="muted" style="margin:0 0 6px">「採用・招待リンクを発行する」を押したときに、LINE連携済みの方へ自動で届きます。<br><b>{name}</b> がお名前に、<b>{url}</b> が入社登録フォームのリンクに置き換わります。</p>
    <textarea rows="10" id="gd-invite" placeholder="空欄のままなら、あらかじめ用意してある文面が使われます">${esc(c.invite_text||"")}</textarea></div>
   <div class="card"><h3>② 入社登録が完了したあとのご案内</h3>
-   <p class="muted" style="margin:0 0 6px">本人が入社登録を終えた瞬間に、LINEで自動で届きます。<br><b>{name}</b> がお名前に置き換わります。この文面のあとに、下のマニュアルが自動で付きます。</p>
-   <textarea rows="10" id="gd-done" placeholder="空欄のままなら、あらかじめ用意してある文面が使われます">${esc(c.done_text||"")}</textarea></div>
-  <div class="card"><h3>③ マニュアル動画・資料</h3>
-   <p class="muted" style="margin:0 0 6px">URLを入れると、②の文面のうしろに自動で付きます。<b>空欄の項目は、見出しごと出ません。</b>（まだ無いうちは空欄のままでOKです）</p>
-   <p class="muted" style="margin:8px 0 2px">📹 マニュアル動画のURL</p>
-   <input type="url" id="gd-video" value="${esc(c.video_url||"")}" placeholder="例: https://youtu.be/xxxxxxxx" style="margin-top:0">
-   <p class="muted" style="margin:8px 0 2px">📄 マニュアル資料のURL</p>
-   <input type="url" id="gd-doc" value="${esc(c.doc_url||"")}" placeholder="例: https://drive.google.com/xxxxxxxx" style="margin-top:0">
-   <p class="muted" style="margin:8px 0 2px">補足の一言（任意・いちばん最後に付きます）</p>
+   <p class="muted" style="margin:0 0 6px">本人が入社登録を終えた瞬間に、LINEで自動で届きます。<br><b>{name}</b> がお名前に置き換わります。この文面のあとに、下の「📎 マニュアル一覧」から、その方の店舗向けの分が自動で付きます。</p>
+   <textarea rows="10" id="gd-done" placeholder="空欄のままなら、あらかじめ用意してある文面が使われます">${esc(c.done_text||"")}</textarea>
+   <p class="muted" style="margin:10px 0 2px">補足の一言（任意・マニュアルのあとに付きます）</p>
    <input type="text" id="gd-note" value="${esc(c.note||"")}" placeholder="例: 初出勤の持ち物は担当者からご連絡します" style="margin-top:0"></div>
-  <button class="btn" id="gd-save">保存する</button>
-  <p class="muted" style="margin:8px 0 0;font-size:12px">※ この設定の保存は社長アカウントで行えます。保存できないときはエラーの内容が出ます。</p>`;
+  <button class="btn" id="gd-save">文面を保存する</button>
+  <p class="muted" style="margin:8px 0 0;font-size:12px">※ この設定の保存は社長アカウントで行えます。保存できないときはエラーの内容が出ます。</p>
+  <div class="card" style="margin-top:14px"><h3>📎 マニュアル一覧</h3>
+   <p class="muted" style="margin:0 0 8px">「タイムカードの押し方」「ドリンク一覧表」など、複数のマニュアルを登録できます。ファイルのアップロード、またはURLの貼り付けのどちらでも使えます。<b>店舗ごと・全店舗共通</b>を分けて管理でき、停止・非表示にもできます。</p>
+   <button class="btn sm" id="set-manuals">マニュアル一覧を編集する</button></div>
+  <div class="card" style="margin-top:14px;background:#f7fbff;border:2px dashed var(--blue)"><h3 style="margin:0">👀 プレビュー（実際にLINEで送られる画面）</h3>
+   <p class="muted" style="margin:6px 0 8px">②の文面と、選んだ店舗向けのマニュアル一覧をあわせて、実際に届く見た目で確認できます。<b>保存前の内容でも見られます。</b></p>
+   <select class="inp" id="gd-pvstore" style="margin:0 0 8px">${stores.map(s=>`<option value="${s.id}"${gdPreviewStore===s.id?" selected":""}>${esc(s.name)} の方が受け取る内容</option>`).join("")}</select>
+   ${manualPreviewBubble(c,gdPreviewStore||(stores[0]&&stores[0].id))}</div>`;
+ return h;
+}
+// v2.6.58 実際にLINEで届く文面を、送信前の内容で組み立てる（DB側 join_guide_message と同じ考え方）
+// 保存していない編集中の内容もそのまま見えるよう、cfgGuideの現在値から作る
+function composeGuidePreviewText(c,storeId){
+ const name="山田 太郎";
+ let out=(c.done_text||GUIDE_DEF.done_text||"入社登録の手続きが完了しました。ありがとうございます。").replace(/\{name\}/g,name);
+ const items=(manualItems||[]).filter(m=>m.is_active&&(m.url||"").trim()&&(m.store_id===null||m.store_id===storeId))
+  .sort((a,b)=>(a.store_id!==null)-(b.store_id!==null)||(a.sort_order||0)-(b.sort_order||0));
+ items.forEach(m=>{out+="\n\n"+(m.icon||"📄")+" "+m.label+"\n"+m.url});
+ if((c.note||"").trim())out+="\n\n"+c.note.trim();
+ return out;
+}
+// LINEの吹き出し風に見せる（実際に送るのはプレーンテキストなので、これがそのまま届く内容）
+function manualPreviewBubble(c,storeId){
+ const text=composeGuidePreviewText(c,storeId);
+ return `<div style="background:#7d7d7d10;border-radius:10px;padding:14px">
+  <div style="max-width:86%;background:#06c755;color:#fff;border-radius:14px 14px 14px 2px;padding:10px 14px;font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word">${esc(text)}</div>
+  <p class="muted" style="margin:8px 0 0;font-size:11px">💚 求人用LINEから、このままの文面で届きます（URLはリンクとして開けます）</p></div>`;
+}
+// v2.6.58 マニュアル一覧の編集（チェック管理と同じ考え方: 店舗ごと／全店舗共通・停止非表示）
+function settingsManualItemsView(){
+ let h=`<span class="back" id="mback">← 入社案内・マニュアルの設定</span><h2>📎 マニュアル一覧</h2>
+  <p class="muted" style="margin-top:-8px;font-size:13px">入社登録が完了した方に届くマニュアルの一覧です。<b>店舗ごと</b>と<b>全店舗共通</b>を分けて登録できます。停止すると届かなくなりますが、消えずに残ります。</p>
+  <div class="card"><h3>＋ 新しいマニュアルを追加</h3>
+   <p class="muted" style="margin:0 0 2px">名前</p>
+   <input type="text" id="m-label" placeholder="例: タイムカードの押し方" style="margin-top:0">
+   <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+    <select class="inp" id="m-icon" style="flex:1;min-width:120px;margin:0">${Object.entries(MANUAL_ICONS).map(([k,v])=>`<option value="${k}"${mAddIcon===k?" selected":""}>${k} ${v}</option>`).join("")}</select>
+    <select class="inp" id="m-store" style="flex:1;min-width:140px;margin:0"><option value=""${mAddStore===""?" selected":""}>全店舗共通</option>${stores.map(s=>`<option value="${s.id}"${mAddStore===s.id?" selected":""}>${esc(s.name)}のみ</option>`).join("")}</select>
+   </div>
+   <p class="muted" style="margin:8px 0 2px">URL、またはファイルをアップロード</p>
+   <input type="url" id="m-url" placeholder="例: https://youtu.be/xxxxxxxx（URLを貼り付ける場合）" style="margin-top:0">
+   <label class="btn sm sub" id="m-filelabel" style="display:inline-block;margin-top:8px"><span>📎 ファイルを選ぶ（動画・PDF・画像・Office文書）</span><input type="file" id="m-file" style="display:none"></label>
+   <p class="muted" style="margin:4px 0 0;font-size:11px">大きい動画はアップロードに時間がかかります。YouTube等にアップして、URLを貼るほうが確実です</p>
+   <button class="btn sm" id="m-add" style="margin-top:10px">追加する</button></div>`;
+ const groups=[{key:null,title:"🏢 全店舗共通"}].concat(stores.map(s=>({key:s.id,title:"🏪 "+s.name})));
+ groups.forEach(g=>{
+  const its=(manualItems||[]).filter(m=>m.store_id===g.key);
+  if(!its.length)return;
+  h+=`<div class="card"><h3>${esc(g.title)}</h3>`;
+  its.forEach(m=>{
+   h+=`<div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px${m.is_active?"":";opacity:.55"}">
+    <div style="display:flex;gap:8px;align-items:center">
+     <select class="inp" data-micon="${m.id}" style="width:auto;margin:0">${Object.keys(MANUAL_ICONS).map(k=>`<option value="${k}"${m.icon===k?" selected":""}>${k}</option>`).join("")}</select>
+     <input type="text" data-mlabel="${m.id}" value="${esc(m.label)}" style="flex:1;margin:0">
+    </div>
+    <input type="url" data-murl="${m.id}" value="${esc(m.url||"")}" placeholder="URLが未設定です" style="margin:6px 0 0;font-size:12px">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center">
+     <button class="btn sm" data-msave="${m.id}" style="margin:0">保存</button>
+     <label class="btn sm sub" style="margin:0"><span>📎 ファイルを差し替え</span><input type="file" data-mfile="${m.id}" style="display:none"></label>
+     <button class="btn sm sub" data-mtoggle="${m.id}" data-on="${m.is_active?1:0}" style="margin:0">${m.is_active?"停止":"再開"}</button>
+     <button class="btn sm sub" data-mdel="${m.id}" style="margin:0;color:var(--red);border-color:var(--red)">削除</button>
+    </div></div>`;
+  });
+  h+=`</div>`;
+ });
+ if(!(manualItems||[]).length)h+=`<p class="muted center" style="margin:16px 0">まだマニュアルが登録されていません。上から追加してください。</p>`;
  return h;
 }
 function settingsJoinView(){
@@ -4607,10 +4689,9 @@ function bindPage(){
  // 設定カスタマイズ（v1.5）
  if($("set-join"))$("set-join").onclick=()=>{setMode="join";cfgJoin=joinCfg();render()};
  // v2.6.53 ① 入社案内・マニュアルの設定
- if($("set-guide"))$("set-guide").onclick=()=>{setMode="guide";cfgGuide={...GUIDE_DEF,...(appSettings.join_guide||{})};render()};
+ if($("set-guide"))$("set-guide").onclick=()=>{setMode="guide";cfgGuide={...GUIDE_DEF,...(appSettings.join_guide||{})};manualItems=null;render()};
  if($("gd-save"))$("gd-save").onclick=async()=>{
-  const v={invite_text:$("gd-invite").value.trim(),done_text:$("gd-done").value.trim(),
-   video_url:$("gd-video").value.trim(),doc_url:$("gd-doc").value.trim(),note:$("gd-note").value.trim()};
+  const v={invite_text:$("gd-invite").value.trim(),done_text:$("gd-done").value.trim(),note:$("gd-note").value.trim()};
   const b=$("gd-save");b.disabled=true;
   const {error}=await sb.from("app_settings").upsert({key:"join_guide",value:v,updated_at:new Date().toISOString(),updated_by:me.id});
   b.disabled=false;
@@ -4621,6 +4702,66 @@ function bindPage(){
   appSettings.join_guide=v;cfgGuide={...v};
   toast("入社案内・マニュアルの設定を保存しました");render();
  };
+ if($("gd-pvstore"))$("gd-pvstore").onchange=()=>{gdPreviewStore=$("gd-pvstore").value;render()};
+ // v2.6.58 マニュアル一覧
+ if($("set-manuals"))$("set-manuals").onclick=()=>{setMode="manualitems";render()};
+ if($("mback"))$("mback").onclick=()=>{setMode="guide";render()};
+ if($("m-file"))$("m-file").onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  const url=await uploadManualFile(f,$("m-filelabel"));
+  if(url)$("m-url").value=url; // 全体は再描画しない（入力中の名前欄などが消えるのを防ぐ）
+ };
+ document.querySelectorAll("[data-mfile]").forEach(inp=>inp.onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  const id=inp.dataset.mfile;
+  const url=await uploadManualFile(f,inp.closest("label"));
+  if(!url)return;
+  const {error}=await sb.from("manual_items").update({url,updated_by:me.id,updated_at:new Date().toISOString()}).eq("id",id);
+  if(error){toast("保存エラー: "+error.message,true);return}
+  const m=(manualItems||[]).find(x=>x.id===id);if(m)m.url=url;
+  toast("ファイルを差し替えました");render();
+ });
+ if($("m-add"))$("m-add").onclick=async()=>{
+  const label=$("m-label").value.trim();
+  if(!label){toast("名前を入力してください",true);return}
+  const url=$("m-url").value.trim();
+  const icon=$("m-icon").value,storeId=$("m-store").value||null;
+  mAddIcon=icon;mAddStore=storeId||"";
+  $("m-add").disabled=true;
+  const {data,error}=await sb.from("manual_items").insert({label,url:url||null,icon,store_id:storeId,updated_by:me.id}).select().single();
+  $("m-add").disabled=false;
+  if(error){toast("追加エラー: "+error.message,true);return}
+  manualItems=(manualItems||[]).concat([data]);
+  toast(url?"マニュアルを追加しました":"マニュアルを追加しました（URLは後で入力できます）");render();
+ };
+ document.querySelectorAll("[data-msave]").forEach(b=>b.onclick=async()=>{
+  const id=b.dataset.msave;
+  const label=document.querySelector(`[data-mlabel="${id}"]`).value.trim();
+  const url=document.querySelector(`[data-murl="${id}"]`).value.trim();
+  const icon=document.querySelector(`[data-micon="${id}"]`).value;
+  if(!label){toast("名前を入力してください",true);return}
+  b.disabled=true;
+  const {error}=await sb.from("manual_items").update({label,url:url||null,icon,updated_by:me.id,updated_at:new Date().toISOString()}).eq("id",id);
+  b.disabled=false;
+  if(error){toast("保存エラー: "+error.message,true);return}
+  const m=(manualItems||[]).find(x=>x.id===id);if(m){m.label=label;m.url=url;m.icon=icon}
+  toast("保存しました");render();
+ });
+ document.querySelectorAll("[data-mtoggle]").forEach(b=>b.onclick=async()=>{
+  const id=b.dataset.mtoggle,on=b.dataset.on!=="1";
+  const {error}=await sb.from("manual_items").update({is_active:on,updated_by:me.id,updated_at:new Date().toISOString()}).eq("id",id);
+  if(error){toast("変更できませんでした: "+error.message,true);return}
+  const m=(manualItems||[]).find(x=>x.id===id);if(m)m.is_active=on;
+  toast(on?"再開しました":"停止しました（届かなくなります）");render();
+ });
+ document.querySelectorAll("[data-mdel]").forEach(b=>b.onclick=async()=>{
+  const id=b.dataset.mdel;
+  if(!confirm("このマニュアルを削除します。よろしいですか？（停止するだけなら「停止」ボタンをお使いください）"))return;
+  const {error}=await sb.from("manual_items").delete().eq("id",id);
+  if(error){toast("削除エラー: "+error.message,true);return}
+  manualItems=(manualItems||[]).filter(x=>x.id!==id);
+  toast("削除しました");render();
+ });
  if($("set-fmt"))$("set-fmt").onclick=()=>{setMode="fmt";cfgFmts=JSON.parse(JSON.stringify(appSettings.formats||{}));render()};
  // v2.5.8 応募フォームの項目設定
  if($("set-apply"))$("set-apply").onclick=()=>{setMode="apply";cfgApply=null;applyKeyEdit="al";render()};
@@ -4738,7 +4879,7 @@ function bindPage(){
   if(error){toast("テスト失敗: "+error.message,true);return}
   toast(String(data||"送信しました"));
  };
- if($("setback"))$("setback").onclick=()=>{setMode="main";permMatrix=null;permUserSel=null;permUserVals=null;cfgApply=null;lrEdit=null;cfgGuide=null;render()};
+ if($("setback"))$("setback").onclick=()=>{setMode="main";permMatrix=null;permUserSel=null;permUserVals=null;cfgApply=null;lrEdit=null;cfgGuide=null;manualItems=null;render()};
  // v2.4 権限設定
  if($("set-perm"))$("set-perm").onclick=()=>{setMode="perm";permMatrix=null;permUserSel=null;permUserVals=null;render()};
  document.querySelectorAll(".chip[data-pf]").forEach(c=>c.onclick=()=>{

@@ -1551,12 +1551,9 @@ async function dashPanelHtml(){
  const yStr=y.toISOString().slice(0,10);
  const mStart=yStr.slice(0,7)+"-01";
  const {act,tgt,tm}=await fetchDashRange(storeIds,mStart,yStr,[mStart]);
- if(!act.length)return "";
  const multi=storeIds.length>1;
  const storeRows=(me.stores||[]).map(s=>{
-  const sAct=act.filter(x=>x.store_id===s.id);
-  if(!sAct.length)return ""; // この店舗はまだデータが無い
-  const sTgt=tgt.filter(x=>x.store_id===s.id),sTm=tm.filter(x=>x.store_id===s.id);
+  const sAct=act.filter(x=>x.store_id===s.id),sTgt=tgt.filter(x=>x.store_id===s.id),sTm=tm.filter(x=>x.store_id===s.id);
   const yestAct=sAct.filter(x=>x.biz_date===yStr),yestTgt=sTgt.filter(x=>x.biz_date===yStr);
   const flTgt=dashFlTargetPct(sTm);
   return `<div style="${multi?"border-top:1px solid var(--line);padding-top:6px;margin-top:6px":""}">
@@ -1565,12 +1562,25 @@ async function dashPanelHtml(){
    ${dashRowLine("当月累計",dashSum(sAct,"sales"),dashSum(sTgt,"sales_target"),dashFlPct(dashSum(sAct,"cost"),dashSum(sAct,"labor"),dashSum(sAct,"sales")),flTgt)}
   </div>`;
  }).join("");
- if(!storeRows)return "";
  const title=multi?"所属店舗":esc((me.stores[0]||{}).name||"");
- return `<div class="card" style="background:#f7fafc"><h3 style="margin:0">📊 ${title} の売上・FL</h3>${storeRows}
+ // v2.6.72 データが無くてもパネル自体は出す（「取り込む」ボタンを押せるように）
+ return `<div class="card" style="background:#f7fafc"><h3 style="margin:0">📊 ${title} の売上・FL</h3>
+  <p style="margin:6px 0 10px"><button class="btn sm sub" id="dash-refetch" type="button">🔄 取り込む（最新の売上・目標を再取得）</button></p>
+  ${storeRows||`<p class="muted" style="margin:0">まだ売上データがありません（自動連携は毎日14:00に実行されます。上の「取り込む」で今すぐ試せます）</p>`}
   <p class="muted" style="margin:8px 0 0;font-size:11px">FL＝原価＋人件費（売上に対する割合）。売上ダッシュボードのデータを1日1回取り込んだものです</p></div>`;
 }
 // v2.6.68 日報の一覧から開いた「詳細」画面でも、その日報の店舗・日付を基準に前日・当月累計を見せる
+// v2.6.73 チーム長の日報・週報は、その日報が付いている店舗1つだけでなく、
+//   担当店舗（team_stores）全部の売上・FLを見せる（現場に出た店舗だけに限定されないように）
+async function authorStoreIds(r){
+ if(r.author&&r.author.role==="TEAM"&&r.author.team_id){
+  try{
+   const {data:ts}=await sb.from("team_stores").select("store_id").eq("team_id",r.author.team_id);
+   if(ts&&ts.length)return [...new Set(ts.map(x=>x.store_id))];
+  }catch(e){}
+ }
+ return [r.store_id];
+}
 async function dashPanelForReport(r){
  if(!me||me.role==="AL"||me.role==="GAIHAN")return "";
  if(!r||r.kind!=="daily"||!r.store_id||!r.report_date)return "";
@@ -1578,14 +1588,22 @@ async function dashPanelForReport(r){
  d.setUTCDate(d.getUTCDate()-1);
  const yStr=d.toISOString().slice(0,10);
  const mStart=yStr.slice(0,7)+"-01";
- const {act,tgt,tm}=await fetchDashRange([r.store_id],mStart,yStr,[mStart]);
- if(!act.length)return "";
- const flTgt=dashFlTargetPct(tm);
- const yestAct=act.filter(x=>x.biz_date===yStr),yestTgt=tgt.filter(x=>x.biz_date===yStr);
- const sname=(stores.find(s=>s.id===r.store_id)||{}).name||"";
- return `<div class="card" style="background:#f7fafc"><h3 style="margin:0">📊 ${esc(sname)} の売上・FL</h3>
-  ${dashRowLine("前日（"+fmtDate(yStr)+"）",dashSum(yestAct,"sales"),dashSum(yestTgt,"sales_target"),dashFlPct(dashSum(yestAct,"cost"),dashSum(yestAct,"labor"),dashSum(yestAct,"sales")),flTgt)}
-  ${dashRowLine("当月累計",dashSum(act,"sales"),dashSum(tgt,"sales_target"),dashFlPct(dashSum(act,"cost"),dashSum(act,"labor"),dashSum(act,"sales")),flTgt)}
+ const storeIds=await authorStoreIds(r);
+ const {act,tgt,tm}=await fetchDashRange(storeIds,mStart,yStr,[mStart]);
+ const multi=storeIds.length>1;
+ const storeRows=storeIds.map(sid=>{
+  const sname=(stores.find(s=>s.id===sid)||{}).name||"";
+  const sAct=act.filter(x=>x.store_id===sid),sTgt=tgt.filter(x=>x.store_id===sid),sTm=tm.filter(x=>x.store_id===sid);
+  const yestAct=sAct.filter(x=>x.biz_date===yStr),yestTgt=sTgt.filter(x=>x.biz_date===yStr);
+  const flTgt=dashFlTargetPct(sTm);
+  return `<div style="${multi?"border-top:1px solid var(--line);padding-top:6px;margin-top:6px":""}">
+   ${multi?`<p style="margin:0;font-size:13px;font-weight:600">🏪 ${esc(sname)}</p>`:""}
+   ${dashRowLine("前日（"+fmtDate(yStr)+"）",dashSum(yestAct,"sales"),dashSum(yestTgt,"sales_target"),dashFlPct(dashSum(yestAct,"cost"),dashSum(yestAct,"labor"),dashSum(yestAct,"sales")),flTgt)}
+   ${dashRowLine("当月累計",dashSum(sAct,"sales"),dashSum(sTgt,"sales_target"),dashFlPct(dashSum(sAct,"cost"),dashSum(sAct,"labor"),dashSum(sAct,"sales")),flTgt)}
+  </div>`;
+ }).join("");
+ const title=multi?"担当店舗":(stores.find(s=>s.id===r.store_id)||{}).name||"";
+ return `<div class="card" style="background:#f7fafc"><h3 style="margin:0">📊 ${esc(title)} の売上・FL</h3>${storeRows}
   <p class="muted" style="margin:8px 0 0;font-size:11px">この日報の日付（${fmtDate(r.report_date)}）を基準にした前日・当月累計です</p></div>`;
 }
 // v2.6.69 週報の対象期間は「火〜月」。含まれる日付から、直近に終わった（＝今日より前の）月曜を
@@ -1694,28 +1712,33 @@ async function weeklyDashPanelHtml(){
   ${await nextWeekTargetHtml(weekEnd)}`;
 }
 // 週報の詳細画面用。その週報が対象にしている週（report_dateから逆算）でスコアカードを作る
+// v2.6.73 チーム長は担当店舗（team_stores）ぶん全部をカードで並べる
 async function weeklyDashPanelForReport(r){
  if(!me||me.role==="AL"||me.role==="GAIHAN")return "";
  if(!r||r.kind!=="weekly"||!r.store_id||!r.report_date)return "";
  const {weekStart,weekEnd}=weekRangeFor(r.report_date);
  const ymList=ymListFor(weekStart,weekEnd);
- const [{act,tgt,tm},extra]=await Promise.all([fetchDashRange([r.store_id],weekStart,weekEnd,ymList),fetchDashExtra([r.store_id],ymList)]);
- const sname=(stores.find(s=>s.id===r.store_id)||{}).name||"";
- const costAct=dashFlPct(dashSum(act,"cost"),0,dashSum(act,"sales"));
+ const storeIds=await authorStoreIds(r);
+ const [{act,tgt,tm},extra]=await Promise.all([fetchDashRange(storeIds,weekStart,weekEnd,ymList),fetchDashExtra(storeIds,ymList)]);
  const ans=r.answers||{};
- const k=base=>scoreKey(base,r.store_id);
- const card=weeklyScorecardHtml(sname,{
-  salesAct:act.length?dashSum(act,"sales"):null, salesTgt:tgt.length?dashSum(tgt,"sales_target"):null,
-  costAct:act.length?costAct:null, costTgt:tm.length?Math.round(dashSum(tm,"cost_rate")/tm.length*10)/10:null, // 月をまたぐ週は平均
-  paBudget:ans[k("paBudget")], paActual:ans[k("paActual")],
-  reviewBudget:ans[k("reviewBudget")], reviewActual:ans[k("reviewActual")],
-  diniiBudget:ans[k("diniiBudget")], diniiActual:ans[k("diniiActual")],
- },false);
+ const cards=storeIds.map(sid=>{
+  const sname=(stores.find(s=>s.id===sid)||{}).name||"";
+  const sAct=act.filter(x=>x.store_id===sid),sTgt=tgt.filter(x=>x.store_id===sid),sTm=tm.filter(x=>x.store_id===sid);
+  const costAct=dashFlPct(dashSum(sAct,"cost"),0,dashSum(sAct,"sales"));
+  const k=base=>scoreKey(base,sid);
+  return weeklyScorecardHtml(sname,{
+   salesAct:sAct.length?dashSum(sAct,"sales"):null, salesTgt:sTgt.length?dashSum(sTgt,"sales_target"):null,
+   costAct:sAct.length?costAct:null, costTgt:sTm.length?Math.round(dashSum(sTm,"cost_rate")/sTm.length*10)/10:null, // 月をまたぐ週は平均
+   paBudget:ans[k("paBudget")], paActual:ans[k("paActual")],
+   reviewBudget:ans[k("reviewBudget")], reviewActual:ans[k("reviewActual")],
+   diniiBudget:ans[k("diniiBudget")], diniiActual:ans[k("diniiActual")],
+  },false);
+ }).join("");
  const nextH=(ans.nextPaTarget||ans.nextReviewTarget||ans.nextDiniiTarget)
   ?`<div class="card"><h3 style="margin:0 0 8px">🎯 次週目標</h3><p style="font-size:13px;line-height:1.9;margin:0">
     PA時間数: ${ans.nextPaTarget??"—"}h／Google口コミ数: ${ans.nextReviewTarget??"—"}／ダイニー点数: ${ans.nextDiniiTarget??"—"}</p></div>`
   :"";
- return `<h3 style="margin:14px 0 0">📊 週報スコアカード（${fmtDate(weekStart)}〜${fmtDate(weekEnd)}）</h3>${card}${nextH}`;
+ return `<h3 style="margin:14px 0 0">📊 週報スコアカード（${fmtDate(weekStart)}〜${fmtDate(weekEnd)}）</h3>${cards}${nextH}`;
 }
 // v2.6.71 次週目標（PA時間数・Google口コミ数・ダイニー点数は手入力）。書く画面でだけ出す
 async function nextWeekTargetHtml(thisWeekEnd){
@@ -3994,7 +4017,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.71</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.73</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -4472,7 +4495,15 @@ function bindPage(){
  if($("logoutbtn"))$("logoutbtn").onclick=async()=>{await sb.auth.signOut();me=null;renderLogin()};
  if($("submitbtn"))$("submitbtn").onclick=submitReport;
  if($("savedraft"))$("savedraft").onclick=saveDraft;
- if($("dash-refetch"))$("dash-refetch").onclick=()=>{collectForm();toast("取り込んでいます…");render()}; // v2.6.71 週報スコアカードの再取得
+ if($("dash-refetch"))$("dash-refetch").onclick=async()=>{ // v2.6.72 日報・週報スコアカードの再取得
+  collectForm(); // 入力中の内容を消さないよう先に拾っておく
+  $("dash-refetch").disabled=true;$("dash-refetch").textContent="取り込んでいます…";
+  if(["CEO","HQ","TEAM","TENCHO"].includes(me.role)){ // v2.6.72 社長・本部・チーム長・店長は、その場で売上ダッシュボードから最新を取りに行ける
+   const r=await dashFn({action:"sync_now"});
+   if(!r.ok)toast("同期できませんでした: "+(r.error||"不明"),true);
+  }
+  render();
+ };
  // 入力ウィジェット
  document.querySelectorAll(".stars[data-fk] span").forEach(s=>s.onclick=()=>{
   const fk=s.parentElement.dataset.fk,n=+s.dataset.n;form[fk]=n;

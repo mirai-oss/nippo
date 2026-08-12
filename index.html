@@ -317,6 +317,7 @@ let myProf=null,auRole="",auState="",auStore=""; // v2.6.0
 let ivSkipSm=false; // v2.6.1
 let joinGender=null; // v2.6.7
 let cwToken=null,smUrlTpl=null; // v2.6.9 Chatwork・スマレジURL
+let ekispertKey=null,fareCache={}; // v2.6.66 交通費の自動計算（駅すぱあと）
 let lineToken=null,lineSecret=null,lineOa=null; // v2.6.20 求人用LINE
 let dashId=null,dashPw=null,dashLog; // v2.6.57 売上ダッシュボード連携
 let teams=[],euTeam=null,lrList=null,lrEdit=null; // v2.6.2 チーム・日報Lark通知
@@ -325,6 +326,7 @@ const LARK_EVENTS={
  report_daily:"日報が提出された",
  report_weekly:"週報が提出された",
  applicant_new:"応募が入った",
+ applicant_message:"応募者からメッセージが届いた", // v2.6.65 「応募が入った」と別々に宛先を選べるようにした
  join_registered:"入社登録が完了した",
  task_assigned:"タスクが割り当てられた",
  report_comment:"日報にコメントがついた",
@@ -639,6 +641,7 @@ const hintLine=t=>t?`<p class="muted" style="margin:2px 0 6px;font-size:12px">${
 // ===== 初期化 =====
 const inviteToken=new URLSearchParams(location.search).get("invite");
 const applyKey=new URLSearchParams(location.search).get("apply"); // v2.5 応募フォーム
+const openApplicant=new URLSearchParams(location.search).get("a"); // v2.6.64 応募者詳細への直接リンク（採用担当同士で共有する用。ログインは必要）
 async function init(){
  if(applyKey){await renderApply();return}
  if(inviteToken){await renderJoin();return}
@@ -910,7 +913,9 @@ async function renderJoin(){
 // 設定されていない・失敗した場合は空を返し、手で貼り付ける運用に落ちる
 let gasCfg=null;
 // v2.6.38 どこで止まったかをはっきり返す（黙って諦めない）
-async function meetIssue(name,iso,eventId){
+// v2.6.64 mode/place/address/interviewer を足した（対面のときの場所・カレンダーの予定名に使う）
+async function meetIssue(name,iso,eventId,opts){
+ opts=opts||{};
  if(gasCfg===null){
   const {data,error}=await sb.rpc("gas_config");
   if(error){gasCfg=false;return{ok:false,why:"データベースが未対応",
@@ -925,6 +930,7 @@ async function meetIssue(name,iso,eventId){
    body:JSON.stringify({key:gasCfg.key,action:"meet",name:name||"接続テスト",start:iso,minutes:30,
     event_id:eventId||"", // v2.6.39 あれば作り直さず日時だけ直す（MeetのURLが変わらない）
     calendar_id:gasCfg.cal||"primary", // v2.6.42 面接専用カレンダーに作る
+    mode:opts.mode||"online",place:opts.place||"",address:opts.address||"",interviewer:opts.interviewer||"", // v2.6.64
     note:"nippo の応募者管理から作成"})});
  }catch(e){return{ok:false,why:"GASに届かない",
   msg:"GASのウェブアプリに接続できませんでした。デプロイ設定の「アクセスできるユーザー＝全員」と、URLの末尾が /exec になっているかをご確認ください。"}}
@@ -933,6 +939,8 @@ async function meetIssue(name,iso,eventId){
  if(!j)return{ok:false,why:"返事が読めない",
   msg:"GASからログイン画面のようなものが返ってきました。デプロイ設定の「アクセスできるユーザー＝全員」をご確認ください。（先頭: "+txt.slice(0,80)+"）"};
  if(!j.ok)return{ok:false,why:"GAS側で失敗",msg:j.error||"不明なエラー"};
+ // v2.6.64 対面のときはMeetのURLが無いのが正常（場所を予定に入れられていれば成功）
+ if(opts.mode==="onsite")return{ok:true,url:"",event_id:j.event_id||"",updated:!!j.updated};
  if(!j.url)return{ok:false,why:"URLが空",
   msg:"予定は作られましたが、Meetのリンクが返りませんでした。GASの「サービス」に Google Calendar API があるかご確認ください。"};
  return{ok:true,url:j.url,event_id:j.event_id||"",updated:!!j.updated};
@@ -945,20 +953,31 @@ async function saveEventId(id,evid){
  // v2.6.40 ここで失敗すると「日時を変えてもカレンダーが直らない」原因になるので黙って捨てない
  if(error)lastMeetError="カレンダーの予定の番号を保存できませんでした。SQLの v2_6_37 が未実行かもしれません（"+error.message+"）";
 }
-// v2.6.39 面接URLを用意する。日時が変わったときはカレンダーの予定も直す
-// 返り値: {url, event_id}（発行できなければ url は空）
-async function makeMeet(a,iso){
- const evid=(a&&a.interview_event_id)||"";
+// v2.6.64 予定を1つ削除する（オンライン⇔対面の切り替えで、古い予定を作り直す前に使う）
+async function gasDeleteEvent(evid){
+ if(!evid)return;
+ try{
+  if(gasCfg===null){const {data}=await sb.rpc("gas_config");gasCfg=data||false}
+  if(gasCfg&&gasCfg.url)await fetch(gasCfg.url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},
+   body:JSON.stringify({key:gasCfg.key,action:"delete_event",event_id:evid,calendar_id:gasCfg.cal||"primary"})});
+ }catch(e){}
+}
+// v2.6.39 面接の予定（Meet／対面）を用意する。日時が変わったときはカレンダーの予定も直す
+// v2.6.64 opts.forceNew を立てると、既存の予定を流用せず新しく作る（オンライン⇔対面の切り替え用）
+// 返り値: {url, event_id}（オンラインで発行できなければ url は空／対面はもともと url なし）
+async function makeMeet(a,iso,opts){
+ opts=opts||{};
  // v2.6.41 「日時が変わったか」を見て判断するのはやめた。
  //   一覧の日時欄は変更した瞬間に保存されるため、確定を押す頃には
  //   「変わっていない」と判定されてしまい、カレンダーを直しに行かなかった。
  //   予定の番号があるときは毎回その予定に日時を合わせに行く（同じ日時なら何も起きない）。
- const r=await meetIssue(a&&a.name,iso,evid);
+ const evid=opts.forceNew?"":((a&&a.interview_event_id)||"");
+ const r=await meetIssue(a&&a.name,iso,evid,opts);
  if(!r.ok){
   // v2.6.40 消えてしまわないよう、応募者カードにも残す
   lastMeetError=`${r.why}: ${r.msg}`;
-  toast(`面接URLを発行できません（${r.why}）: ${r.msg}`,true);
-  return{url:(a&&a.interview_url)||"",event_id:evid};
+  toast(`カレンダーの予定を作成できません（${r.why}）: ${r.msg}`,true);
+  return{url:opts.mode==="onsite"?"":((a&&a.interview_url)||""),event_id:evid};
  }
  lastMeetError="";
  return{url:r.url,event_id:r.event_id||evid,updated:!!r.updated};
@@ -1270,7 +1289,7 @@ async function updateDots(){ // v1.7 未読通知バッジ（ホーム=自分宛
  try{
   const {data:ns}=await sb.from("notifications").select("id,type").eq("recipient_id",me.id).is("read_at",null).limit(100);
   const joins=(ns||[]).filter(n=>n.type==="join_registered").length;
-  const recs=(ns||[]).filter(n=>n.type==="applicant_new").length; // v2.5.2 応募通知は応募タブへ
+  const recs=(ns||[]).filter(n=>n.type==="applicant_new"||n.type==="applicant_message").length; // v2.5.2 応募通知は応募タブへ／v2.6.65 メッセージも同じ扱い
   const reps=(ns||[]).filter(n=>n.type==="report_new"||n.type==="report_updated").length; // v2.6.28 日報通知は一覧タブへ
   const others=(ns||[]).length-joins-recs-reps;
   const set=(el,n)=>{if(!el)return;if(n>0){el.textContent=n>99?"99+":n;el.style.display=""}else el.style.display="none"};
@@ -1349,7 +1368,10 @@ async function loadMe(uid){
  appSettings={};(as||[]).forEach(r=>appSettings[r.key]=r.value);
  const fmap={};(rfeat||[]).forEach(x=>fmap[x.feature]=x.allowed);(ufeat||[]).forEach(x=>fmap[x.feature]=x.allowed);
  me={...u,stores:stores.filter(s=>myIds.includes(s.id)),features:fmap};
- page="home";await render();
+ // v2.6.64 応募者詳細への直接リンクで開いたときは、ホームではなくその応募者の詳細を開く
+ if(openApplicant&&can("recruit")){page="recruit";rcDetail=openApplicant}else{page="home"}
+ if(openApplicant)history.replaceState({},"",location.pathname); // 開いたらURLのパラメータは消す（再読み込みで毎回同じ人が開かないように）
+ await render();
 }
 
 // ===== ログイン =====
@@ -1450,7 +1472,7 @@ async function homeView(){
  await fetchToday();
  const [{count},{data:myNtf}]=await Promise.all([
   sb.from("reports").select("id",{count:"exact",head:true}),
-  sb.from("notifications").select("*").eq("recipient_id",me.id).is("read_at",null).neq("type","join_registered").neq("type","applicant_new").neq("type","report_new").neq("type","report_updated").order("created_at",{ascending:false}).limit(10) // v2.6.28 日報の通知は一覧タブの赤バッジで見せるためホームからは外す
+  sb.from("notifications").select("*").eq("recipient_id",me.id).is("read_at",null).neq("type","join_registered").neq("type","applicant_new").neq("type","applicant_message").neq("type","report_new").neq("type","report_updated").order("created_at",{ascending:false}).limit(10) // v2.6.28 日報の通知は一覧タブの赤バッジで見せるためホームからは外す／v2.6.65 メッセージ通知も応募タブへ
  ]);
  let h=`<h2>こんにちは、${esc(me.name)}さん</h2>`;
  if(me.stores.length)h+=`<p class="muted" style="margin-top:-8px">所属: ${me.stores.map(s=>esc(s.name)).join("・")}</p>`;
@@ -2464,8 +2486,12 @@ async function adminView(){
  adminUsers.sort((a,b)=>(order[a.role]??9)-(order[b.role]??9)||a.name.localeCompare(b.name,"ja"));
  const sname=id=>{const s=stores.find(x=>x.id===id);return s?s.name:""};
  let h=`<h2>従業員管理</h2>`;
- (ntfs||[]).forEach(n=>{h+=`<div class="info" style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><span>🔔 ${esc((n.body_i18n&&n.body_i18n.ja)||"")}<br><span class="muted">${new Date(n.created_at).toLocaleString("ja-JP")}</span></span><button class="btn sm sub" data-ntfread="${n.id}" style="flex-shrink:0">既読</button></div>`});
- if(lastIssued){h+=`<div class="info">✅ <b>${esc(lastIssued.name)}</b>さんのアカウントを発行しました。<br>ログインID: <b>${esc(lastIssued.email)}</b><br>初期パスワード: <b>${esc(lastIssued.pw)}</b><br>※この情報を本人に伝えてください（再表示されません）</div>`}
+ // v2.6.64 通知の名前をタップしたら、その方の詳細が開くようにする（見た目はそのまま、押せる場所を足しただけ）
+ (ntfs||[]).forEach(n=>{
+  const uid=(n.link&&n.link.user_id)||"";
+  h+=`<div class="info" data-au="${uid}" style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start${uid?";cursor:pointer":""}"><span>🔔 ${esc((n.body_i18n&&n.body_i18n.ja)||"")}<br><span class="muted">${new Date(n.created_at).toLocaleString("ja-JP")}</span>${uid?'　<span class="muted">（タップで詳細）</span>':""}</span><button class="btn sm sub" data-ntfread="${n.id}" style="flex-shrink:0">既読</button></div>`
+ });
+ if(lastIssued){h+=`<div class="info" data-au="${lastIssued.id||""}" style="${lastIssued.id?"cursor:pointer":""}">✅ <b>${esc(lastIssued.name)}</b>さんのアカウントを発行しました。<br>ログインID: <b>${esc(lastIssued.email)}</b><br>初期パスワード: <b>${esc(lastIssued.pw)}</b><br>※この情報を本人に伝えてください（再表示されません）${lastIssued.id?'<br><span class="muted">（タップで詳細）</span>':""}</div>`}
  if(can("staff_admin"))h+=`<button class="btn" id="adinvite">🔗 招待リンクを発行（入社者が自分で登録）</button>
   <button class="btn sub" id="adnew">＋ 入社処理（本部が代理で発行）</button>
   <button class="btn sub" id="adsmaregi">📇 スマレジ登録スタッフ一覧</button>`;
@@ -2804,7 +2830,7 @@ async function rcMarkFormSeen(id){ // v2.6.31 自分が開いた記録だけを�
  // v2.6.44 この応募者あての通知だけを既読にする（応募・LINE連携・メッセージ）
  try{
   await sb.from("notifications").update({read_at:new Date().toISOString()})
-   .eq("recipient_id",me.id).eq("type","applicant_new").is("read_at",null)
+   .eq("recipient_id",me.id).in("type",["applicant_new","applicant_message"]).is("read_at",null) // v2.6.65 メッセージ通知も分けたので両方
    .eq("link->>applicant_id",id);
   updateDots();
  }catch(e){}
@@ -2849,6 +2875,20 @@ async function dashFn(body){
   return j;
  }catch(e){
   return {ok:false,error:"売上ダッシュボード連携の受け口（dash-sync）に届きませんでした"};
+ }
+}
+// v2.6.66 交通費の自動計算（駅すぱあと）を呼ぶ
+async function ekiFn(body){
+ try{
+  const {data:{session}}=await sb.auth.getSession();
+  const res=await fetch(SUPA_URL+"/functions/v1/ekispert-fare",{method:"POST",
+   headers:{Authorization:"Bearer "+(session?session.access_token:SUPA_KEY),apikey:SUPA_KEY,"Content-Type":"application/json"},
+   body:JSON.stringify(body)});
+  const j=await res.json().catch(()=>({}));
+  if(!res.ok&&!j.error)j.error=res.status===404?"交通費計算の受け口（ekispert-fare）がまだ作られていません":"サーバーの応答: "+res.status;
+  return j;
+ }catch(e){
+  return {ok:false,error:"交通費計算の受け口（ekispert-fare）に届きませんでした"};
  }
 }
 // v2.6.17 招待リンクを本人に送る。端末の共有メニュー（LINE・SMS・メールなど）を開く
@@ -2901,7 +2941,8 @@ function recruitDetailView(){
  <span class="badge" style="background:${APPLICANT_COLOR[a.status]||"#666"};color:#fff">${APPLICANT_STATUS[a.status]||esc(a.status||"")}</span>
  ・🏪 ${a.store_id?esc(rcStoreName(a)):'<span style="color:var(--red)">店舗未設定</span>'}
  ・${form?esc(form.title):esc(a.job_type||"")}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}<br>
- ${a.phone?`📞 <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>　`:""}${a.email?`✉️ ${esc(a.email)}`:""}</p>`;
+ ${a.phone?`📞 <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>　`:""}${a.email?`✉️ ${esc(a.email)}`:""}</p>
+ <p style="margin:-4px 0 8px"><button class="btn sm sub" data-rccopylink="${a.id}" style="margin:0;font-size:12px">🔗 このページのリンクをコピー</button></p>`;
  // v2.6.35 面接の日程調整（希望日時をタップするだけで確定できる）
  h+=`<div class="card"${a.interview_at?'':' style="background:#fffbeb;border-left:4px solid #d97706"'}>
  <details${a.interview_at?"":" open"}><summary style="cursor:pointer"><b style="font-size:15px">📅 面接の日程</b>${a.interview_at?` <span class="muted" style="font-size:11px">（${fmtDue(a.interview_at)}に確定）</span>`:' <span class="muted" style="font-size:11px">（未定）</span>'}</summary>`;
@@ -3250,7 +3291,7 @@ async function smaregiStores(){ // スマレジ店舗一覧（紐付け用）
 async function adminStoresView(){
  if(!stList){
   const {data}=await sb.from("stores").select("*").order("sort_order");
-  stList=(data||[]).map(s=>({id:s.id,name:s.name,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||"",interviewer_id:s.interviewer_id||"",dash_store_name:s.dash_store_name||""}));
+  stList=(data||[]).map(s=>({id:s.id,name:s.name,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||"",interviewer_id:s.interviewer_id||"",dash_store_name:s.dash_store_name||"",nearest_station:s.nearest_station||""})); // v2.6.66 最寄り駅（交通費の自動計算に使う）
   await chatEnsureUsers(); // v2.6.36 面接担当を選ぶため
  }
  if(stSmaregi===undefined)stSmaregi=await smaregiStores();
@@ -3269,6 +3310,8 @@ async function adminStoresView(){
   ${stSmaregi?`<select class="inp" data-stsm="${i}" style="font-size:13px"><option value="">スマレジ店舗と紐付けない</option>${stSmaregi.map(m=>`<option value="${esc(m.id)}" ${s.smaregi_store_id===m.id?"selected":""}>スマレジ: ${esc(m.name)}</option>`).join("")}</select>`:`<p class="muted" style="margin:8px 0 0">スマレジ店舗一覧を取得できませんでした（紐付けは後で設定できます）</p>`}
   <p class="muted" style="margin:8px 0 2px;font-size:12px">📊 売上ダッシュボード側の店舗名（日報・週報の売上表示に使います。空欄なら上の店舗名と同じ名前で自動対応）</p>
   <input type="text" data-stdash="${i}" value="${esc(s.dash_store_name)}" placeholder="例: 鳥一代 はなれ" style="font-size:13px;margin-top:0">
+  <p class="muted" style="margin:8px 0 2px;font-size:12px">🚃 最寄り駅（通勤の交通費を自動計算するときに使います。駅名だけでOK）</p>
+  <input type="text" data-stnearest="${i}" value="${esc(s.nearest_station)}" placeholder="例: 新横浜" style="font-size:13px;margin-top:0">
  </div>`).join("");
  h+=`<div class="card"><h3>＋ 店舗を追加</h3><input type="text" id="st-newname" placeholder="店舗名（例: 鳥一代 渋谷店）"><button class="btn sm" id="st-add">追加する</button><p class="muted">追加すると店舗チャットも自動で作成されます</p></div>
  <button class="btn" id="st-save">この内容で保存する</button>`;
@@ -3280,6 +3323,7 @@ function collectStoresDom(){
  document.querySelectorAll("select[data-stsm]").forEach(s=>stList[+s.dataset.stsm].smaregi_store_id=s.value);
  document.querySelectorAll("select[data-stiv]").forEach(s=>stList[+s.dataset.stiv].interviewer_id=s.value); // v2.6.36
  document.querySelectorAll("input[data-stdash]").forEach(inp=>stList[+inp.dataset.stdash].dash_store_name=inp.value.trim()); // v2.6.57
+ document.querySelectorAll("input[data-stnearest]").forEach(inp=>stList[+inp.dataset.stnearest].nearest_station=inp.value.trim()); // v2.6.66
 }
 async function addStore(){
  const name=$("st-newname").value.trim();
@@ -3288,7 +3332,7 @@ async function addStore(){
  $("st-add").disabled=true;
  const {data:ns,error}=await sb.from("stores").insert({name,sort_order:stList.length+1}).select().single();
  if(error){toast("追加エラー: "+(error.message.includes("duplicate")?"同じ名前の店舗がすでにあります":error.message),true);$("st-add").disabled=false;return}
- stList.push({id:ns.id,name:ns.name,is_active:true,smaregi_store_id:"",interviewer_id:"",dash_store_name:""});
+ stList.push({id:ns.id,name:ns.name,is_active:true,smaregi_store_id:"",interviewer_id:"",dash_store_name:"",nearest_station:""});
  toast("店舗を追加しました（チャットも自動作成）");render();
 }
 async function saveStores(){
@@ -3296,7 +3340,7 @@ async function saveStores(){
  if(stList.some(s=>!s.name)){toast("店舗名を入力してください",true);return}
  $("st-save").disabled=true;
  for(const [i,s] of stList.entries()){
-  const {error}=await sb.from("stores").update({name:s.name,sort_order:i+1,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||null,interviewer_id:s.interviewer_id||null,dash_store_name:s.dash_store_name||null}).eq("id",s.id);
+  const {error}=await sb.from("stores").update({name:s.name,sort_order:i+1,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||null,interviewer_id:s.interviewer_id||null,dash_store_name:s.dash_store_name||null,nearest_station:s.nearest_station||null}).eq("id",s.id);
   if(error){toast("保存エラー: "+error.message,true);$("st-save").disabled=false;return}
  }
  const {data:st2}=await sb.from("stores").select("id,name").eq("is_active",true).order("sort_order");
@@ -3414,10 +3458,37 @@ async function adminCreate(){
  if(!name||!email||!nuRole){toast("氏名・メールアドレス・役職は必須です",true);return}
  if(pw.length<8){toast("パスワードは8文字以上にしてください",true);return}
  $("nu-submit").disabled=true;
- const {error}=await sb.rpc("admin_create_user",{p_email:email,p_password:pw,p_name:name,p_role:nuRole,p_store_ids:nuStores});
+ const {data:newId,error}=await sb.rpc("admin_create_user",{p_email:email,p_password:pw,p_name:name,p_role:nuRole,p_store_ids:nuStores});
  if(error){toast("発行エラー: "+error.message,true);$("nu-submit").disabled=false;return}
- lastIssued={name,email,pw};
+ lastIssued={name,email,pw,id:newId||""}; // v2.6.64 idも控えて、あとでタップで詳細を開けるようにする
  adminMode="list";render();
+}
+
+// v2.6.66 交通費（表示専用）。本人の最寄り駅×所属店舗（最初の1つ）の最寄り駅から、押したときだけ計算する
+function fareCardHtml(u,prof){
+ const myStation=(prof.extra&&prof.extra["最寄り駅"])||"";
+ const storeId=(adminStoresMap[u.id]||[])[0];
+ const store=storeId?stores.find(s=>s.id===storeId):null;
+ const storeStation=store&&store.nearest_station;
+ const cached=fareCache[u.id];
+ let body;
+ if(!myStation){
+  body=`<p class="muted" style="margin:0">本人の最寄り駅が入力されていないため計算できません</p>`;
+ }else if(!store){
+  body=`<p class="muted" style="margin:0">所属店舗が未設定のため計算できません</p>`;
+ }else if(!storeStation){
+  body=`<p class="muted" style="margin:0">${esc(store.name)}の最寄り駅が未設定です（管理 →「店舗管理」で登録してください）</p>`;
+ }else if(cached&&cached.ok){
+  body=`<p style="margin:0"><b style="font-size:18px">¥${cached.fare.toLocaleString()}</b>　${esc(cached.from_station)}駅 → ${esc(cached.to_station)}駅（片道・最安）</p>
+   <button class="btn sm sub" data-farecalc="${u.id}" style="margin-top:8px">🔄 計算し直す</button>`;
+ }else if(cached&&!cached.ok){
+  body=`<p class="alert" style="margin:0">${esc(cached.error||"計算できませんでした")}</p>
+   <button class="btn sm sub" data-farecalc="${u.id}" style="margin-top:8px">🔄 もう一度試す</button>`;
+ }else{
+  body=`<p class="muted" style="margin:0 0 8px">${esc(myStation)}駅 → ${esc(storeStation)}駅（${esc(store.name)}）の最安運賃を調べます</p>
+   <button class="btn sm sub" data-farecalc="${u.id}">🔄 交通費を計算する</button>`;
+ }
+ return `<div class="card"><h3>🚃 通勤の交通費（表示専用・自動計算）</h3>${body}</div>`;
 }
 
 async function adminEditView(){
@@ -3435,6 +3506,7 @@ async function adminEditView(){
    入社日: ${prof.hire_date||"—"}<br>${prof.termination_date?`退職日: <b style="color:var(--red)">${prof.termination_date}</b><br>`:""}${prof.extra?Object.entries(prof.extra).map(([k,v])=>Array.isArray(v)?`${esc(k)}: `+v.map((u,x)=>`<a href="${esc(u)}" target="_blank">写真${x+1}</a>`).join(" ")+"<br>":`${esc(k)}: ${esc(v)}<br>`).join(""):""}スマレジ連携: ${smaregi}</p>
    ${prof.smaregi_sync_status!=="synced"?'<button class="btn sm" id="eu-smaregi" style="margin-top:10px">スマレジに再同期する</button>':""}
    ${prof.smaregi_staff_id?'<button class="btn sm sub" id="eu-resend" style="margin-top:10px">通知を送り直す（スマレジのリンク付き）</button>':""}</div>`;
+  h+=fareCardHtml(u,prof); // v2.6.66 交通費の自動計算（表示専用）
   h+=profileEditCard(prof,"ep"); // v2.6.45 入社情報を直せるようにする
  }
  h+=`<div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
@@ -3496,11 +3568,12 @@ async function settingsView(){
   try{const {data}=await sb.rpc("gas_config");gasSaved=!!(data&&data.url);gasCalNow=(data&&data.cal&&data.cal!=="primary")?data.cal:""}catch(e){gasSaved=false}
  }
  if(isAdmin()&&larkUrl===null){ // v2.5.8／v2.6.9
-  const {data:ss}=await sb.from("app_secrets").select("key,value").in("key",["lark_webhook","chatwork_token","smaregi_staff_url","line_channel_token","line_channel_secret","line_oa_id","dash_id","dash_pw"]);
+  const {data:ss}=await sb.from("app_secrets").select("key,value").in("key",["lark_webhook","chatwork_token","smaregi_staff_url","line_channel_token","line_channel_secret","line_oa_id","dash_id","dash_pw","ekispert_key"]);
   const m={};(ss||[]).forEach(x=>m[x.key]=x.value||"");
   larkUrl=m.lark_webhook||"";cwToken=m.chatwork_token||"";smUrlTpl=m.smaregi_staff_url||"";
   lineToken=m.line_channel_token||"";lineSecret=m.line_channel_secret||"";lineOa=m.line_oa_id||""; // v2.6.20
   dashId=m.dash_id||"";dashPw=m.dash_pw||""; // v2.6.57 売上ダッシュボード連携
+  ekispertKey=m.ekispert_key||""; // v2.6.66 交通費の自動計算
  }
  if(isAdmin()&&dashLog===undefined){ // v2.6.57 前回の同期結果
   try{const {data}=await sb.from("dash_sync_log").select("ran_at,ok,detail").order("ran_at",{ascending:false}).limit(1).maybeSingle();dashLog=data||null}catch(e){dashLog=null}
@@ -3619,6 +3692,15 @@ async function settingsView(){
    <button class="btn sm sub" id="ivp-add" style="margin:0">＋ 面接場所を追加</button>
    <button class="btn sm" id="ivp-save" style="margin:8px 0 0">この内容で保存する</button></div>`;
  }
+ // v2.6.66 交通費の自動計算（駅すぱあと）。入社者と店舗、それぞれの最寄り駅から最安運賃を調べる
+ if(isAdmin()){
+  h+=`<div class="card"><h3>🚃 交通費の自動計算（駅すぱあと）</h3>
+   <p class="muted" style="margin:0 0 6px">従業員管理の入社情報に、<b>最寄り駅どうしの最安片道運賃</b>を表示用として出せるようにします（給与・時給には使いません）。<br>
+   駅すぱあと（ekispert）の無料APIキーが必要です。<a href="https://api.ekispert.jp" target="_blank">api.ekispert.jp</a> でアカウント登録し、発行されたアクセスキーを貼り付けてください。<br>
+   店舗ごとの最寄り駅は 管理 →「店舗管理」で登録します。</p>
+   <input type="password" id="eki-key" placeholder="${ekispertKey?"（設定済み。変更する場合のみ入力）":"駅すぱあとのアクセスキー"}" autocomplete="off">
+   <button class="btn sm sub" id="eki-save" style="margin-top:6px">保存する</button></div>`;
+ }
  // v2.6.35 面接のGoogle Meetを自動発行するための接続先（社長・本部のみ）
  if(isAdmin())h+=`<div class="card"><h3>📅 面接Meetの自動発行</h3>
   <p class="muted" style="margin:0 0 6px">面接日時を確定したときに、Google Meet のリンクを自動で作る設定です。<br>
@@ -3650,7 +3732,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.63</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.66</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -4399,6 +4481,12 @@ function bindPage(){
  if($("adstores"))$("adstores").onclick=()=>{adminMode="stores";stList=null;stSmaregi=undefined;lastIssued=null;lastInvite=null;render()};
  // v2.5 応募者管理
  if($("rcback"))$("rcback").onclick=()=>{rcDetail=null;rcMsgs=null;rcSimilar=[];rcPast=[];render()};
+ // v2.6.64 応募者詳細のページへ直接飛べるリンク（社内の採用担当同士で共有する用。開くにはログインが必要）
+ document.querySelectorAll("[data-rccopylink]").forEach(b=>b.onclick=async()=>{
+  const url=location.origin+location.pathname+"?a="+b.dataset.rccopylink;
+  if(navigator.share){try{await navigator.share({title:"応募者の詳細",url});return}catch(e){}}
+  copyText(url);toast("リンクをコピーしました（開くにはログインが必要です）");
+ });
  // v2.6.51 面接場所の登録
  const ivpCollect=()=>{
   const out=[];
@@ -4460,15 +4548,21 @@ function bindPage(){
   // v2.6.40 欄には保存済みのURLが最初から入っている。
   // それを「手で貼った」と誤解して自動発行を飛ばしていたため、日時を変えても予定が直らなかった。
   // 中身を書き換えたときだけ、手入力として扱う
-  // v2.6.51 対面ならMeetは発行しない（オンラインのときだけ）
   const modeEl=document.querySelector(".chip.ivmodepick.on");
   const mode=modeEl?modeEl.dataset.mode:(a.interview_mode||"online");
   const placeName=($("rc-ivplace")&&$("rc-ivplace").value)||"";
   const place=ivPlaceOf(placeName);
   if(mode==="onsite"&&!placeName){toast("面接場所を選んでください",true);return}
-  const manual=field&&field!==(a.interview_url||"");
-  const m=(mode==="onsite")?{url:"",event_id:a.interview_event_id||""}
-        :(manual?{url:field,event_id:a.interview_event_id||""}:await makeMeet(a,iso));
+  const manual=field&&field!==(a.interview_url||"")&&mode!=="onsite";
+  // v2.6.64 面接担当（応募者カードの「担当」欄）の名前をカレンダーの予定名の先頭に入れる
+  const interviewer=a.assignee_id?taskUserName(a.assignee_id):"";
+  const meetOpts={mode,place:placeName,address:(place&&place.address)||"",interviewer};
+  // v2.6.64 対面もカレンダーの予定を作る（場所を入れるため）。
+  //   オンライン⇔対面の切り替えのときは、古い予定（Meetの有無が違う）をいったん消してから作り直す
+  const modeChanged=!!(a.interview_event_id&&a.interview_mode&&a.interview_mode!==mode);
+  if(modeChanged)await gasDeleteEvent(a.interview_event_id);
+  const m=manual?{url:field,event_id:a.interview_event_id||""}
+        :await makeMeet(a,iso,{...meetOpts,forceNew:modeChanged});
   const url=m.url;
   const {error}=await sb.rpc("set_interview",{p_applicant:a.id,p_at:iso,p_url:url||null,
    p_mode:mode,p_place:placeName||null,p_address:(place&&place.address)||null});
@@ -4488,7 +4582,10 @@ function bindPage(){
     toast("確定しましたが、LINEを送れませんでした: "+(r.error||"不明"),true);
    }
   }
-  toast((url?(m.updated?"面接日時を確定し、カレンダーの予定も直しました":"面接日時を確定し、URLを発行しました"):"面接日時を確定しました")+sent);
+  // v2.6.64 対面でも予定は作っている（URLが無いのは正常）ので、event_idの有無で伝える
+  const calMsg=url?(m.updated?"カレンダーの予定も直しました":"URLを発行しました")
+    :(m.event_id?(m.updated?"カレンダーの予定も直しました":"カレンダーに予定を作りました"):"");
+  toast(("面接日時を確定しました"+(calMsg?"／"+calMsg:""))+sent);
   rcList=null;rcSimilar=[];rcPast=[];render();
  };
  document.querySelectorAll("[data-ivpick]").forEach(b=>b.onclick=async()=>{
@@ -4516,13 +4613,7 @@ function bindPage(){
   if(!confirm(`${a.name}さんの面接日時を取り消します。\nGoogleカレンダーの予定も削除します。よろしいですか？`))return;
   $("rc-ivclear").disabled=true;
   // カレンダーの予定も消す（すでに手で消してあっても大丈夫）
-  if(a.interview_event_id){
-   try{
-    if(gasCfg===null){const {data}=await sb.rpc("gas_config");gasCfg=data||false}
-    if(gasCfg&&gasCfg.url)await fetch(gasCfg.url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},
-     body:JSON.stringify({key:gasCfg.key,action:"delete_event",event_id:a.interview_event_id,calendar_id:gasCfg.cal||"primary"})});
-   }catch(e){}
-  }
+  await gasDeleteEvent(a.interview_event_id);
   const {error}=await sb.from("applicants").update({interview_at:null,interview_url:null,
    interview_event_id:null,interview_sent_at:null,
    updated_at:new Date().toISOString(),last_actor_id:me.id,last_actor_at:new Date().toISOString()}).eq("id",a.id);
@@ -4729,7 +4820,7 @@ function bindPage(){
   if(error){$("rc-allread").disabled=false;toast("できませんでした: "+error.message,true);return}
   ids.forEach(id=>rcReads[id]=now);
   try{await sb.from("notifications").update({read_at:now})
-   .eq("recipient_id",me.id).eq("type","applicant_new").is("read_at",null)}catch(e){}
+   .eq("recipient_id",me.id).in("type",["applicant_new","applicant_message"]).is("read_at",null)}catch(e){} // v2.6.65
   toast("すべて見たことにしました");rcList=null;render();
  };
  // v2.6.43 「対応済みにする」（返信で完結する用件のために手動で消せるようにする）
@@ -4871,7 +4962,8 @@ function bindPage(){
  document.querySelectorAll("[data-stdn]").forEach(c=>c.onclick=()=>{collectStoresDom();const i=+c.dataset.stdn;if(i<stList.length-1){[stList[i+1],stList[i]]=[stList[i],stList[i+1]]}render()});
  if($("st-add"))$("st-add").onclick=addStore;
  if($("st-save"))$("st-save").onclick=saveStores;
- document.querySelectorAll("[data-ntfread]").forEach(b=>b.onclick=async()=>{
+ document.querySelectorAll("[data-ntfread]").forEach(b=>b.onclick=async(e)=>{
+  e.stopPropagation(); // v2.6.64 親（名前タップで詳細を開く）に伝わらないようにする
   b.disabled=true;
   const {error}=await sb.from("notifications").update({read_at:new Date().toISOString()}).eq("id",b.dataset.ntfread);
   if(error)toast("エラー: "+error.message,true);
@@ -5071,6 +5163,13 @@ function bindPage(){
   if(error){toast("保存エラー: "+error.message,true);return}
   cwToken=v;$("cw-token").value="";toast("Chatworkトークンを保存しました");render();
  };
+ if($("eki-save"))$("eki-save").onclick=async()=>{ // v2.6.66
+  const v=$("eki-key").value.trim();
+  if(!v){toast("アクセスキーを入力してください",true);return}
+  const {error}=await sb.from("app_secrets").upsert({key:"ekispert_key",value:v,updated_by:me.id,updated_at:new Date().toISOString()});
+  if(error){toast("保存エラー: "+error.message,true);return}
+  ekispertKey=v;fareCache={};$("eki-key").value="";toast("駅すぱあとのキーを保存しました");render();
+ };
  if($("sm-urlsave"))$("sm-urlsave").onclick=async()=>{
   let v=$("sm-url").value.trim();
   let auto=false;
@@ -5174,12 +5273,15 @@ function bindPage(){
   if(error)toast("削除できませんでした: "+error.message,true);else toast("招待を削除しました");
   render();
  });
- document.querySelectorAll(".row[data-au]").forEach(rw=>rw.onclick=()=>{
-  adminDetail=rw.dataset.au;adminMode="edit";
+ const openAdminUser=id=>{
+  adminDetail=id;adminMode="edit";
   const u=adminUsers.find(x=>x.id===adminDetail);
   euRole=u?u.role:null;euStores=[...(adminStoresMap[adminDetail]||[])];euTeam=u?(u.team_id||null):null;
   lastIssued=null;render();
- });
+ };
+ document.querySelectorAll(".row[data-au]").forEach(rw=>rw.onclick=()=>openAdminUser(rw.dataset.au));
+ // v2.6.64 通知・発行直後のカードの名前をタップしても詳細が開くようにする
+ document.querySelectorAll(".info[data-au]").forEach(rw=>{if(rw.dataset.au)rw.onclick=()=>openAdminUser(rw.dataset.au)});
  document.querySelectorAll(".chip.nurole").forEach(c=>c.onclick=()=>{nuRole=c.dataset.r;document.querySelectorAll(".chip.nurole").forEach(x=>x.classList.remove("on"));c.classList.add("on")});
  document.querySelectorAll(".chip.nustore").forEach(c=>c.onclick=()=>{const s=c.dataset.s;nuStores=nuStores.includes(s)?nuStores.filter(x=>x!==s):nuStores.concat([s]);c.classList.toggle("on")});
  document.querySelectorAll(".chip.eurole").forEach(c=>c.onclick=()=>{euRole=c.dataset.r;document.querySelectorAll(".chip.eurole").forEach(x=>x.classList.remove("on"));c.classList.add("on")});
@@ -5197,6 +5299,18 @@ function bindPage(){
   else toast("同期エラー: "+((r&&(r.error&&r.error.title||JSON.stringify(r.error)))||"不明"),true);
   render();
  };
+ document.querySelectorAll("[data-farecalc]").forEach(b=>b.onclick=async()=>{ // v2.6.66
+  const uid=b.dataset.farecalc;
+  b.disabled=true;b.textContent="計算しています…";
+  const u=adminUsers.find(x=>x.id===uid);
+  const storeId=(adminStoresMap[uid]||[])[0];
+  const store=storeId?stores.find(s=>s.id===storeId):null;
+  const {data:prof}=await sb.from("employee_profiles").select("extra").eq("user_id",uid).maybeSingle();
+  const myStation=(prof&&prof.extra&&prof.extra["最寄り駅"])||"";
+  const r=await ekiFn({action:"fare",from:myStation,to:(store&&store.nearest_station)||""});
+  fareCache[uid]=r;
+  render();
+ });
  if($("eu-resend"))$("eu-resend").onclick=async()=>{ // v2.6.14
   $("eu-resend").disabled=true;
   const {data,error}=await sb.rpc("notify_join_resend",{p_user:adminDetail});

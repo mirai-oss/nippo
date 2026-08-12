@@ -327,6 +327,7 @@ const LARK_EVENTS={
  report_weekly:"週報が提出された",
  applicant_new:"応募が入った",
  applicant_message:"応募者からメッセージが届いた", // v2.6.65 「応募が入った」と別々に宛先を選べるようにした
+ checklist_overdue:"チェックの期限切れ", // v2.6.68
  join_registered:"入社登録が完了した",
  task_assigned:"タスクが割り当てられた",
  report_comment:"日報にコメントがついた",
@@ -1364,7 +1365,14 @@ async function loadMe(uid){
   sb.from("role_features").select("feature,allowed").eq("role",u.role),   // v2.4
   sb.from("user_features").select("feature,allowed").eq("user_id",uid)    // v2.4 個人設定が役職より優先
  ]);
- const myIds=(us||[]).map(x=>x.store_id);
+ let myIds=(us||[]).map(x=>x.store_id);
+ // v2.6.67 チーム長の担当店舗は user_stores ではなく team_stores（担当店舗）で決まる。
+ //   can_view() など権限まわりと同じ考え方に合わせ、売上・FL表示などにも担当店舗を含める
+ if(u.role==="TEAM"&&u.team_id){
+  const {data:tst}=await sb.from("team_stores").select("store_id").eq("team_id",u.team_id);
+  const teamIds=(tst||[]).map(x=>x.store_id);
+  myIds=[...new Set([...myIds,...teamIds])];
+ }
  appSettings={};(as||[]).forEach(r=>appSettings[r.key]=r.value);
  const fmap={};(rfeat||[]).forEach(x=>fmap[x.feature]=x.allowed);(ufeat||[]).forEach(x=>fmap[x.feature]=x.allowed);
  me={...u,stores:stores.filter(s=>myIds.includes(s.id)),features:fmap};
@@ -1504,6 +1512,30 @@ async function homeView(){
 
 // v2.6.57 所属店舗の売上・FL（目標／実績）。社員以上にだけ表示（アルバイト・外販には出さない）。
 // データがまだ無ければ何も出さない（連携前のうちは今までどおりの画面のまま）
+// v2.6.68 店舗別に出せるよう、集計まわりを共通の部品に分けた（日報一覧・詳細／週報からも同じ部品を使う）
+const dashSum=(arr,k)=>(arr||[]).reduce((s,x)=>s+(Number(x[k])||0),0);
+const dashFlPct=(cost,labor,sales)=>sales>0?Math.round((cost+labor)/sales*1000)/10:null;
+const dashFlTargetPct=tm=>(tm&&tm.length)?Math.round((dashSum(tm,"pa_rate")+dashSum(tm,"emp_rate")+dashSum(tm,"cost_rate"))/tm.length*10)/10:null;
+const dashYen=n=>"¥"+Math.round(n).toLocaleString("ja-JP");
+function dashRowLine(label,salesAct,salesTgt,flAct,flTgt){
+ const rate=salesTgt>0?Math.round(salesAct/salesTgt*100):null;
+ return `<p style="margin:8px 0 0;font-size:13px"><b>${label}</b><br>
+  売上: ${dashYen(salesAct)}${salesTgt?`／目標 ${dashYen(salesTgt)}（達成率 ${rate}%）`:""}<br>
+  FL: ${flAct!=null?flAct+"%":"—"}${flTgt!=null?`／目標 ${flTgt}%`:""}</p>`;
+}
+// 指定した店舗ID一覧・期間の実績／目標／FL目標をまとめて取ってくる（エラー・未連携時は空で返す）
+async function fetchDashRange(storeIds,fromStr,toStr,ymList){
+ if(!storeIds||!storeIds.length)return {act:[],tgt:[],tm:[]};
+ try{
+  const [r1,r2,r3]=await Promise.all([
+   sb.from("dash_sales_daily").select("store_id,biz_date,sales,cost,labor").in("store_id",storeIds).gte("biz_date",fromStr).lte("biz_date",toStr),
+   sb.from("dash_sales_target_daily").select("store_id,biz_date,sales_target").in("store_id",storeIds).gte("biz_date",fromStr).lte("biz_date",toStr),
+   sb.from("dash_target_monthly").select("store_id,ym,pa_rate,emp_rate,cost_rate").in("store_id",storeIds).in("ym",ymList)
+  ]);
+  return {act:r1.data||[],tgt:r2.data||[],tm:r3.data||[]};
+ }catch(e){return {act:[],tgt:[],tm:[]}}
+}
+// 日報を「書く」画面用。所属店舗ぶん（チーム長は担当店舗ぶん）を店舗別に見せる
 async function dashPanelHtml(){
  if(!me||me.role==="AL"||me.role==="GAIHAN")return "";
  const storeIds=(me.stores||[]).map(s=>s.id);
@@ -1512,32 +1544,96 @@ async function dashPanelHtml(){
  const y=new Date(Date.UTC(jst.getUTCFullYear(),jst.getUTCMonth(),jst.getUTCDate()-1));
  const yStr=y.toISOString().slice(0,10);
  const mStart=yStr.slice(0,7)+"-01";
- let act,tgt,tm;
- try{
-  const [r1,r2,r3]=await Promise.all([
-   sb.from("dash_sales_daily").select("store_id,biz_date,sales,cost,labor").in("store_id",storeIds).gte("biz_date",mStart).lte("biz_date",yStr),
-   sb.from("dash_sales_target_daily").select("store_id,biz_date,sales_target").in("store_id",storeIds).gte("biz_date",mStart).lte("biz_date",yStr),
-   sb.from("dash_target_monthly").select("store_id,ym,pa_rate,emp_rate,cost_rate").in("store_id",storeIds).eq("ym",mStart)
-  ]);
-  act=r1.data;tgt=r2.data;tm=r3.data;
- }catch(e){return ""} // 連携前・エラー時は静かに何も出さない（設定画面には別途エラーが出る）
- if(!act||!act.length)return "";
- const sum=(arr,k)=>(arr||[]).reduce((s,x)=>s+(Number(x[k])||0),0);
- const yestAct=(act||[]).filter(x=>x.biz_date===yStr),yestTgt=(tgt||[]).filter(x=>x.biz_date===yStr);
- const flPct=(cost,labor,sales)=>sales>0?Math.round((cost+labor)/sales*1000)/10:null;
- const flTgtPct=(tm&&tm.length)?Math.round((sum(tm,"pa_rate")+sum(tm,"emp_rate")+sum(tm,"cost_rate"))/tm.length*10)/10:null;
- const yen=n=>"¥"+Math.round(n).toLocaleString("ja-JP");
- const row=(label,salesAct,salesTgt,flAct)=>{
-  const rate=salesTgt>0?Math.round(salesAct/salesTgt*100):null;
-  return `<p style="margin:8px 0 0;font-size:13px"><b>${label}</b><br>
-   売上: ${yen(salesAct)}${salesTgt?`／目標 ${yen(salesTgt)}（達成率 ${rate}%）`:""}<br>
-   FL: ${flAct!=null?flAct+"%":"—"}${flTgtPct!=null?`／目標 ${flTgtPct}%`:""}</p>`;
- };
- const storeLabel=storeIds.length>1?"所属店舗":esc((me.stores[0]||{}).name||"");
- return `<div class="card" style="background:#f7fafc"><h3 style="margin:0">📊 ${storeLabel} の売上・FL</h3>
-  ${row("前日（"+fmtDate(yStr)+"）",sum(yestAct,"sales"),sum(yestTgt,"sales_target"),flPct(sum(yestAct,"cost"),sum(yestAct,"labor"),sum(yestAct,"sales")))}
-  ${row("当月累計",sum(act,"sales"),sum(tgt,"sales_target"),flPct(sum(act,"cost"),sum(act,"labor"),sum(act,"sales")))}
+ const {act,tgt,tm}=await fetchDashRange(storeIds,mStart,yStr,[mStart]);
+ if(!act.length)return "";
+ const multi=storeIds.length>1;
+ const storeRows=(me.stores||[]).map(s=>{
+  const sAct=act.filter(x=>x.store_id===s.id);
+  if(!sAct.length)return ""; // この店舗はまだデータが無い
+  const sTgt=tgt.filter(x=>x.store_id===s.id),sTm=tm.filter(x=>x.store_id===s.id);
+  const yestAct=sAct.filter(x=>x.biz_date===yStr),yestTgt=sTgt.filter(x=>x.biz_date===yStr);
+  const flTgt=dashFlTargetPct(sTm);
+  return `<div style="${multi?"border-top:1px solid var(--line);padding-top:6px;margin-top:6px":""}">
+   ${multi?`<p style="margin:0;font-size:13px;font-weight:600">🏪 ${esc(s.name)}</p>`:""}
+   ${dashRowLine("前日（"+fmtDate(yStr)+"）",dashSum(yestAct,"sales"),dashSum(yestTgt,"sales_target"),dashFlPct(dashSum(yestAct,"cost"),dashSum(yestAct,"labor"),dashSum(yestAct,"sales")),flTgt)}
+   ${dashRowLine("当月累計",dashSum(sAct,"sales"),dashSum(sTgt,"sales_target"),dashFlPct(dashSum(sAct,"cost"),dashSum(sAct,"labor"),dashSum(sAct,"sales")),flTgt)}
+  </div>`;
+ }).join("");
+ if(!storeRows)return "";
+ const title=multi?"所属店舗":esc((me.stores[0]||{}).name||"");
+ return `<div class="card" style="background:#f7fafc"><h3 style="margin:0">📊 ${title} の売上・FL</h3>${storeRows}
   <p class="muted" style="margin:8px 0 0;font-size:11px">FL＝原価＋人件費（売上に対する割合）。売上ダッシュボードのデータを1日1回取り込んだものです</p></div>`;
+}
+// v2.6.68 日報の一覧から開いた「詳細」画面でも、その日報の店舗・日付を基準に前日・当月累計を見せる
+async function dashPanelForReport(r){
+ if(!me||me.role==="AL"||me.role==="GAIHAN")return "";
+ if(!r||r.kind!=="daily"||!r.store_id||!r.report_date)return "";
+ const d=new Date(r.report_date+"T00:00:00Z");
+ d.setUTCDate(d.getUTCDate()-1);
+ const yStr=d.toISOString().slice(0,10);
+ const mStart=yStr.slice(0,7)+"-01";
+ const {act,tgt,tm}=await fetchDashRange([r.store_id],mStart,yStr,[mStart]);
+ if(!act.length)return "";
+ const flTgt=dashFlTargetPct(tm);
+ const yestAct=act.filter(x=>x.biz_date===yStr),yestTgt=tgt.filter(x=>x.biz_date===yStr);
+ const sname=(stores.find(s=>s.id===r.store_id)||{}).name||"";
+ return `<div class="card" style="background:#f7fafc"><h3 style="margin:0">📊 ${esc(sname)} の売上・FL</h3>
+  ${dashRowLine("前日（"+fmtDate(yStr)+"）",dashSum(yestAct,"sales"),dashSum(yestTgt,"sales_target"),dashFlPct(dashSum(yestAct,"cost"),dashSum(yestAct,"labor"),dashSum(yestAct,"sales")),flTgt)}
+  ${dashRowLine("当月累計",dashSum(act,"sales"),dashSum(tgt,"sales_target"),dashFlPct(dashSum(act,"cost"),dashSum(act,"labor"),dashSum(act,"sales")),flTgt)}
+  <p class="muted" style="margin:8px 0 0;font-size:11px">この日報の日付（${fmtDate(r.report_date)}）を基準にした前日・当月累計です</p></div>`;
+}
+// v2.6.68 週報の対象期間（直近で終わった月〜日の1週間）を、含まれる日付から計算する
+// 例: 火曜に提出＝先週の月〜日／日曜に書いた場合＝その週（今日を含む）の月〜日
+function weekRangeFor(dateStr){
+ const d=new Date(dateStr+"T00:00:00Z");
+ const dow=d.getUTCDay(); // 0=日 1=月 … 6=土
+ const end=new Date(d);end.setUTCDate(d.getUTCDate()-dow); // 直近の日曜
+ const start=new Date(end);start.setUTCDate(end.getUTCDate()-6); // その週の月曜
+ const f=x=>x.toISOString().slice(0,10);
+ return {weekStart:f(start),weekEnd:f(end)};
+}
+// 期間が月をまたぐ場合、両方の月のFL目標を拾えるようにする
+function ymListFor(fromStr,toStr){
+ const a=fromStr.slice(0,7)+"-01",b=toStr.slice(0,7)+"-01";
+ return a===b?[a]:[a,b];
+}
+// 週報を「書く」画面用。所属店舗ぶん（チーム長は担当店舗ぶん）を店舗別・期間合計で見せる
+async function weeklyDashPanelHtml(){
+ if(!me||me.role==="AL"||me.role==="GAIHAN")return "";
+ const storeIds=(me.stores||[]).map(s=>s.id);
+ if(!storeIds.length)return "";
+ const jst=new Date(Date.now()+9*3600e3);
+ const {weekStart,weekEnd}=weekRangeFor(jst.toISOString().slice(0,10));
+ const {act,tgt,tm}=await fetchDashRange(storeIds,weekStart,weekEnd,ymListFor(weekStart,weekEnd));
+ if(!act.length)return "";
+ const multi=storeIds.length>1;
+ const storeRows=(me.stores||[]).map(s=>{
+  const sAct=act.filter(x=>x.store_id===s.id);
+  if(!sAct.length)return "";
+  const sTgt=tgt.filter(x=>x.store_id===s.id),sTm=tm.filter(x=>x.store_id===s.id);
+  const flTgt=dashFlTargetPct(sTm);
+  return `<div style="${multi?"border-top:1px solid var(--line);padding-top:6px;margin-top:6px":""}">
+   ${multi?`<p style="margin:0;font-size:13px;font-weight:600">🏪 ${esc(s.name)}</p>`:""}
+   ${dashRowLine("期間合計",dashSum(sAct,"sales"),dashSum(sTgt,"sales_target"),dashFlPct(dashSum(sAct,"cost"),dashSum(sAct,"labor"),dashSum(sAct,"sales")),flTgt)}
+  </div>`;
+ }).join("");
+ if(!storeRows)return "";
+ const title=multi?"所属店舗":esc((me.stores[0]||{}).name||"");
+ return `<div class="card" style="background:#f7fafc"><h3 style="margin:0">📊 ${title} の売上・FL（${fmtDate(weekStart)}〜${fmtDate(weekEnd)}）</h3>${storeRows}
+  <p class="muted" style="margin:8px 0 0;font-size:11px">FL＝原価＋人件費（売上に対する割合）。直近で終わった月〜日の1週間分の合計です</p></div>`;
+}
+// 週報の詳細画面用。その週報が対象にしている週（report_dateから逆算）で計算する
+async function weeklyDashPanelForReport(r){
+ if(!me||me.role==="AL"||me.role==="GAIHAN")return "";
+ if(!r||r.kind!=="weekly"||!r.store_id||!r.report_date)return "";
+ const {weekStart,weekEnd}=weekRangeFor(r.report_date);
+ const {act,tgt,tm}=await fetchDashRange([r.store_id],weekStart,weekEnd,ymListFor(weekStart,weekEnd));
+ if(!act.length)return "";
+ const flTgt=dashFlTargetPct(tm);
+ const sname=(stores.find(s=>s.id===r.store_id)||{}).name||"";
+ return `<div class="card" style="background:#f7fafc"><h3 style="margin:0">📊 ${esc(sname)} の売上・FL（${fmtDate(weekStart)}〜${fmtDate(weekEnd)}）</h3>
+  ${dashRowLine("期間合計",dashSum(act,"sales"),dashSum(tgt,"sales_target"),dashFlPct(dashSum(act,"cost"),dashSum(act,"labor"),dashSum(act,"sales")),flTgt)}
+  <p class="muted" style="margin:8px 0 0;font-size:11px">この週報の対象期間（月〜日）の合計です</p></div>`;
 }
 // ===== 日報・週報 入力 =====
 async function writeView(kind){
@@ -1552,7 +1648,7 @@ async function writeView(kind){
  }else form={...er.answers};
  let h=`<span class="back" data-nav="home">← ホーム</span><h2>${kind==="weekly"?"週報":"日報"} ${fmtDate(todayStr())}${er?"（修正）":""}</h2>`;
  if(isEarlyMorning())h+=`<div class="info" style="margin-top:-4px">🌙 深夜のご入力ありがとうございます。朝6時までは<b>前日（${fmtDate(todayStr())}）の日報</b>として受け付けます。</div>`;
- h+=await dashPanelHtml(); // v2.6.57 所属店舗の売上・FL
+ h+=kind==="weekly"?await weeklyDashPanelHtml():await dashPanelHtml(); // v2.6.57 所属店舗の売上・FL／v2.6.68 週報は期間合計
  fmt.forEach(f=>{
   h+=`<div class="card"><h3>${esc(f.label)} ${f.req?'<span class="req">必須</span>':""}</h3>`;
   h+=hintLine(f.hint); // v2.6.26 記入例
@@ -1698,7 +1794,7 @@ const fmtDue=d=>{if(!d)return"";const t=new Date(d);return (t.getMonth()+1)+"/"+
 function taskUserName(id){const u=(tskUsers||[]).find(x=>x.id===id);return u?u.name:"未定"}
 // ===== 店舗チェックシート（フェーズ3b: オープン準備・清掃などの毎日ルーティン） =====
 const CK_PERIODS={open:"オープン",prep:"仕込み",close:"クローズ",other:"その他"};
-let ckStore=null,ckDate=null,ckAdminMode=false;
+let ckStore=null,ckDate=null,ckAdminMode=false,ckHistOpen={}; // v2.6.68 履歴の開閉状態（item.id単位）
 const ckCanManage=()=>can("store_admin")||me.role==="CEO"||me.role==="HQ"||me.is_master;
 // v2.6.63 マニュアル: マスター・管理アカウント・社長・本部は全部編集可。店長・チーム長は自分の店舗のみ
 const manualFullAdmin=()=>can("store_admin")||me.role==="CEO"||me.role==="HQ"||me.is_master;
@@ -1720,17 +1816,31 @@ async function checkView(){
   <input type="date" id="ckdate" value="${ckDate}" style="width:auto;margin:0">
   ${ckCanManage()?`<button class="btn sm ${ckAdminMode?"":"sub"}" id="ckadmin">${ckAdminMode?"✔ 編集を終了":"🛠 テンプレート編集"}</button>`:""}
  </div>`;
- const [{data:tpls},{data:items},{data:checks}]=await Promise.all([
+ const [{data:tpls},{data:items},{data:checks},{data:clog}]=await Promise.all([
   sb.from("checklist_templates").select("*").order("sort_order").order("created_at"),
   sb.from("checklist_items").select("*").order("sort_order").order("created_at"),
-  sb.from("checklist_checks").select("*,checker:users(name)").eq("store_id",ckStore).eq("work_date",ckDate)
+  sb.from("checklist_checks").select("*,checker:users(name)").eq("store_id",ckStore).eq("work_date",ckDate),
+  sb.from("checklist_check_log").select("*,actor:users(name)").eq("store_id",ckStore).eq("work_date",ckDate).order("acted_at") // v2.6.68 誰がいつチェック／取消したかの履歴
  ]);
  const ckMap={};(checks||[]).forEach(c=>ckMap[c.item_id]=c);
+ const ckLogMap={};(clog||[]).forEach(l=>{(ckLogMap[l.item_id]=ckLogMap[l.item_id]||[]).push(l)});
  const forStore=(tpls||[]).filter(t=>(t.store_id===null||t.store_id===ckStore)&&(ckAdminMode||t.is_active));
  if(ckAdminMode)return h+ckAdminHtml(tpls||[],items||[]);
  if(!forStore.length)return h+`<p class="muted" style="margin-top:14px">この店舗のチェックシートはまだ作成されていません。${ckCanManage()?"「🛠 テンプレート編集」から作成できます。":"本部が準備中です。"}</p>`;
+ // v2.6.68 期限切れ未完了のアラート（未対応のもの）。チーム長・店長・本部・社長だけに、対応済みボタンを出す
+ const canResolveCk=ckCanManage()||me.role==="TEAM"||me.role==="TENCHO";
+ if(canResolveCk){
+  const {data:alerts}=await sb.from("checklist_overdue_alerts").select("*,item:checklist_items(label)")
+   .eq("store_id",ckStore).eq("work_date",ckDate).is("resolved_at",null);
+  (alerts||[]).forEach(a=>{
+   h+=`<div class="card" style="background:#fff6f6;border-left:4px solid #c0392b"><h3 style="margin:0;color:#c0392b">⏰ 期限切れ未完了</h3>
+    <p style="margin:6px 0">「${esc((a.item&&a.item.label)||"")}」がまだチェックされていません。現場に電話などで確認してください。</p>
+    <button class="btn sm" data-ckresolve="${a.id}" style="background:#c0392b">☎️ 対応済みにする</button></div>`;
+  });
+ }
  const order=["open","prep","close","other"];
  forStore.sort((a,b)=>order.indexOf(a.period)-order.indexOf(b.period)||a.sort_order-b.sort_order);
+ const todayBiz=todayStr(),nowJstHM=new Date(Date.now()+9*3600e3).toISOString().slice(11,16); // v2.6.68 期限切れ判定用
  forStore.forEach(t=>{
   const its=(items||[]).filter(i=>i.template_id===t.id&&i.is_active);
   if(!its.length)return;
@@ -1740,11 +1850,17 @@ async function checkView(){
    <div style="height:6px;background:var(--line,#eee);border-radius:3px;margin:6px 0 10px"><div style="height:6px;width:${pct}%;background:${done===its.length?"#1e8e5a":"#c8401f"};border-radius:3px"></div></div>`;
   its.forEach(i=>{
    const c=ckMap[i.id];
+   const hist=ckLogMap[i.id]||[]; // v2.6.68 チェック・取消の履歴（今日この項目に何が起きたか全部）
+   // v2.6.68 期限切れかどうか（選んだ日がすでに過去、または今日で今の時刻が期限を過ぎている）
+   const dueHM=i.due_time?String(i.due_time).slice(0,5):"";
+   const isOverdue=!c&&dueHM&&(ckDate<todayBiz||(ckDate===todayBiz&&nowJstHM>dueHM));
    h+=`<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px solid var(--line,#eee)">
     <button class="btn sm ${c?"":"sub"}" data-cktoggle="${i.id}" data-photoreq="${i.photo_required?1:0}" style="flex-shrink:0;min-width:64px">${c?"✅ 済":"⬜ する"}</button>
     <div style="flex:1">
-     <div>${esc(i.label)}${i.photo_required?' <span class="badge" style="background:#b58a00">📷 写真必須</span>':""}</div>
+     <div>${esc(i.label)}${i.photo_required?' <span class="badge" style="background:#b58a00">📷 写真必須</span>':""}${dueHM?` <span class="muted" style="font-size:11px">⏰${esc(dueHM)}まで</span>`:""}${isOverdue?' <span class="badge" style="background:#c0392b">⚠️ 期限切れ</span>':""}${c&&c.late?' <span class="badge" style="background:#d97706">⏰ 期限切れ完了</span>':""}</div>
      ${c?`<div class="muted" style="font-size:11px">${esc((c.checker&&c.checker.name)||"")} ／ ${new Date(c.checked_at).toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"})}${c.photo_url?` ／ <a href="${esc(c.photo_url)}" target="_blank" rel="noopener">写真を見る</a>`:""}</div>`:""}
+     ${hist.length>1?`<div style="margin-top:2px"><span class="muted" style="font-size:11px;color:var(--blue);cursor:pointer" data-ckhist="${i.id}">🕘 履歴（${hist.length}件）${ckHistOpen[i.id]?"を閉じる":"を見る"}</span>
+      ${ckHistOpen[i.id]?`<div style="margin-top:4px;font-size:11px;color:#666;line-height:1.7">${hist.slice().reverse().map(l=>`${l.action==="checked"?"✅":"❌"} ${new Date(l.acted_at).toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"})} ${esc((l.actor&&l.actor.name)||"（不明）")}${l.action==="unchecked"?"（取消）":""}`).join("<br>")}</div>`:""}</div>`:""}
     </div></div>`;
   });
   h+=`</div>`;
@@ -1766,16 +1882,19 @@ function ckAdminHtml(tpls,items){
   const sname=t.store_id?(stores.find(s=>s.id===t.store_id)||{}).name:"全店舗";
   h+=`<div class="card" style="${t.is_active?"":"opacity:.55"}"><h3>${esc(CK_PERIODS[t.period]||"")}｜${esc(t.title)} <span class="badge">${esc(sname||"")}</span>${t.is_active?"":' <span class="badge" style="background:#888">停止中</span>'}</h3>`;
   its.forEach(i=>{
-   h+=`<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line,#eee);${i.is_active?"":"opacity:.5;text-decoration:line-through"}">
-    <span style="flex:1">${esc(i.label)}${i.photo_required?" 📷":""}</span>
+   h+=`<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line,#eee);flex-wrap:wrap;${i.is_active?"":"opacity:.5;text-decoration:line-through"}">
+    <span style="flex:1;min-width:120px">${esc(i.label)}${i.photo_required?" 📷":""}</span>
+    <input type="time" data-ckdue="${i.id}" value="${i.due_time?String(i.due_time).slice(0,5):""}" style="width:auto;margin:0;font-size:12px" title="期限（時間・空欄なら期限なし）">
     <button class="btn sm sub" data-ckitoggle="${i.id}" data-on="${i.is_active?1:0}">${i.is_active?"停止":"再開"}</button>
    </div>`;
   });
   h+=`<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
    <input type="text" data-ckadditem="${t.id}" placeholder="項目を追加（例: 看板の電気をつける）" style="flex:1;min-width:150px;margin:0">
+   <input type="time" data-ckadddue="${t.id}" style="width:auto;margin:0" title="期限（時間・任意）">
    <label style="display:flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap"><input type="checkbox" data-ckaddphoto="${t.id}" style="width:16px;height:16px">📷写真必須</label>
    <button class="btn sm" data-ckaddbtn="${t.id}">追加</button>
   </div>
+  <p class="muted" style="margin:6px 0 0;font-size:11px">⏰ 期限を入れると、時間を過ぎても未完了のとき、担当チーム長・店長・本部にアラートが届きます</p>
   <div style="margin-top:8px"><button class="btn sm sub" data-cktdeact="${t.id}" data-on="${t.is_active?1:0}">${t.is_active?"このシートを停止":"このシートを再開"}</button></div>
   </div>`;
  });
@@ -1785,6 +1904,14 @@ function bindCheckPage(){
  if($("ckstore"))$("ckstore").onchange=e=>{ckStore=e.target.value;render()};
  if($("ckdate"))$("ckdate").onchange=e=>{ckDate=e.target.value;render()};
  if($("ckadmin"))$("ckadmin").onclick=()=>{ckAdminMode=!ckAdminMode;render()};
+ document.querySelectorAll("[data-ckhist]").forEach(el=>el.onclick=()=>{ckHistOpen[el.dataset.ckhist]=!ckHistOpen[el.dataset.ckhist];render()}); // v2.6.68
+ document.querySelectorAll("[data-ckresolve]").forEach(b=>b.onclick=async()=>{ // v2.6.68 電話で確認した記録
+  const note=prompt("対応内容（任意。例: 電話して10分後に完了予定と確認）")||"";
+  b.disabled=true;
+  const {error}=await sb.rpc("resolve_checklist_alert",{p_alert_id:b.dataset.ckresolve,p_note:note||null});
+  if(error){toast("記録できませんでした: "+error.message,true);b.disabled=false;return}
+  toast("対応済みにしました");render();
+ });
  document.querySelectorAll("[data-cktoggle]").forEach(b=>b.onclick=async()=>{
   const itemId=b.dataset.cktoggle,needPhoto=b.dataset.photoreq==="1";
   const {data:ex}=await sb.from("checklist_checks").select("id,checked_by").eq("item_id",itemId).eq("store_id",ckStore).eq("work_date",ckDate).maybeSingle();
@@ -1827,7 +1954,8 @@ function bindCheckPage(){
   const inp=document.querySelector(`[data-ckadditem="${tid}"]`);
   const label=inp.value.trim();if(!label){toast("項目名を入れてください",true);return}
   const ph=document.querySelector(`[data-ckaddphoto="${tid}"]`).checked;
-  const {error}=await sb.from("checklist_items").insert({template_id:tid,label,photo_required:ph});
+  const due=(document.querySelector(`[data-ckadddue="${tid}"]`)||{}).value||""; // v2.6.68 期限（任意）
+  const {error}=await sb.from("checklist_items").insert({template_id:tid,label,photo_required:ph,due_time:due||null});
   if(error){toast("追加エラー: "+error.message,true);return}
   render();
  });
@@ -1835,6 +1963,11 @@ function bindCheckPage(){
   const {error}=await sb.from("checklist_items").update({is_active:b.dataset.on!=="1"}).eq("id",b.dataset.ckitoggle);
   if(error){toast("変更エラー: "+error.message,true);return}
   render();
+ });
+ document.querySelectorAll("[data-ckdue]").forEach(inp=>inp.onchange=async()=>{ // v2.6.68 期限の変更
+  const {error}=await sb.from("checklist_items").update({due_time:inp.value||null}).eq("id",inp.dataset.ckdue);
+  if(error){toast("保存エラー: "+error.message,true);return}
+  toast(inp.value?`期限を${inp.value}にしました`:"期限を無しにしました");
  });
  document.querySelectorAll("[data-cktdeact]").forEach(b=>b.onclick=async()=>{
   const {error}=await sb.from("checklist_templates").update({is_active:b.dataset.on!=="1"}).eq("id",b.dataset.cktdeact);
@@ -2418,6 +2551,7 @@ async function detailView(){
  const seen={};
  let h=`<span class="back" data-nav="list">← 一覧</span>
   <h2>${esc(r.author.name)}さんの${r.kind==="weekly"?"週報":"日報"} <span class="muted">${fmtDate(r.report_date)}</span></h2>`;
+ h+=r.kind==="weekly"?await weeklyDashPanelForReport(r):await dashPanelForReport(r); // v2.6.68 この日報の売上・FL
  (r.kind==="weekly"?weeklyFmt(r.author.role):fmtAll(r.author.role)).forEach(f=>{ // v2.6.26 書いた人の役職で表示
   if(seen[f.k])return;seen[f.k]=1;
   const v=r.answers[f.k];
@@ -3732,7 +3866,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.66</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.68</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -3986,17 +4120,19 @@ function manualPreviewBubble(c,storeId){
 // v2.6.60 マニュアルの追加・編集フォーム本体（設定画面と「📎 マニュアル」タブの編集モードで共用）
 // v2.6.63 hq_only=true→本部専用／store_id null→店舗共通／それ以外→その店舗、の3種類でグループ分け
 const manualGroupKey=m=>m.hq_only?"HQ":(m.store_id||"COMMON");
+// v2.6.67 カテゴリのプルダウン。「＋新しいカテゴリを追加」を選んだときだけ、隣の入力欄の値を使う
+const manualCatValue=(sel,newInp)=>sel&&sel.value==="__new__"?((newInp&&newInp.value.trim())||""):((sel&&sel.value)||"");
 function manualAdminHtml(){
  const fullAdmin=manualFullAdmin();
  const myStores=me.stores||[];
  const catList=[...new Set((manualItems||[]).map(m=>(m.category||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ja"));
  let h=`<p class="muted" style="font-size:13px">入社登録が完了した方へのLINEと、下部ナビ「📎 マニュアル」タブの両方で使われる一覧です。<b>店舗ごと・店舗共通・本部専用</b>を分けて登録できます。<b>「完成」にするまでは、通常の一覧・入社案内には出ません。</b>${fullAdmin?"":"　※自分の所属店舗のぶんだけ編集できます"}</p>
-  <datalist id="mcatlist">${catList.map(c=>`<option value="${esc(c)}">`).join("")}</datalist>
   <div class="card"><h3>＋ 新しいマニュアルを追加</h3>
    <p class="muted" style="margin:0 0 2px">名前</p>
    <input type="text" id="m-label" placeholder="例: タイムカードの押し方" style="margin-top:0">
-   <p class="muted" style="margin:8px 0 2px">カテゴリ（「📎 マニュアル」タブでの見出しになります。既存の一覧から選ぶか、新しく入力できます。空欄なら「その他」）</p>
-   <input type="text" id="m-cat" list="mcatlist" placeholder="例: レジ操作／接客／衛生管理" style="margin-top:0">
+   <p class="muted" style="margin:8px 0 2px">カテゴリ（「📎 マニュアル」タブでの見出しになります。既存の一覧から選んでください）</p>
+   <select class="inp" id="m-cat" style="margin-top:0"><option value="">カテゴリ: その他</option>${catList.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("")}<option value="__new__">＋ 新しいカテゴリを追加</option></select>
+   <input type="text" id="m-catnew" placeholder="新しいカテゴリ名（例: レジ操作）" style="display:none;margin-top:6px">
    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
     <select class="inp" id="m-icon" style="flex:1;min-width:120px;margin:0">${Object.entries(MANUAL_ICONS).map(([k,v])=>`<option value="${k}"${mAddIcon===k?" selected":""}>${k} ${v}</option>`).join("")}</select>
     <select class="inp" id="m-store" style="flex:1;min-width:140px;margin:0">${fullAdmin
@@ -4023,7 +4159,8 @@ function manualAdminHtml(){
      <span class="badge" style="background:${m.is_draft?"#b58a00":"#1e8e5a"}">${m.is_draft?"📝 下書き":"✅ 完成"}</span>
     </div>
     <input type="url" data-murl="${m.id}" value="${esc(m.url||"")}" placeholder="URLが未設定です（本文を作る場合は空欄でもOK）" style="margin:6px 0 0;font-size:12px">
-    <input type="text" data-mcat="${m.id}" list="mcatlist" value="${esc(m.category||"")}" placeholder="カテゴリ（空欄なら「その他」）" style="margin:6px 0 0;font-size:12px">
+    <select class="inp" data-mcat="${m.id}" style="margin:6px 0 0;font-size:12px"><option value="">カテゴリ: その他</option>${catList.map(c=>`<option value="${esc(c)}"${(m.category||"")===c?" selected":""}>${esc(c)}</option>`).join("")}<option value="__new__"${m.category&&!catList.includes(m.category)?" selected":""}>＋ 新しいカテゴリを追加</option></select>
+    <input type="text" data-mcatnew="${m.id}" value="${m.category&&!catList.includes(m.category)?esc(m.category):""}" placeholder="新しいカテゴリ名" style="margin:6px 0 0;font-size:12px;display:${m.category&&!catList.includes(m.category)?"":"none"}">
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center">
      <button class="btn sm" data-msave="${m.id}" style="margin:0">保存</button>
      <button class="btn sm sub" data-medit="${m.id}" style="margin:0">📝 ${(m.content||[]).length?"本文を編集する（"+m.content.length+"個の部品）":"本文を作成する"}</button>
@@ -5041,11 +5178,15 @@ function bindPage(){
   const m=(manualItems||[]).find(x=>x.id===id);if(m)m.url=url;
   toast("ファイルを差し替えました");render();
  });
+ if($("m-cat"))$("m-cat").onchange=()=>{if($("m-catnew"))$("m-catnew").style.display=$("m-cat").value==="__new__"?"":"none"}; // v2.6.67
+ document.querySelectorAll("[data-mcat]").forEach(s=>s.onchange=()=>{
+  const nw=document.querySelector(`[data-mcatnew="${s.dataset.mcat}"]`);if(nw)nw.style.display=s.value==="__new__"?"":"none"
+ });
  if($("m-add"))$("m-add").onclick=async()=>{
   const label=$("m-label").value.trim();
   if(!label){toast("名前を入力してください",true);return}
   const url=$("m-url").value.trim();
-  const category=$("m-cat").value.trim();
+  const category=manualCatValue($("m-cat"),$("m-catnew")); // v2.6.67 カテゴリはプルダウンから選ぶ
   const icon=$("m-icon").value,sel=$("m-store").value;
   const hqOnly=sel==="HQ",storeId=hqOnly?null:(sel||null); // v2.6.63 「HQ」は本部専用の合言葉。空欄は店舗共通
   mAddIcon=icon;mAddStore=sel;
@@ -5060,7 +5201,7 @@ function bindPage(){
   const id=b.dataset.msave;
   const label=document.querySelector(`[data-mlabel="${id}"]`).value.trim();
   const url=document.querySelector(`[data-murl="${id}"]`).value.trim();
-  const category=document.querySelector(`[data-mcat="${id}"]`).value.trim();
+  const category=manualCatValue(document.querySelector(`[data-mcat="${id}"]`),document.querySelector(`[data-mcatnew="${id}"]`)); // v2.6.67
   const icon=document.querySelector(`[data-micon="${id}"]`).value;
   if(!label){toast("名前を入力してください",true);return}
   b.disabled=true;

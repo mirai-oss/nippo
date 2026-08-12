@@ -280,6 +280,7 @@ const WEEKLY_FMT=[
 let me=null;          // {id,name,role,concurrent_role,stores:[{id,name}],team_id}
 let stores=[];        // 全店舗
 let page="home",detail=null,form={},seg="daily",editId=null,writeKind="daily";
+let skipDraftLoad=false; // v2.6.75 書いている途中の再描画で下書きを読み直さないようにするフラグ
 let todayDaily=null,todayWeekly=null;
 let appSettings={},setMode="main",fmtRole="AL",cfgJoin=null,cfgFmts=null,joinCfgCur=null;
 let cfgGuide=null; // v2.6.53 入社案内・マニュアルの文面設定
@@ -1758,10 +1759,16 @@ async function writeView(kind){
  if(!fmt.length)return `<span class="back" data-nav="home">← ホーム</span><p class="muted">この役職の${kind==="weekly"?"週報":"日報"}フォーマットはありません。</p>`;
  let er=null;
  if(editId){const {data}=await sb.from("reports").select("*").eq("id",editId).single();er=data}
- if(!er){ // 下書き読み込み
+ // v2.6.75 「取り込む」やスコアカードの手入力欄など、書いている途中に画面を再描画するときは
+ //   下書き・元の日報を読み直さない（今まさに入力中の内容が、古い保存内容で消されてしまうため）
+ if(skipDraftLoad){
+  skipDraftLoad=false;
+ }else if(er){
+  form={...er.answers};
+ }else{ // 下書き読み込み
   const {data:d}=await sb.from("report_drafts").select("answers").eq("user_id",me.id).eq("kind",kind).maybeSingle();
   form=(d&&d.answers)||{};
- }else form={...er.answers};
+ }
  let h=`<span class="back" data-nav="home">← ホーム</span><h2>${kind==="weekly"?"週報":"日報"} ${fmtDate(todayStr())}${er?"（修正）":""}</h2>`;
  if(isEarlyMorning())h+=`<div class="info" style="margin-top:-4px">🌙 深夜のご入力ありがとうございます。朝6時までは<b>前日（${fmtDate(todayStr())}）の日報</b>として受け付けます。</div>`;
  h+=kind==="weekly"?await weeklyDashPanelHtml():await dashPanelHtml(); // v2.6.57 所属店舗の売上・FL／v2.6.68 週報は期間合計
@@ -4017,7 +4024,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.74</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.75</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -4497,6 +4504,7 @@ function bindPage(){
  if($("savedraft"))$("savedraft").onclick=saveDraft;
  if($("dash-refetch"))$("dash-refetch").onclick=async()=>{ // v2.6.72 日報・週報スコアカードの再取得
   collectForm(); // 入力中の内容を消さないよう先に拾っておく
+  skipDraftLoad=true; // v2.6.75 再描画時に下書きを読み直して今の入力を消してしまわないように
   $("dash-refetch").disabled=true;$("dash-refetch").textContent="取り込んでいます…";
   if(["CEO","HQ","TEAM","TENCHO"].includes(me.role)){ // v2.6.72 社長・本部・チーム長・店長は、その場で売上ダッシュボードから最新を取りに行ける
    const r=await dashFn({action:"sync_now"});
@@ -4506,7 +4514,8 @@ function bindPage(){
  };
  // v2.6.74 スコアカードの手入力欄（PA時間数・Google口コミ数・ダイニー点数）は、
  //   入力し終えたら（フォーカスを外したら）差異・予算比率をその場で計算し直す
- document.querySelectorAll("input.scorecalc").forEach(inp=>inp.onchange=()=>{collectForm();render()});
+ // v2.6.75 このときも下書きを読み直さない（他の欄に入力した内容が消えてしまっていた不具合の修正）
+ document.querySelectorAll("input.scorecalc").forEach(inp=>inp.onchange=()=>{collectForm();skipDraftLoad=true;render()});
  // 入力ウィジェット
  document.querySelectorAll(".stars[data-fk] span").forEach(s=>s.onclick=()=>{
   const fk=s.parentElement.dataset.fk,n=+s.dataset.n;form[fk]=n;

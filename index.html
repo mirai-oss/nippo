@@ -1664,7 +1664,7 @@ function weeklyScorecardHtml(storeName,vals,editable){
   const diff=(hasB&&hasA)?a-b:null;
   const rate=(hasB&&b!==0&&hasA)?Math.round(a/b*1000)/10:null;
   const cell=(key,val)=>editable
-   ?`<input type="number" step="0.1" inputmode="decimal" class="inp" data-fkd="${key}" value="${val==null||val===""?"":esc(val)}" style="width:76px;margin:0;text-align:right;font-size:12px;padding:4px 6px;background:#fffbe6">`
+   ?`<input type="number" step="0.1" inputmode="decimal" class="inp scorecalc" data-fkd="${key}" value="${val==null||val===""?"":esc(val)}" style="width:76px;margin:0;text-align:right;font-size:12px;padding:4px 6px;background:#fffbe6">`
    :((val!=null&&val!=="")?fmt(Number(val)):"—");
   return `<tr><td style="padding:4px 6px">${esc(label)}</td>
    <td style="padding:4px 6px;text-align:right">${cell(bKey,bVal)}</td>
@@ -4017,7 +4017,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.73</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.74</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -4504,6 +4504,9 @@ function bindPage(){
   }
   render();
  };
+ // v2.6.74 スコアカードの手入力欄（PA時間数・Google口コミ数・ダイニー点数）は、
+ //   入力し終えたら（フォーカスを外したら）差異・予算比率をその場で計算し直す
+ document.querySelectorAll("input.scorecalc").forEach(inp=>inp.onchange=()=>{collectForm();render()});
  // 入力ウィジェット
  document.querySelectorAll(".stars[data-fk] span").forEach(s=>s.onclick=()=>{
   const fk=s.parentElement.dataset.fk,n=+s.dataset.n;form[fk]=n;

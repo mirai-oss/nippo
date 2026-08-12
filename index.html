@@ -271,9 +271,9 @@ const FORMATS={
 };
 const WEEKLY_FMT=[
  {k:"summary",label:"今週の振り返り",type:"text",req:true},
- {k:"plan",label:"来週の重点・アクションプラン",type:"text",req:true},
- {k:"paHoursBudget",label:"PA時間数（予算・時間）",type:"hours"}, // v2.6.69 週報スコアカード用（自動取得の仕組みが無いため手入力）
- {k:"paHoursActual",label:"PA時間数（実績・時間）",type:"hours"}
+ {k:"plan",label:"来週の重点・アクションプラン",type:"text",req:true}
+ // v2.6.71 PA時間数・Google口コミ数・ダイニー点数・次週目標は、
+ //   週報スコアカード（weeklyDashPanelHtml）の中に入力欄がある（店舗ごとに値が違うため）
 ];
 
 // ===== 状態 =====
@@ -429,7 +429,7 @@ function pickedStation(boxId){
 // v2.6.50 チェックリスト（複数選択）の回答を、付いた／付いていないが分かる形で出す
 // 選択肢が分かるとき（fd.opts）は、選ばれていないものも ☐ で並べる
 function answerHtml(fd,v){
- const multi=fd&&(fd.type==="multi"||fd.type==="check");
+ const multi=fd&&(fd.type==="multi"||fd.type==="check"||fd.type==="storepick"); // v2.6.71
  if(multi&&fd.opts&&fd.opts.length){
   const picked=(Array.isArray(v)?v:String(v==null?"":v).split(/[、,]/)).map(x=>String(x).trim()).filter(Boolean);
   const rows=fd.opts.map(o=>{
@@ -464,6 +464,8 @@ function previewFields(list,title){
    h+=opts.map(o=>`<label class="radio-row"><input type="radio" disabled>${esc(o)}</label>`).join("")||`<p class="muted" style="margin:0">選択肢が未設定です</p>`;
   else if(f.type==="multi"||f.type==="check"||f.type==="select2")
    h+=`<div>${opts.map(o=>`<span class="chip">${esc(o)}</span>`).join("")||`<span class="muted">選択肢が未設定です</span>`}</div>`;
+  else if(f.type==="storepick") // v2.6.71 プレビューでは店舗の例を出す（実際は回答した人の担当店舗になる）
+   h+=`<div>${(stores||[]).slice(0,4).map(s=>`<span class="chip">${esc(s.name)}</span>`).join("")||`<span class="muted">店舗が未登録です</span>`}</div><p class="muted" style="margin:2px 0 0;font-size:12px">回答した人の担当店舗が選択肢になります</p>`;
   else if(f.type==="date")h+=`<input type="date" class="inp" style="margin:0" disabled>`;
   else if(f.type==="time")h+=`<div style="display:flex;gap:6px;align-items:center"><select class="inp" style="margin:0;max-width:88px" disabled><option>--</option></select><span>時</span><select class="inp" style="margin:0;max-width:88px" disabled><option>--</option></select><span>分</span></div>`;
   else if(f.type==="stars")h+=`<div style="font-size:22px;letter-spacing:4px;color:#f0a020">☆☆☆☆☆</div>`;
@@ -1617,12 +1619,16 @@ async function fetchDashExtra(storeIds,ymList){
   return data||[];
  }catch(e){return []}
 }
+// v2.6.71 手入力できる項目（PA時間数・Google口コミ数・ダイニー点数）の答えを保存するキー名
+//   店舗ごとに別の値なので、店舗IDを付けて区別する（チーム長は複数店舗ぶん同時に持てる）
+const scoreKey=(base,storeId)=>`${base}__${storeId}`;
 // v2.6.69 週報のスコアカード（項目／予算／実績／差異／予算比率）を1店舗ぶん作る
-function weeklyScorecardHtml(storeName,vals){
+// editable=true のときは、手入力の項目（PA時間数・Google口コミ数・ダイニー点数）を入力欄で出す
+function weeklyScorecardHtml(storeName,vals,editable){
  const yen=n=>"¥"+Math.round(n).toLocaleString("ja-JP");
  const num1=n=>(Math.round(n*10)/10).toLocaleString("ja-JP");
  const pct1=n=>(Math.round(n*10)/10)+"%";
- const row=(label,budget,actual,fmt)=>{
+ const autoRow=(label,budget,actual,fmt)=>{
   const hasB=budget!=null&&budget!=="",hasA=actual!=null&&actual!=="";
   const b=hasB?Number(budget):null,a=hasA?Number(actual):null;
   const diff=(hasB&&hasA)?a-b:null;
@@ -1633,16 +1639,31 @@ function weeklyScorecardHtml(storeName,vals){
    <td style="padding:4px 6px;text-align:right">${diff!=null?fmt(diff):"—"}</td>
    <td style="padding:4px 6px;text-align:right">${rate!=null?rate+"%":"—"}</td></tr>`;
  };
+ // v2.6.71 手入力の項目（黄色背景）。editableなら入力欄、そうでなければ入れた値をそのまま表示
+ const manualRow=(label,bKey,aKey,bVal,aVal,fmt)=>{
+  const hasB=bVal!=null&&bVal!=="",hasA=aVal!=null&&aVal!=="";
+  const b=hasB?Number(bVal):null,a=hasA?Number(aVal):null;
+  const diff=(hasB&&hasA)?a-b:null;
+  const rate=(hasB&&b!==0&&hasA)?Math.round(a/b*1000)/10:null;
+  const cell=(key,val)=>editable
+   ?`<input type="number" step="0.1" inputmode="decimal" class="inp" data-fkd="${key}" value="${val==null||val===""?"":esc(val)}" style="width:76px;margin:0;text-align:right;font-size:12px;padding:4px 6px;background:#fffbe6">`
+   :((val!=null&&val!=="")?fmt(Number(val)):"—");
+  return `<tr><td style="padding:4px 6px">${esc(label)}</td>
+   <td style="padding:4px 6px;text-align:right">${cell(bKey,bVal)}</td>
+   <td style="padding:4px 6px;text-align:right">${cell(aKey,aVal)}</td>
+   <td style="padding:4px 6px;text-align:right">${diff!=null?fmt(diff):"—"}</td>
+   <td style="padding:4px 6px;text-align:right">${rate!=null?rate+"%":"—"}</td></tr>`;
+ };
  return `<div class="card" style="overflow-x:auto"><h3 style="margin:0 0 8px">🐔 ${esc(storeName)}</h3>
   <table style="width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap">
    <tr style="border-bottom:1px solid var(--line)"><th style="text-align:left;padding:4px 6px">項目</th><th style="text-align:right;padding:4px 6px">予算</th><th style="text-align:right;padding:4px 6px">実績</th><th style="text-align:right;padding:4px 6px">差異</th><th style="text-align:right;padding:4px 6px">予算比率</th></tr>
-   ${row("売上",vals.salesTgt,vals.salesAct,yen)}
-   ${row("PA時間数",vals.paBudget,vals.paActual,n=>num1(n)+"h")}
-   ${row("原価率",vals.costTgt,vals.costAct,pct1)}
-   ${row("Google口コミ数",vals.reviewTgt,vals.reviewAct,num1)}
-   ${row("ダイニー点数",vals.diniiTgt,vals.diniiAct,num1)}
+   ${autoRow("売上",vals.salesTgt,vals.salesAct,yen)}
+   ${manualRow("PA時間数",vals.paBudgetKey,vals.paActualKey,vals.paBudget,vals.paActual,n=>num1(n)+"h")}
+   ${autoRow("原価率",vals.costTgt,vals.costAct,pct1)}
+   ${manualRow("Google口コミ数",vals.reviewBudgetKey,vals.reviewActualKey,vals.reviewBudget,vals.reviewActual,num1)}
+   ${manualRow("ダイニー点数",vals.diniiBudgetKey,vals.diniiActualKey,vals.diniiBudget,vals.diniiActual,num1)}
   </table>
-  <p class="muted" style="margin:8px 0 0;font-size:11px">Google口コミ数・ダイニー点数の実績は自動連携が未対応のため空欄です（目標のみ表示）</p></div>`;
+  ${editable?`<p class="muted" style="margin:8px 0 0;font-size:11px">黄色い欄（PA時間数・Google口コミ数・ダイニー点数）は手入力です。Google口コミ数・ダイニー点数の予算は自動で入っていれば下書きとして表示（書き換え可）</p>`:""}</div>`;
 }
 // 週報を「書く」画面用。所属店舗ぶん（チーム長は担当店舗ぶん）をスコアカードで見せる
 async function weeklyDashPanelHtml(){
@@ -1656,15 +1677,21 @@ async function weeklyDashPanelHtml(){
   const sAct=act.filter(x=>x.store_id===s.id),sTgt=tgt.filter(x=>x.store_id===s.id),sTm=tm.filter(x=>x.store_id===s.id);
   const sExtra=extra.filter(x=>x.store_id===s.id);
   const costAct=dashFlPct(dashSum(sAct,"cost"),0,dashSum(sAct,"sales")); // 原価率のみ（FLではなく原価だけ）
+  const k=base=>scoreKey(base,s.id);
   return weeklyScorecardHtml(s.name,{
    salesAct:sAct.length?dashSum(sAct,"sales"):null, salesTgt:sTgt.length?dashSum(sTgt,"sales_target"):null,
-   paBudget:form.paHoursBudget, paActual:form.paHoursActual,
    costAct:sAct.length?costAct:null, costTgt:sTm.length?Math.round(dashSum(sTm,"cost_rate")/sTm.length*10)/10:null, // 月をまたぐ週は平均
-   reviewTgt:dashSum(sExtra,"review_target")||null, reviewAct:null,
-   diniiTgt:dashSum(sExtra,"dinii_target")||null, diniiAct:null,
-  });
+   paBudgetKey:k("paBudget"),paActualKey:k("paActual"),paBudget:form[k("paBudget")],paActual:form[k("paActual")],
+   reviewBudgetKey:k("reviewBudget"),reviewActualKey:k("reviewActual"),
+   reviewBudget:form[k("reviewBudget")]??(dashSum(sExtra,"review_target")||null),reviewActual:form[k("reviewActual")],
+   diniiBudgetKey:k("diniiBudget"),diniiActualKey:k("diniiActual"),
+   diniiBudget:form[k("diniiBudget")]??(dashSum(sExtra,"dinii_target")||null),diniiActual:form[k("diniiActual")],
+  },true);
  }).join("");
- return `<h3 style="margin:14px 0 0">📊 週報スコアカード（${fmtDate(weekStart)}〜${fmtDate(weekEnd)}）</h3>${cards}`;
+ return `<h3 style="margin:14px 0 0">📊 週報スコアカード（${fmtDate(weekStart)}〜${fmtDate(weekEnd)}）</h3>
+  <p style="margin:4px 0 10px"><button class="btn sm sub" id="dash-refetch" type="button">🔄 取り込む（最新の売上・目標を再取得）</button></p>
+  ${cards}
+  ${await nextWeekTargetHtml(weekEnd)}`;
 }
 // 週報の詳細画面用。その週報が対象にしている週（report_dateから逆算）でスコアカードを作る
 async function weeklyDashPanelForReport(r){
@@ -1675,14 +1702,31 @@ async function weeklyDashPanelForReport(r){
  const [{act,tgt,tm},extra]=await Promise.all([fetchDashRange([r.store_id],weekStart,weekEnd,ymList),fetchDashExtra([r.store_id],ymList)]);
  const sname=(stores.find(s=>s.id===r.store_id)||{}).name||"";
  const costAct=dashFlPct(dashSum(act,"cost"),0,dashSum(act,"sales"));
+ const ans=r.answers||{};
+ const k=base=>scoreKey(base,r.store_id);
  const card=weeklyScorecardHtml(sname,{
   salesAct:act.length?dashSum(act,"sales"):null, salesTgt:tgt.length?dashSum(tgt,"sales_target"):null,
-  paBudget:(r.answers||{}).paHoursBudget, paActual:(r.answers||{}).paHoursActual,
   costAct:act.length?costAct:null, costTgt:tm.length?Math.round(dashSum(tm,"cost_rate")/tm.length*10)/10:null, // 月をまたぐ週は平均
-  reviewTgt:dashSum(extra,"review_target")||null, reviewAct:null,
-  diniiTgt:dashSum(extra,"dinii_target")||null, diniiAct:null,
- });
- return `<h3 style="margin:14px 0 0">📊 週報スコアカード（${fmtDate(weekStart)}〜${fmtDate(weekEnd)}）</h3>${card}`;
+  paBudget:ans[k("paBudget")], paActual:ans[k("paActual")],
+  reviewBudget:ans[k("reviewBudget")], reviewActual:ans[k("reviewActual")],
+  diniiBudget:ans[k("diniiBudget")], diniiActual:ans[k("diniiActual")],
+ },false);
+ const nextH=(ans.nextPaTarget||ans.nextReviewTarget||ans.nextDiniiTarget)
+  ?`<div class="card"><h3 style="margin:0 0 8px">🎯 次週目標</h3><p style="font-size:13px;line-height:1.9;margin:0">
+    PA時間数: ${ans.nextPaTarget??"—"}h／Google口コミ数: ${ans.nextReviewTarget??"—"}／ダイニー点数: ${ans.nextDiniiTarget??"—"}</p></div>`
+  :"";
+ return `<h3 style="margin:14px 0 0">📊 週報スコアカード（${fmtDate(weekStart)}〜${fmtDate(weekEnd)}）</h3>${card}${nextH}`;
+}
+// v2.6.71 次週目標（PA時間数・Google口コミ数・ダイニー点数は手入力）。書く画面でだけ出す
+async function nextWeekTargetHtml(thisWeekEnd){
+ const n=new Date(thisWeekEnd+"T00:00:00Z");n.setUTCDate(n.getUTCDate()+7); // 翌週の月曜（対象期間の終わり）
+ const nextEndStr=n.toISOString().slice(0,10);
+ return `<div class="card"><h3 style="margin:0 0 8px">🎯 次週目標</h3>
+  <p class="muted" style="margin:0 0 8px;font-size:11px">来週（${fmtDate(nextEndStr)}を含む週）の目標です。手入力してください</p>
+  <p class="muted" style="margin:0 0 2px">PA時間数（時間）</p><input type="number" step="0.1" inputmode="decimal" class="inp" data-fkd="nextPaTarget" value="${form.nextPaTarget??""}" style="margin-top:0">
+  <p class="muted" style="margin:8px 0 2px">Google口コミ数</p><input type="number" step="1" inputmode="decimal" class="inp" data-fkd="nextReviewTarget" value="${form.nextReviewTarget??""}" style="margin-top:0">
+  <p class="muted" style="margin:8px 0 2px">ダイニー点数</p><input type="number" step="0.1" inputmode="decimal" class="inp" data-fkd="nextDiniiTarget" value="${form.nextDiniiTarget??""}" style="margin-top:0">
+  </div>`;
 }
 // ===== 日報・週報 入力 =====
 async function writeView(kind){
@@ -1717,6 +1761,11 @@ async function writeView(kind){
    h+=f.opts.map(o=>`<span class="chip ${v===o?"on":""}" data-fk1="${f.k}" data-o="${esc(o)}">${esc(o)}</span>`).join("");
   }else if(f.type==="check"){
    h+=f.opts.map(o=>`<span class="chip ${(v||[]).includes(o)?"on":""}" data-fk="${f.k}" data-o="${esc(o)}">${esc(o)}</span>`).join("")+`<p class="muted">全項目タップでチェック</p>`;
+  }else if(f.type==="storepick"){ // v2.6.71 担当店舗を複数選択（チーム長は担当店舗すべて）
+   const spOpts=(me.stores||[]).map(s=>s.name);
+   h+=spOpts.length
+    ?spOpts.map(o=>`<span class="chip ${(v||[]).includes(o)?"on":""}" data-fk="${f.k}" data-o="${esc(o)}">${esc(o)}</span>`).join("")+`<p class="muted">担当店舗をタップして選択（複数可）</p>`
+    :`<p class="muted">担当店舗が設定されていません</p>`;
   }else if(f.type==="select"){
    h+=`<select class="inp" data-fk2="${f.k}"><option value="">選択してください</option>${stores.map(s=>`<option ${v===s.name?"selected":""}>${esc(s.name)}</option>`).join("")}</select>`;
   }else if(f.type==="pull"){
@@ -2592,10 +2641,22 @@ async function listView(){
  return h;
 }
 
+// v2.6.71 ある人（チームならteam_stores経由の担当店舗も含む）の店舗名一覧。storepickの選択肢に使う
+async function authorStoreNames(userId,role,teamId){
+ try{
+  const {data:us}=await sb.from("user_stores").select("store_id").eq("user_id",userId);
+  let ids=(us||[]).map(x=>x.store_id);
+  if(role==="TEAM"&&teamId){
+   const {data:ts}=await sb.from("team_stores").select("store_id").eq("team_id",teamId);
+   ids=[...new Set([...ids,...(ts||[]).map(x=>x.store_id)])];
+  }
+  return ids.map(id=>(stores.find(s=>s.id===id)||{}).name).filter(Boolean);
+ }catch(e){return []}
+}
 // ===== 詳細 =====
 async function detailView(){
  const {data:r,error}=await sb.from("reports")
-  .select("*,author:users!reports_author_id_fkey(id,name,role)").eq("id",detail).single();
+  .select("*,author:users!reports_author_id_fkey(id,name,role,team_id)").eq("id",detail).single(); // v2.6.71 team_idもstorepick表示用に必要
  if(error||!r)return `<span class="back" data-nav="list">← 一覧</span><div class="alert">読み込めませんでした</div>`;
  // 既読を付ける（v2.6.28 読んだ時刻をサーバー側で更新。SQL未適用の環境では旧方式で挿入だけ）
  if(r.author.id!==me.id){
@@ -2613,7 +2674,10 @@ async function detailView(){
  let h=`<span class="back" data-nav="list">← 一覧</span>
   <h2>${esc(r.author.name)}さんの${r.kind==="weekly"?"週報":"日報"} <span class="muted">${fmtDate(r.report_date)}</span>${r.overdue?' <span class="badge" style="background:#c0392b">⚠️ 期限超過</span>':""}</h2>`;
  h+=r.kind==="weekly"?await weeklyDashPanelForReport(r):await dashPanelForReport(r); // v2.6.68 この日報の売上・FL
- (r.kind==="weekly"?weeklyFmt(r.author.role):fmtAll(r.author.role)).forEach(f=>{ // v2.6.26 書いた人の役職で表示
+ const fmtList=r.kind==="weekly"?weeklyFmt(r.author.role):fmtAll(r.author.role); // v2.6.26 書いた人の役職で表示
+ // v2.6.71 「担当店舗を複数選択」は、書いた人（チームなら担当店舗全て）の店舗一覧が選択肢になる
+ const spOpts=fmtList.some(f=>f.type==="storepick")?await authorStoreNames(r.author.id,r.author.role,r.author.team_id):[];
+ fmtList.forEach(f=>{
   if(seen[f.k])return;seen[f.k]=1;
   const v=r.answers[f.k];
   if(v==null||v===""||(Array.isArray(v)&&!v.length))return;
@@ -2624,6 +2688,9 @@ async function detailView(){
   // v2.6.50 チェックリストは、付いた／付いていないが分かる形で出す
   if((f.type==="multi"||f.type==="check")&&f.opts&&f.opts.length){
    h+=`<div class="card"><h3>${esc(f.label)}</h3>${answerHtml(f,v)}</div>`;return;
+  }
+  if(f.type==="storepick"){ // v2.6.71
+   h+=`<div class="card"><h3>${esc(f.label)}</h3>${answerHtml({...f,opts:spOpts},v)}</div>`;return;
   }
   let disp=Array.isArray(v)?v.join("、"):(f.type==="stars"?"★".repeat(v)+"☆".repeat(5-v):f.type==="num"?v+"点／10点":String(v));
   h+=`<div class="card"><h3>${esc(f.label)}</h3><div style="font-size:14px;white-space:pre-wrap">${esc(disp)}</div></div>`;
@@ -3927,7 +3994,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.70</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.71</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -4297,7 +4364,7 @@ async function saveJoin(){
  toast("保存しました。新しい招待リンクから反映されます");
  setMode="main";render();
 }
-const TYPE_NAMES={text:"記入式（自由記述）",date:"日付（カレンダー）",time:"時間（何時何分）",stars:"★5段階",num:"評価点数（1〜10）",select2:"単一選択（ボタン）",radio:"ラジオボタン",pull:"プルダウン",multi:"複数選択",check:"チェックリスト",photo:"写真添付",select:"店舗選択",task:"報告（タスク化）"};
+const TYPE_NAMES={text:"記入式（自由記述）",date:"日付（カレンダー）",time:"時間（何時何分）",stars:"★5段階",num:"評価点数（1〜10）",select2:"単一選択（ボタン）",radio:"ラジオボタン",pull:"プルダウン",multi:"複数選択",check:"チェックリスト",storepick:"担当店舗を複数選択",photo:"写真添付",select:"店舗選択（単一・全店舗から）",task:"報告（タスク化）"};
 const OPT_TYPES=["multi","select2","check","radio","pull"];
 function curFmtList(){
  if(!cfgFmts[fmtRole]){
@@ -4405,6 +4472,7 @@ function bindPage(){
  if($("logoutbtn"))$("logoutbtn").onclick=async()=>{await sb.auth.signOut();me=null;renderLogin()};
  if($("submitbtn"))$("submitbtn").onclick=submitReport;
  if($("savedraft"))$("savedraft").onclick=saveDraft;
+ if($("dash-refetch"))$("dash-refetch").onclick=()=>{collectForm();toast("取り込んでいます…");render()}; // v2.6.71 週報スコアカードの再取得
  // 入力ウィジェット
  document.querySelectorAll(".stars[data-fk] span").forEach(s=>s.onclick=()=>{
   const fk=s.parentElement.dataset.fk,n=+s.dataset.n;form[fk]=n;

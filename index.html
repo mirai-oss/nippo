@@ -148,6 +148,8 @@ const APPLICANT_STATUS={new:"新規",contacted:"連絡済み",interview_set:"面
 const APPLICANT_ACTIVE=["new","contacted","interview_set","interviewed"];
 const APPLICANT_COLOR={new:"#2b6cb0",contacted:"#0e7490",interview_set:"#7c3aed",interviewed:"#d97706",hired:"#1e8e5a",retired:"#7a5c3e",noshow:"#9a3412",rejected:"#c0392b",declined:"#6b7280"}; // v2.5.5／v2.6.8で退職／v2.6.17でバックレを追加
 const APPLICANT_SOURCE={form:"フォーム",indeed:"Indeed",manual:"手動",csv:"CSV",referral:"紹介"};
+// v2.6.79 応募者の「担当者」に選べる（＝表示される）のは社長・本部・チーム長・店長だけにする
+const rcAssignable=()=>(tskUsers||[]).filter(u=>["CEO","HQ","TEAM","TENCHO"].includes(u.role));
 // v2.6.6 生年月日から年齢を計算（年齢が直接入っていればそれを使う）
 function rcAge(a){
  const an=(a&&a.answers)||{};
@@ -3004,7 +3006,8 @@ async function recruitView(){
   if(q&&!(((a.name||"")+(a.phone||"")+(a.email||"")+(a.job_type||"")+(a.note||"")+JSON.stringify(a.answers||{})).toLowerCase().includes(q)))return false;
   if(rcFForm==="none"){if(a.form_key)return false}
   else if(rcFForm&&a.form_key!==rcFForm)return false;
-  if(rcFAssignee&&a.assignee_id!==rcFAssignee)return false; // v2.6.78 応募元→担当者の絞り込みに変更
+  if(rcFAssignee==="__none__"){if(a.assignee_id)return false} // v2.6.79 担当なしだけ絞り込む
+  else if(rcFAssignee&&a.assignee_id!==rcFAssignee)return false; // v2.6.78 応募元→担当者の絞り込みに変更
   if(rcFArea&&!((rcAreaOf(a)+" "+(a.job_type||"")+JSON.stringify(a.answers||{})).includes(rcFArea)))return false;
   if(rcFrom||rcTo){const ym=(a.applied_at||"").slice(0,7);if(rcFrom&&ym<rcFrom)return false;if(rcTo&&ym>rcTo)return false} // v2.5.8 期間
   return true;
@@ -3079,7 +3082,7 @@ async function recruitView(){
   <select class="inp" id="rc-fstatus" style="flex:1;min-width:120px;margin:0;font-size:13px;padding:8px;${rcFStatus?`border-color:${APPLICANT_COLOR[rcFStatus]};color:${APPLICANT_COLOR[rcFStatus]};font-weight:600`:""}"><option value="">状況: 全て</option>${Object.entries(APPLICANT_STATUS).map(([k,v])=>`<option value="${k}"${rcFStatus===k?" selected":""}>${v}（${stCount[k]}）</option>`).join("")}</select>
   <select class="inp" id="rc-fform" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">区分: 全て</option><option value="al"${rcFForm==="al"?" selected":""}>アルバイト</option><option value="shain"${rcFForm==="shain"?" selected":""}>社員</option><option value="none"${rcFForm==="none"?" selected":""}>未設定</option></select>
   <select class="inp" id="rc-farea" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">エリア: 全て</option>${AREAS.map(a=>`<option${rcFArea===a?" selected":""}>${a}</option>`).join("")}</select>
-  <select class="inp" id="rc-fsrc" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">担当者: 全て</option>${(tskUsers||[]).map(u=>`<option value="${u.id}"${rcFAssignee===u.id?" selected":""}>${esc(u.name)}</option>`).join("")}</select>
+  <select class="inp" id="rc-fsrc" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">担当者: 全て</option><option value="__none__"${rcFAssignee==="__none__"?" selected":""}>🔴 担当なし</option>${rcAssignable().map(u=>`<option value="${u.id}"${rcFAssignee===u.id?" selected":""}>${esc(u.name)}</option>`).join("")}</select>
   <select class="inp" id="rc-sort" style="flex:1;min-width:120px;margin:0;font-size:13px;padding:8px"><option value="touch"${rcSort==="touch"?" selected":""}>並び: 最終更新の新しい順</option><option value="new"${rcSort==="new"?" selected":""}>並び: 応募順（新しい方から）</option><option value="old"${rcSort==="old"?" selected":""}>並び: 古い順</option><option value="interview"${rcSort==="interview"?" selected":""}>並び: 面接日が近い順</option><option value="name"${rcSort==="name"?" selected":""}>並び: 名前順</option><option value="status"${rcSort==="status"?" selected":""}>並び: ステータス順</option></select>
  </div>
  <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
@@ -3514,7 +3517,12 @@ function recruitDetailView(){
   <p class="muted" style="margin:8px 0 0">面接日時</p>
   <input type="datetime-local" class="inp" id="rc-interview" value="${a.interview_at?new Date(new Date(a.interview_at).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):""}">
   <p class="muted" style="margin:8px 0 0">担当者</p>
-  <select class="inp" id="rc-assignee"><option value="">未定</option>${(tskUsers||[]).map(u=>`<option value="${u.id}" ${a.assignee_id===u.id?"selected":""}>${esc(u.name)}</option>`).join("")}</select>
+  <select class="inp" id="rc-assignee"><option value="">未定</option>${(()=>{
+    const opts=rcAssignable();
+    // v2.6.79 今の担当が対象外の役職でも、選んだまま消えてしまわないよう選択肢に残しておく
+    const cur=a.assignee_id&&!opts.some(u=>u.id===a.assignee_id)?(tskUsers||[]).find(u=>u.id===a.assignee_id):null;
+    return (cur?[cur,...opts]:opts).map(u=>`<option value="${u.id}" ${a.assignee_id===u.id?"selected":""}>${esc(u.name)}${cur&&u.id===cur.id?"（対象外の役職）":""}</option>`).join("");
+   })()}</select>
   <p class="muted" style="margin:8px 0 0">選考メモ</p>
   <textarea rows="3" id="rc-note" placeholder="面接の所感・連絡の記録など">${esc(a.note||"")}</textarea>
   <button class="btn" id="rc-save">保存する</button></div>`;
@@ -4168,7 +4176,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.78</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.79</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====

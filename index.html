@@ -312,7 +312,7 @@ const rcStoreName=a=>{
 // 一覧に出す「更新 ○○」と並び順を必ず同じ値から作る（別々に数えるとズレるため）
 const RC_TOUCH_COLS=["updated_at","last_actor_at","last_msg_at","line_linked_at","invite_sent_at","invite_reminded_at","form_received_at","interview_sent_at","status_changed_at","applied_at"];
 const rcTouchAt=a=>{let m=0;RC_TOUCH_COLS.forEach(k=>{const v=a&&a[k];if(v){const t=Date.parse(v);if(t>m)m=t}});return m};
-let rcFForm="",rcFSrc="",rcFArea="",rcSort="touch",rcCosts=null,rcHiredInfo=null,joinSmSel=null,joinSmNo=false; // v2.5.2
+let rcFForm="",rcFAssignee="",rcFArea="",rcSort="touch",rcCosts=null,rcHiredInfo=null,joinSmSel=null,joinSmNo=false; // v2.5.2
 let rcFStatus=""; // v2.5.6 選考ステータス絞り込み
 let csvRows=null,csvBusy=false; // v2.6.5 CSV取り込み
 let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8
@@ -3004,7 +3004,7 @@ async function recruitView(){
   if(q&&!(((a.name||"")+(a.phone||"")+(a.email||"")+(a.job_type||"")+(a.note||"")+JSON.stringify(a.answers||{})).toLowerCase().includes(q)))return false;
   if(rcFForm==="none"){if(a.form_key)return false}
   else if(rcFForm&&a.form_key!==rcFForm)return false;
-  if(rcFSrc&&a.source!==rcFSrc)return false;
+  if(rcFAssignee&&a.assignee_id!==rcFAssignee)return false; // v2.6.78 応募元→担当者の絞り込みに変更
   if(rcFArea&&!((rcAreaOf(a)+" "+(a.job_type||"")+JSON.stringify(a.answers||{})).includes(rcFArea)))return false;
   if(rcFrom||rcTo){const ym=(a.applied_at||"").slice(0,7);if(rcFrom&&ym<rcFrom)return false;if(rcTo&&ym>rcTo)return false} // v2.5.8 期間
   return true;
@@ -3079,7 +3079,7 @@ async function recruitView(){
   <select class="inp" id="rc-fstatus" style="flex:1;min-width:120px;margin:0;font-size:13px;padding:8px;${rcFStatus?`border-color:${APPLICANT_COLOR[rcFStatus]};color:${APPLICANT_COLOR[rcFStatus]};font-weight:600`:""}"><option value="">状況: 全て</option>${Object.entries(APPLICANT_STATUS).map(([k,v])=>`<option value="${k}"${rcFStatus===k?" selected":""}>${v}（${stCount[k]}）</option>`).join("")}</select>
   <select class="inp" id="rc-fform" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">区分: 全て</option><option value="al"${rcFForm==="al"?" selected":""}>アルバイト</option><option value="shain"${rcFForm==="shain"?" selected":""}>社員</option><option value="none"${rcFForm==="none"?" selected":""}>未設定</option></select>
   <select class="inp" id="rc-farea" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">エリア: 全て</option>${AREAS.map(a=>`<option${rcFArea===a?" selected":""}>${a}</option>`).join("")}</select>
-  <select class="inp" id="rc-fsrc" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">応募元: 全て</option>${Object.entries(APPLICANT_SOURCE).map(([k,v])=>`<option value="${k}"${rcFSrc===k?" selected":""}>${v}</option>`).join("")}</select>
+  <select class="inp" id="rc-fsrc" style="flex:1;min-width:96px;margin:0;font-size:13px;padding:8px"><option value="">担当者: 全て</option>${(tskUsers||[]).map(u=>`<option value="${u.id}"${rcFAssignee===u.id?" selected":""}>${esc(u.name)}</option>`).join("")}</select>
   <select class="inp" id="rc-sort" style="flex:1;min-width:120px;margin:0;font-size:13px;padding:8px"><option value="touch"${rcSort==="touch"?" selected":""}>並び: 最終更新の新しい順</option><option value="new"${rcSort==="new"?" selected":""}>並び: 応募順（新しい方から）</option><option value="old"${rcSort==="old"?" selected":""}>並び: 古い順</option><option value="interview"${rcSort==="interview"?" selected":""}>並び: 面接日が近い順</option><option value="name"${rcSort==="name"?" selected":""}>並び: 名前順</option><option value="status"${rcSort==="status"?" selected":""}>並び: ステータス順</option></select>
  </div>
  <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
@@ -3089,7 +3089,7 @@ async function recruitView(){
   <input type="month" class="inp" id="rc-to" value="${esc(rcTo)}" style="flex:1;min-width:120px;margin:0;font-size:13px;padding:6px">
   ${(rcFrom||rcTo)?`<span class="chip" id="rc-perclear" style="font-size:11px;padding:3px 9px">✕ 期間解除</span>`:""}
  </div>`;
- if(rcQ||rcFForm||rcFSrc||rcFArea||rcFStatus||rcFrom||rcTo)h+=`<p class="muted" style="margin:0 0 8px">絞り込み中: ${act.length+hired.length+closed.length}件　<span style="color:var(--blue);cursor:pointer" id="rcqclear">✕ 条件をクリア</span></p>`;
+ if(rcQ||rcFForm||rcFAssignee||rcFArea||rcFStatus||rcFrom||rcTo)h+=`<p class="muted" style="margin:0 0 8px">絞り込み中: ${act.length+hired.length+closed.length}件　<span style="color:var(--blue);cursor:pointer" id="rcqclear">✕ 条件をクリア</span></p>`;
  // v2.6.21 面接日を過ぎて選考中のままの人を上に出す
  const odList=(rcList||[]).filter(rcOverdue);
  if(odList.length)h+=`<div class="card" style="background:#fff1f2;border-left:4px solid #c0392b"><h3 style="margin:0">⚠️ 面接日を過ぎています（${odList.length}件）</h3>
@@ -3135,7 +3135,7 @@ async function recruitView(){
  if(!list.length)h+=`<p class="muted center" style="margin-top:16px">該当する応募者はいません</p>`;
  rcVisible=list; // v2.6.18 CSVは表示件数の制限に関係なく、絞り込んだ全件を出す
  // v2.6.18 1行ごとにプルダウンが2つ付くので、多すぎると重くなる。100件ずつ表示する
- const sig=[rcSeg,rcQ,rcFForm,rcFSrc,rcFArea,rcFStatus,rcFrom,rcTo,rcSort].join("|");
+ const sig=[rcSeg,rcQ,rcFForm,rcFAssignee,rcFArea,rcFStatus,rcFrom,rcTo,rcSort].join("|");
  if(rcShownSig!==sig){rcShown=100;rcShownSig=sig}
  list.slice(0,rcShown).forEach(a=>{
   const form=(rcForms||[]).find(f=>f.key===a.form_key);
@@ -3192,7 +3192,7 @@ async function recruitView(){
   });
   return rows.length?rows.reduce((s,c)=>s+(+c.amount),0):null;
  };
- const filtLabel=(rcFArea||rcFForm||rcFSrc||rcQ||rcFStatus||rcFrom||rcTo)?`絞り込みで再計算中${rcFArea?"・"+esc(rcFArea):""}${rcFForm==="al"?"・アルバイト":rcFForm==="shain"?"・社員":""}${rcFStatus?"・"+APPLICANT_STATUS[rcFStatus]:""}${(rcFrom||rcTo)?"・"+(rcFrom||"最初")+"〜"+(rcTo||"今月"):""}`:"全体";
+ const filtLabel=(rcFArea||rcFForm||rcFAssignee||rcQ||rcFStatus||rcFrom||rcTo)?`絞り込みで再計算中${rcFArea?"・"+esc(rcFArea):""}${rcFForm==="al"?"・アルバイト":rcFForm==="shain"?"・社員":""}${rcFStatus?"・"+APPLICANT_STATUS[rcFStatus]:""}${(rcFrom||rcTo)?"・"+(rcFrom||"最初")+"〜"+(rcTo||"今月"):""}`:"全体";
  rcStatRows=[["月","応募","面接","採用","バックレ","面接率","採用率(面接から)","バックレ率(応募から)","費用","応募単価","面接単価","採用単価"]];
  months.forEach(m=>{
   const ms=fAll.filter(a=>mkey(a.applied_at)===m);
@@ -4168,7 +4168,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.77</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.78</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -5305,12 +5305,12 @@ function bindPage(){
  });
  document.querySelectorAll("[data-rccopy]").forEach(el=>el.onclick=e=>{e.stopPropagation();copyText(el.dataset.rccopy)});
  if($("rcq"))$("rcq").onkeydown=e=>{if(e.key==="Enter"){rcQ=$("rcq").value.trim();render()}};
- if($("rcqclear"))$("rcqclear").onclick=()=>{rcQ="";rcFForm="";rcFSrc="";rcFArea="";rcFStatus="";rcFrom="";rcTo="";render()};
+ if($("rcqclear"))$("rcqclear").onclick=()=>{rcQ="";rcFForm="";rcFAssignee="";rcFArea="";rcFStatus="";rcFrom="";rcTo="";render()};
  if($("rc-perclear"))$("rc-perclear").onclick=()=>{rcFrom="";rcTo="";render()};
  ["rc-from","rc-to"].forEach(id=>{if($(id))$(id).onchange=()=>{rcFrom=$("rc-from").value;rcTo=$("rc-to").value;render()}});
  const rcSegOf=st=>(st==="hired"||st==="retired")?"hired":(st==="rejected"||st==="declined"||st==="noshow")?"closed":"active"; // v2.5.6／v2.6.8／v2.6.17
  ["rc-fform","rc-fsrc","rc-farea","rc-sort","rc-fstatus"].forEach(fid=>{if($(fid))$(fid).onchange=()=>{
-  rcFForm=$("rc-fform").value;rcFSrc=$("rc-fsrc").value;rcFArea=$("rc-farea").value;rcSort=$("rc-sort").value;
+  rcFForm=$("rc-fform").value;rcFAssignee=$("rc-fsrc").value;rcFArea=$("rc-farea").value;rcSort=$("rc-sort").value;
   rcFStatus=$("rc-fstatus")?$("rc-fstatus").value:"";
   if(rcFStatus)rcSeg=rcSegOf(rcFStatus); // 選んだ状況が入っているタブへ自動で移動
   render();

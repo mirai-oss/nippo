@@ -115,6 +115,7 @@
   <button data-p="write"><i>✏️</i>日報</button>
   <button data-p="list"><i>📋</i>一覧<span class="ndot" id="listdot" style="display:none"></span></button>
   <button data-p="check"><i>☑️</i>チェック</button>
+  <button data-p="shift"><i>📅</i>シフト</button>
   <button data-p="tasks"><i>✅</i>タスク<span class="ndot" id="taskdot" style="display:none"></span></button>
   <button data-p="chat"><i>💬</i>チャット<span class="ndot" id="chatdot" style="display:none"></span></button>
   <button data-p="manuals"><i>📎</i>マニュアル</button>
@@ -1423,7 +1424,7 @@ async function render(){
  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.p===page||(page==="weekly"&&b.dataset.p==="write")));
  document.getElementById("navadmin").style.display=(can("staff_admin")||can("store_admin"))?"":"none";
  // v2.6.25 外販の人は ホーム・日報・一覧・タスク・応募・設定 だけ
- if(me.role==="GAIHAN")document.querySelectorAll('nav button[data-p="check"],nav button[data-p="chat"],nav button[data-p="weekly"],nav button[data-p="manuals"]').forEach(b=>b.style.display="none");
+ if(me.role==="GAIHAN")document.querySelectorAll('nav button[data-p="check"],nav button[data-p="chat"],nav button[data-p="weekly"],nav button[data-p="manuals"],nav button[data-p="shift"]').forEach(b=>b.style.display="none");
  document.getElementById("navrecruit").style.display=can("recruit")?"":"none"; // v2.5.2 応募は独立タブ
  updateDots();
  let body="";
@@ -1432,6 +1433,7 @@ async function render(){
  else if(page==="weekly")body=await writeView("weekly");
  else if(page==="list")body=detail?await detailView():await listView();
  else if(page==="check")body=await checkView();
+ else if(page==="shift")body=await shiftView();
  else if(page==="manuals")body=await manualsView(); // v2.6.59
  else if(page==="tasks")body=await tasksView();
  else if(page==="chat")body=await chatView();
@@ -2457,6 +2459,314 @@ function manualBlockEditorHtml(){
   <button class="btn sm sub" id="mveb-preview">${mvPreviewOn?"✔ プレビューを閉じる":"👀 プレビュー"}</button>`;
  if(mvPreviewOn){collectBlocksDom();h+=manualBlockViewHtml(mvEditContent)}
  return h;
+}
+// ===== シフト（機能④。docs/シフト打刻_設計書.md v1.0） =====
+const SF_KIND={A:"1〜15日",B:"16〜末日"};
+function sfCanManage(storeId){
+ if(me.is_master||["CEO","HQ","TEAM"].includes(me.role))return true;
+ if(me.role==="TENCHO")return (me.stores||[]).some(s=>s.id===storeId);
+ return false;
+}
+function sfPeriodIdx(y,m,half){return y*24+m*2+(half==="A"?0:1)}
+function sfPeriodInfo(y,m,half){ // m=0-indexed月
+ if(half==="A"){
+  const start=new Date(y,m,1),end=new Date(y,m,15);
+  let pm=m-1,py=y;if(pm<0){pm=11;py=y-1}
+  return {key:y+"-"+String(m+1).padStart(2,"0")+"-A",y,m,half,label:`${y}/${m+1}/1〜15`,start,end,deadline:new Date(py,pm,20,23,59,59),publish:new Date(py,pm,25)};
+ }
+ const start=new Date(y,m,16),end=new Date(y,m+1,0);
+ return {key:y+"-"+String(m+1).padStart(2,"0")+"-B",y,m,half,label:`${y}/${m+1}/16〜${end.getDate()}`,start,end,deadline:new Date(y,m,5,23,59,59),publish:new Date(y,m,10)};
+}
+function sfPeriodFromIdx(idx){let y=Math.floor(idx/24),rem=idx-y*24;if(rem<0){rem+=24;y-=1}return sfPeriodInfo(y,Math.floor(rem/2),rem%2===0?"A":"B")}
+function sfCurrentPeriod(){
+ const t=new Date(),y=t.getFullYear(),m=t.getMonth(),d=t.getDate();
+ if(d<=5)return sfPeriodInfo(y,m,"B");
+ if(d<=20){const nm=new Date(y,m+1,1);return sfPeriodInfo(nm.getFullYear(),nm.getMonth(),"A")}
+ const nm=new Date(y,m+1,1);return sfPeriodInfo(nm.getFullYear(),nm.getMonth(),"B");
+}
+function sfDateList(p){const arr=[];let d=new Date(p.start);while(d<=p.end){arr.push(sfFmtDate(d));d=new Date(d.getFullYear(),d.getMonth(),d.getDate()+1)}return arr}
+function sfFmtDate(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
+function sfFmtDateShort(ds){const d=new Date(ds+"T00:00:00");const w=["日","月","火","水","木","金","土"][d.getDay()];return (d.getMonth()+1)+"/"+d.getDate()+"("+w+")"}
+function sfFmtTime(t){return (t||"").slice(0,5)}
+
+let sfMode="submit",sfSubStore=null,sfSubPeriodIdx=null,sfEditDate=null;
+let sfMgStore=null,sfMgPeriodIdx=null;
+let sfPsStore=null;
+
+async function shiftView(){
+ const canManageAny=sfCanManage(null)||(me.stores||[]).length; // 表示切替の判定はざっくりでOK（各モード側でRLSが最終判定）
+ let h=`<h2>📅 シフト</h2>
+ <div class="card" style="display:flex;gap:8px;flex-wrap:wrap">
+  <button class="btn sm ${sfMode==="submit"?"":"sub"}" id="sfm-submit">📝 提出</button>
+  ${(me.stores||[]).length||sfCanManage(null)?`<button class="btn sm ${sfMode==="manage"?"":"sub"}" id="sfm-manage">🗂 管理・公開</button>
+  <button class="btn sm ${sfMode==="presets"?"":"sub"}" id="sfm-presets">⏱ 時間帯設定</button>`:""}
+ </div>`;
+ if(sfMode==="manage")return h+await sfManageView();
+ if(sfMode==="presets")return h+await sfPresetsView();
+ return h+await sfSubmitView();
+}
+
+// ---- 提出（自分） ----
+async function sfSubmitView(){
+ const myStores=me.stores||[];
+ if(!myStores.length)return `<p class="muted">所属店舗がありません。本部までお問い合わせください。</p>`;
+ if(!sfSubStore||!myStores.find(s=>s.id===sfSubStore))sfSubStore=myStores[0].id;
+ if(sfSubPeriodIdx===null){const cp=sfCurrentPeriod();sfSubPeriodIdx=sfPeriodIdx(cp.y,cp.m,cp.half)}
+ const p=sfPeriodFromIdx(sfSubPeriodIdx);
+ const dates=sfDateList(p);
+ const now=new Date();
+ const isPastDeadline=now>p.deadline;
+ const [{data:presets},{data:shifts}]=await Promise.all([
+  sb.from("sf_time_presets").select("*").eq("store_id",sfSubStore).eq("is_active",true).order("sort_order"),
+  sb.from("sf_shifts").select("*").eq("user_id",me.id).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1])
+ ]);
+ const shMap={};(shifts||[]).forEach(s=>shMap[s.work_date]=s);
+ const anyPublished=(shifts||[]).some(s=>s.status==="published");
+ let h=`<div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+  ${myStores.length>1?`<select class="inp" id="sf-store" style="flex:1;min-width:140px;margin:0">${myStores.map(s=>`<option value="${s.id}" ${s.id===sfSubStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select>`:`<b>${esc(myStores[0].name)}</b>`}
+  <select class="inp" id="sf-period" style="flex:1;min-width:140px;margin:0">${sfPeriodOptions(sfSubPeriodIdx)}</select>
+ </div>
+ <div class="info">対象期間: <b>${esc(p.label)}</b>｜提出期限: <b>${p.deadline.getMonth()+1}/${p.deadline.getDate()}</b>｜公開日: ${p.publish.getMonth()+1}/${p.publish.getDate()}${anyPublished?'　<span class="badge" style="background:#1e8e5a">公開済み</span>':""}</div>`;
+ if(!presets||!presets.length)h+=`<p class="muted" style="margin-top:10px">この店舗の時間帯設定がまだありません。店長・本部が「⏱ 時間帯設定」から用意します。</p>`;
+ h+=`<div class="card">`;
+ dates.forEach(ds=>{
+  const s=shMap[ds];
+  const locked=isPastDeadline||anyPublished;
+  const label=s?(s.is_off?"🌙 休み":`${sfFmtTime(s.start_time)}〜${sfFmtTime(s.end_time)}`):"未入力";
+  h+=`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line,#eee)">
+   <div style="width:64px;flex-shrink:0">${sfFmtDateShort(ds)}</div>
+   <div style="flex:1">${esc(label)}</div>
+   ${locked?"":`<button class="btn sm sub" data-sfedit="${ds}">編集</button>`}
+  </div>`;
+ });
+ h+=`</div>`;
+ if(!isPastDeadline&&!anyPublished&&presets&&presets.length)h+=`<button class="btn" id="sf-submitall" style="margin-top:10px">✅ この内容で提出する</button>`;
+ if(sfEditDate)h+=sfEditDayHtml(sfEditDate,presets||[],shMap[sfEditDate]);
+ return h;
+}
+function sfPeriodOptions(curIdx){
+ let h="";
+ for(let off=-1;off<=3;off++){
+  const idx=curIdx+off,p=sfPeriodFromIdx(idx);
+  h+=`<option value="${idx}" ${idx===curIdx?"selected":""}>${esc(p.label)}${p.publish<new Date()?"（公開済）":""}</option>`;
+ }
+ return h;
+}
+function sfEditDayHtml(ds,presets,cur){
+ return `<div class="card" style="border-color:var(--accent,#c8401f)">
+  <h3>${sfFmtDateShort(ds)} の入力</h3>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+   ${presets.map(pr=>`<button class="btn sm ${cur&&cur.preset_id===pr.id?"":"sub"}" data-sfpreset="${pr.id}">${esc(pr.label)}（${sfFmtTime(pr.start_time)}〜${sfFmtTime(pr.end_time)}）</button>`).join("")}
+   <button class="btn sm ${cur&&cur.is_off?"":"sub"}" data-sfoff="1">🌙 休み</button>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+   <label class="muted" style="font-size:12px">開始</label><input type="time" id="sf-start" value="${cur&&!cur.is_off?sfFmtTime(cur.start_time):""}" step="900" style="width:auto;margin:0">
+   <label class="muted" style="font-size:12px">終了</label><input type="time" id="sf-end" value="${cur&&!cur.is_off?sfFmtTime(cur.end_time):""}" step="900" style="width:auto;margin:0">
+  </div>
+  <div style="margin-top:10px;display:flex;gap:8px">
+   <button class="btn sm" id="sf-daysave">この内容で保存</button>
+   <button class="btn sm sub" id="sf-dayclose">閉じる</button>
+  </div>
+ </div>`;
+}
+
+// ---- 管理・公開（店長・本部） ----
+async function sfManageView(){
+ const pickable=sfCanManage(null)?stores:(me.stores||[]).filter(s=>sfCanManage(s.id));
+ if(!pickable.length)return `<p class="muted">管理できる店舗がありません。</p>`;
+ if(!sfMgStore||!pickable.find(s=>s.id===sfMgStore))sfMgStore=pickable[0].id;
+ if(sfMgPeriodIdx===null){const cp=sfCurrentPeriod();sfMgPeriodIdx=sfPeriodIdx(cp.y,cp.m,cp.half)}
+ const p=sfPeriodFromIdx(sfMgPeriodIdx);
+ const dates=sfDateList(p);
+ const [{data:presets},{data:shifts},{data:members},{data:reqs}]=await Promise.all([
+  sb.from("sf_time_presets").select("*").eq("store_id",sfMgStore).eq("is_active",true).order("sort_order"),
+  sb.from("sf_shifts").select("*").eq("store_id",sfMgStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
+  sb.from("user_stores").select("user_id,users(id,name,role,is_active)").eq("store_id",sfMgStore),
+  sb.from("sf_required_headcounts").select("*").eq("store_id",sfMgStore)
+ ]);
+ const people=(members||[]).map(m=>m.users).filter(u=>u&&u.is_active).sort((a,b)=>a.name.localeCompare(b.name,"ja"));
+ const shByUserDate={};(shifts||[]).forEach(s=>{shByUserDate[s.user_id+"|"+s.work_date]=s});
+ const submittedCount=(shifts||[]).filter(s=>s.status!=="draft").length;
+ const publishedCount=(shifts||[]).filter(s=>s.status==="published").length;
+ const notSubmitted=people.filter(u=>!dates.some(ds=>shByUserDate[u.id+"|"+ds]&&shByUserDate[u.id+"|"+ds].status!=="draft"));
+ let h=`<div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+  <select class="inp" id="sfmg-store" style="flex:1;min-width:140px;margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===sfMgStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select>
+  <select class="inp" id="sfmg-period" style="flex:1;min-width:140px;margin:0">${sfPeriodSelectHtml(sfMgPeriodIdx)}</select>
+ </div>
+ <div class="info">${esc(p.label)}｜提出済み ${submittedCount}件／公開済み ${publishedCount}件${publishedCount>0&&publishedCount===submittedCount?'　<span class="badge" style="background:#1e8e5a">全て公開済み</span>':""}</div>`;
+ if(notSubmitted.length)h+=`<div class="card" style="border-color:#b58a00"><b>⚠️ 未提出（1日も入力なし）</b>: ${notSubmitted.map(u=>esc(u.name)).join("・")}</div>`;
+ // 必要人数シミュレーション（同一画面に表示。sf_required_headcounts未設定なら「未設定」）
+ h+=`<div class="card"><h3>👥 必要人数（時間帯別）</h3><div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:12px">
+  <tr><th style="text-align:left;padding:4px">日付</th>${(presets||[]).map(pr=>`<th style="padding:4px">${esc(pr.label)}</th>`).join("")}</tr>
+  ${dates.map(ds=>{
+   const wd=new Date(ds+"T00:00:00").getDay();
+   return `<tr><td style="padding:4px">${sfFmtDateShort(ds)}</td>${(presets||[]).map(pr=>{
+    const need=(reqs||[]).find(r=>r.preset_id===pr.id&&(r.specific_date===ds||(r.specific_date===null&&r.weekday===wd)));
+    const have=people.filter(u=>{const s=shByUserDate[u.id+"|"+ds];return s&&s.preset_id===pr.id&&s.status!=="draft"}).length;
+    if(!need)return `<td style="padding:4px;text-align:center;color:#999">${have}/未設定</td>`;
+    const ok=have>=need.required_count;
+    return `<td style="padding:4px;text-align:center;color:${ok?"#1e8e5a":"#c8401f"}">${have}/${need.required_count}</td>`;
+   }).join("")}</tr>`;
+  }).join("")}
+ </table></div></div>`;
+ // シフト表（縦=人、横=日付）
+ h+=`<div class="card"><div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:12px">
+  <tr><th style="text-align:left;padding:4px;position:sticky;left:0;background:var(--bg,#fff)">氏名</th>${dates.map(ds=>`<th style="padding:4px;min-width:56px">${sfFmtDateShort(ds)}</th>`).join("")}</tr>
+  ${people.map(u=>`<tr><td style="padding:4px;position:sticky;left:0;background:var(--bg,#fff)">${esc(u.name)}</td>${dates.map(ds=>{
+   const s=shByUserDate[u.id+"|"+ds];
+   const label=s?(s.is_off?"休み":sfFmtTime(s.start_time)+"-"+sfFmtTime(s.end_time)):"-";
+   const badge=s&&s.status==="published"?(s.smaregi_sync_status==="error"?"⚠️":"✅"):s&&s.status==="submitted"?"📝":"";
+   const title=s&&s.smaregi_sync_status==="error"?` title="スマレジ未反映: ${esc(s.smaregi_error||"")}"`:"";
+   return `<td style="padding:4px;text-align:center;cursor:pointer" data-sfmgcell="${u.id}|${ds}"${title}>${badge}${esc(label)}</td>`;
+  }).join("")}</tr>`).join("")}
+ </table></div></div>`;
+ if(sfEditDate){
+  const [uid,ds]=sfEditDate.split("|");
+  const u=people.find(x=>x.id===uid);
+  h+=`<div class="card" style="border-color:var(--accent,#c8401f)"><h3>${esc(u?u.name:"")}｜${sfFmtDateShort(ds)}</h3>`+sfEditDayHtml(ds,presets||[],shByUserDate[uid+"|"+ds]).replace('id="sf-daysave"','id="sfmg-daysave" data-sfmguid="'+uid+'"').replace('id="sf-dayclose"','id="sfmg-dayclose"');
+  h+=`</div>`;
+ }
+ if(submittedCount>0&&publishedCount<submittedCount)h+=`<button class="btn" id="sfmg-publish" style="margin-top:10px">📣 この期間を公開する（スマレジにも反映）</button>`;
+ return h;
+}
+function sfPeriodSelectHtml(curIdx){
+ let h="";
+ for(let off=-2;off<=4;off++){
+  const idx=curIdx+off,p=sfPeriodFromIdx(idx);
+  h+=`<option value="${idx}" ${idx===curIdx?"selected":""}>${esc(p.label)}${p.publish<new Date()?"（公開済）":""}</option>`;
+ }
+ return h;
+}
+
+// ---- 時間帯プリセット設定 ----
+async function sfPresetsView(){
+ const pickable=sfCanManage(null)?stores:(me.stores||[]).filter(s=>sfCanManage(s.id));
+ if(!pickable.length)return `<p class="muted">設定できる店舗がありません。</p>`;
+ if(!sfPsStore||!pickable.find(s=>s.id===sfPsStore))sfPsStore=pickable[0].id;
+ const {data:presets}=await sb.from("sf_time_presets").select("*").eq("store_id",sfPsStore).order("sort_order");
+ let h=`<div class="card"><select class="inp" id="sfps-store" style="margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===sfPsStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select></div>
+ <div class="card"><h3>＋ 時間帯を追加</h3>
+  <input type="text" id="sfps-label" placeholder="例: ランチ">
+  <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;align-items:center">
+   <input type="time" id="sfps-start" step="900" style="width:auto;margin:0">〜
+   <input type="time" id="sfps-end" step="900" style="width:auto;margin:0">
+   <label class="muted" style="font-size:12px">休憩(分)</label><input type="number" id="sfps-break" value="0" min="0" style="width:70px;margin:0">
+   <button class="btn sm" id="sfps-add">追加</button>
+  </div></div>`;
+ (presets||[]).forEach(pr=>{
+  h+=`<div class="card" style="${pr.is_active?"":"opacity:.55;"}display:flex;justify-content:space-between;align-items:center">
+   <div>${esc(pr.label)}｜${sfFmtTime(pr.start_time)}〜${sfFmtTime(pr.end_time)}（休憩${pr.break_minutes}分）${pr.is_active?"":' <span class="badge" style="background:#888">停止中</span>'}</div>
+   <button class="btn sm sub" data-sfpstoggle="${pr.id}" data-on="${pr.is_active?1:0}">${pr.is_active?"停止":"再開"}</button>
+  </div>`;
+ });
+ return h;
+}
+
+// ---- 保存処理（共通） ----
+async function sfSaveDay(uid,storeId,ds,periodKey,presetId,isOff,startT,endT,presets){
+ let start=startT,end=endT,breakMin=0,pid=presetId||null;
+ if(isOff){start=null;end=null}
+ else if(pid){const pr=presets.find(x=>x.id===pid);if(pr){start=start||pr.start_time;end=end||pr.end_time;breakMin=pr.break_minutes}}
+ if(!isOff&&(!start||!end)){toast("時間を入力してください",true);return false}
+ const payload={user_id:uid,store_id:storeId,work_date:ds,period_key:periodKey,preset_id:pid,is_off:!!isOff,
+  start_time:isOff?"00:00":start,end_time:isOff?"00:00":end,break_minutes:breakMin,status:"draft",created_by:me.id,updated_at:new Date().toISOString()};
+ const {error}=await sb.from("sf_shifts").upsert(payload,{onConflict:"user_id,work_date"});
+ if(error){toast("保存エラー: "+error.message,true);return false}
+ return true;
+}
+
+function bindShiftPage(){
+ if($("sfm-submit"))$("sfm-submit").onclick=()=>{sfMode="submit";sfEditDate=null;render()};
+ if($("sfm-manage"))$("sfm-manage").onclick=()=>{sfMode="manage";sfEditDate=null;render()};
+ if($("sfm-presets"))$("sfm-presets").onclick=()=>{sfMode="presets";sfEditDate=null;render()};
+ // 提出
+ if($("sf-store"))$("sf-store").onchange=e=>{sfSubStore=e.target.value;render()};
+ if($("sf-period"))$("sf-period").onchange=e=>{sfSubPeriodIdx=+e.target.value;render()};
+ document.querySelectorAll("[data-sfedit]").forEach(b=>b.onclick=()=>{sfEditDate=b.dataset.sfedit;render()});
+ if(sfMode==="submit"&&$("sf-dayclose"))$("sf-dayclose").onclick=()=>{sfEditDate=null;render()};
+ let sfPickedPreset=null,sfPickedOff=false;
+ if(sfMode==="submit"){
+  document.querySelectorAll("[data-sfpreset]").forEach(b=>b.onclick=()=>{
+   sfPickedPreset=b.dataset.sfpreset;sfPickedOff=false;
+   document.querySelectorAll("[data-sfpreset]").forEach(x=>x.classList.toggle("sub",x!==b));
+   document.querySelectorAll("[data-sfoff]").forEach(x=>x.classList.add("sub"));
+  });
+  document.querySelectorAll("[data-sfoff]").forEach(b=>b.onclick=()=>{
+   sfPickedOff=true;sfPickedPreset=null;
+   document.querySelectorAll("[data-sfpreset]").forEach(x=>x.classList.add("sub"));
+   b.classList.remove("sub");
+  });
+ }
+ if(sfMode==="submit"&&$("sf-daysave"))$("sf-daysave").onclick=async()=>{
+  const ds=sfEditDate,st=$("sf-start").value,en=$("sf-end").value;
+  const {data:presets}=await sb.from("sf_time_presets").select("*").eq("store_id",sfSubStore);
+  const ok=await sfSaveDay(me.id,sfSubStore,ds,sfPeriodFromIdx(sfSubPeriodIdx).key,sfPickedPreset,sfPickedOff,st,en,presets||[]);
+  if(ok){sfEditDate=null;toast("保存しました");render()}
+ };
+ if($("sf-submitall"))$("sf-submitall").onclick=async()=>{
+  if(!confirm("この期間の内容で提出します。締切後は編集できません。よろしいですか？"))return;
+  const p=sfPeriodFromIdx(sfSubPeriodIdx);
+  const {error}=await sb.from("sf_shifts").update({status:"submitted",submitted_at:new Date().toISOString()}).eq("user_id",me.id).eq("period_key",p.key);
+  if(error){toast("提出エラー: "+error.message,true);return}
+  toast("✅ 提出しました");render();
+ };
+ // 管理
+ if($("sfmg-store"))$("sfmg-store").onchange=e=>{sfMgStore=e.target.value;sfEditDate=null;render()};
+ if($("sfmg-period"))$("sfmg-period").onchange=e=>{sfMgPeriodIdx=+e.target.value;sfEditDate=null;render()};
+ document.querySelectorAll("[data-sfmgcell]").forEach(td=>td.onclick=()=>{sfEditDate=td.dataset.sfmgcell;render()});
+ if(sfMode==="manage"&&$("sfmg-dayclose"))$("sfmg-dayclose").onclick=()=>{sfEditDate=null;render()};
+ let sfMgPickedPreset=null,sfMgPickedOff=false;
+ if(sfMode==="manage"){
+  document.querySelectorAll("[data-sfpreset]").forEach(b=>b.onclick=()=>{
+   sfMgPickedPreset=b.dataset.sfpreset;sfMgPickedOff=false;
+   document.querySelectorAll("[data-sfpreset]").forEach(x=>x.classList.toggle("sub",x!==b));
+   document.querySelectorAll("[data-sfoff]").forEach(x=>x.classList.add("sub"));
+  });
+  document.querySelectorAll("[data-sfoff]").forEach(b=>b.onclick=()=>{
+   sfMgPickedOff=true;sfMgPickedPreset=null;
+   document.querySelectorAll("[data-sfpreset]").forEach(x=>x.classList.add("sub"));
+   b.classList.remove("sub");
+  });
+ }
+ if(sfMode==="manage"&&$("sfmg-daysave"))$("sfmg-daysave").onclick=async()=>{
+  const uid=$("sfmg-daysave").dataset.sfmguid,ds=sfEditDate.split("|")[1];
+  const st=$("sf-start").value,en=$("sf-end").value;
+  const {data:presets}=await sb.from("sf_time_presets").select("*").eq("store_id",sfMgStore);
+  const ok=await sfSaveDay(uid,sfMgStore,ds,sfPeriodFromIdx(sfMgPeriodIdx).key,sfMgPickedPreset,sfMgPickedOff,st,en,presets||[]);
+  if(ok){sfEditDate=null;toast("保存しました");render()}
+ };
+ if($("sfmg-publish"))$("sfmg-publish").onclick=async()=>{
+  if(!confirm("この期間のシフトを公開します。スマレジ・タイムカードにも反映されます。よろしいですか？"))return;
+  const p=sfPeriodFromIdx(sfMgPeriodIdx);
+  const {data:list,error:e1}=await sb.from("sf_shifts").select("id").eq("store_id",sfMgStore).eq("period_key",p.key).neq("status","draft");
+  if(e1){toast("公開エラー: "+e1.message,true);return}
+  const {error}=await sb.from("sf_shifts").update({status:"published",published_at:new Date().toISOString()}).eq("store_id",sfMgStore).eq("period_key",p.key).neq("status","draft");
+  if(error){toast("公開エラー: "+error.message,true);return}
+  toast("公開しました。スマレジへの反映を開始します…");
+  const {data:sess}=await sb.auth.getSession();
+  const token=sess&&sess.session?sess.session.access_token:null;
+  try{
+   const r=await fetch(SUPA_URL+"/functions/v1/smaregi-shift-sync",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({period_key:p.key,store_id:sfMgStore})});
+   const j=await r.json().catch(()=>null);
+   if(j&&j.ok)toast(`スマレジ反映: 成功${j.synced||0}件${j.failed?`／失敗${j.failed}件`:""}${j.skipped?`／未連携のためスキップ${j.skipped}件`:""}`,!!(j.failed||j.skipped));
+   else toast("スマレジ反映でエラーが出ました（シフト自体は公開済みです）",true);
+  }catch(e){toast("スマレジ反映でエラーが出ました（シフト自体は公開済みです）",true)}
+  render();
+ };
+ // プリセット
+ if($("sfps-store"))$("sfps-store").onchange=e=>{sfPsStore=e.target.value;render()};
+ if($("sfps-add"))$("sfps-add").onclick=async()=>{
+  const label=$("sfps-label").value.trim(),start=$("sfps-start").value,end=$("sfps-end").value,brk=+$("sfps-break").value||0;
+  if(!label||!start||!end){toast("項目名・開始・終了を入力してください",true);return}
+  const {error}=await sb.from("sf_time_presets").insert({store_id:sfPsStore,label,start_time:start,end_time:end,break_minutes:brk});
+  if(error){toast("追加エラー: "+error.message,true);return}
+  toast("追加しました");render();
+ };
+ document.querySelectorAll("[data-sfpstoggle]").forEach(b=>b.onclick=async()=>{
+  const {error}=await sb.from("sf_time_presets").update({is_active:b.dataset.on!=="1"}).eq("id",b.dataset.sfpstoggle);
+  if(error){toast("変更エラー: "+error.message,true);return}
+  render();
+ });
 }
 async function tasksView(){
  const [{data:ts,error},{data:us}]=await Promise.all([
@@ -4643,6 +4953,7 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset
 function bindPage(){
  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=()=>{page=el.dataset.nav;detail=null;editId=null;render()});
  if(page==="check")bindCheckPage();
+ if(page==="shift")bindShiftPage();
  if(page==="manuals")bindManualsPage(); // v2.6.59
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
  if($("goweekly"))$("goweekly").onclick=()=>{page="weekly";render()};

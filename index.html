@@ -1288,7 +1288,7 @@ async function doJoin(){
     const ext=((f.name.split(".").pop()||"jpg").toLowerCase().replace(/[^a-z0-9]/g,""))||"jpg";
     const path=data.user.id+"/join_"+Math.random().toString(36).slice(2,10)+"."+ext;
     const {error:pe}=await sb.storage.from("report-photos").upload(path,f,{contentType:f.type||"image/jpeg"});
-    if(!pe){const {data:pu}=sb.storage.from("report-photos").getPublicUrl(path);urls.push(pu.publicUrl)}
+    if(!pe)urls.push(path); // 2026-08-21: 非公開化に伴いpathで保存（表示側で署名URLに変換）
    }
    if(urls.length)extraPh[c.label]=urls;
   }
@@ -1968,8 +1968,7 @@ function renderPhotoGrid(fk){
    const path=me.id+"/"+todayStr().replace(/-/g,"")+"_"+Math.random().toString(36).slice(2,10)+"."+ext;
    const {error}=await sb.storage.from("report-photos").upload(path,f,{contentType:f.type||"image/jpeg"});
    if(error){toast("アップロードエラー: "+error.message,true);return}
-   const {data}=sb.storage.from("report-photos").getPublicUrl(path);
-   form[fk]=(form[fk]||[]).concat([data.publicUrl]);
+   form[fk]=(form[fk]||[]).concat([path]); // 2026-08-21: 非公開化に伴いpathで保存（表示側で署名URLに変換）
   }
   toast("写真を追加しました");renderPhotoGrid(fk);
  };
@@ -2110,8 +2109,7 @@ async function taskUpload(f,prefix){ // 添付ファイルをStorageへ → {url
  const path=me.id+"/"+(prefix||"tasks")+"/"+Date.now()+"_"+Math.random().toString(36).slice(2,8)+"."+ext; // v2.1: StorageのRLSが1階層目=UIDを要求するため
  const {error}=await sb.storage.from("report-photos").upload(path,f,{contentType:f.type||"application/octet-stream"});
  if(error){toast("アップロードエラー: "+error.message,true);return null}
- const {data}=sb.storage.from("report-photos").getPublicUrl(path);
- return {url:data.publicUrl,name:f.name,type:f.type||""};
+ return {url:path,name:f.name,type:f.type||""}; // 2026-08-21: 非公開化に伴いpathで保存（表示側で署名URLに変換）
 }
 function taskFileHtml(fl){
  return (fl||[]).map(f=>(f.type||"").startsWith("image/")
@@ -2259,8 +2257,7 @@ function bindCheckPage(){
     const path=me.id+"/checklist_"+ckDate.replace(/-/g,"")+"_"+itemId.slice(0,8)+"_"+Math.random().toString(36).slice(2,8)+"."+ext;
     const {error:pe}=await sb.storage.from("report-photos").upload(path,f,{contentType:f.type||"image/jpeg"});
     if(pe){toast("アップロードエラー: "+pe.message,true);return}
-    const {data:pu}=sb.storage.from("report-photos").getPublicUrl(path);
-    const {error}=await sb.from("checklist_checks").insert({item_id:itemId,store_id:ckStore,work_date:ckDate,checked_by:me.id,photo_url:pu.publicUrl});
+    const {error}=await sb.from("checklist_checks").insert({item_id:itemId,store_id:ckStore,work_date:ckDate,checked_by:me.id,photo_url:path}); // 2026-08-21: 非公開化に伴いpathで保存
     if(error){toast("記録エラー: "+error.message,true);return}
     toast("✅ 写真つきでチェックしました");inp.value="";render();
    };

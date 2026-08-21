@@ -131,6 +131,45 @@ const SUPA_URL="https://uuvsxzhpxtghojoubjcc.supabase.co";
 const SUPA_KEY="sb_publishable_MrwPJAx_Ws_fdRutprKCiQ_dg3wCiTr";
 const sb=window.supabase.createClient(SUPA_URL,SUPA_KEY);
 
+// ===== 2026-08-21 データ基盤Day2: report-photosバケット非公開化に伴う署名URL方式 =====
+// 既存データは公開URL形式(.../storage/v1/object/public/report-photos/...)がそのままDBに
+// 保存されている（このアプリの過去のアップロードは getPublicUrl() の結果を保存する方式だったため）。
+// 非公開化後もこの過去データをそのまま使えるよう、表示側で「フルURLならpath部分を取り出す→
+// 署名URLに変換」を行う。新規アップロード分はフルURLのままでも同じ経路で解決できるため、
+// 保存形式そのものは変更しない（安全のため今回は表示側の修正のみに留める）。
+const REPORT_PHOTOS_PUBLIC_PREFIX="/storage/v1/object/public/report-photos/";
+const _signedUrlCache=new Map(); // path -> {url, exp}
+function _photoPathFrom(urlOrPath){
+ const i=String(urlOrPath||"").indexOf(REPORT_PHOTOS_PUBLIC_PREFIX);
+ return i>=0 ? decodeURIComponent(urlOrPath.slice(i+REPORT_PHOTOS_PUBLIC_PREFIX.length)) : urlOrPath;
+}
+async function resolvePhotoTags(root){
+ const els=[...(root||document).querySelectorAll("[data-photo-src]:not([data-photo-resolved])")];
+ if(!els.length) return;
+ els.forEach(el=>el.dataset.photoResolved="pending");
+ const now=Date.now();
+ const need=new Set();
+ els.forEach(el=>{
+  const path=_photoPathFrom(el.dataset.photoSrc);
+  const c=_signedUrlCache.get(path);
+  if(!(c&&c.exp>now)) need.add(path);
+ });
+ if(need.size){
+  const {data}=await sb.storage.from("report-photos").createSignedUrls([...need],3600);
+  (data||[]).forEach(x=>{ if(x.signedUrl&&!x.error) _signedUrlCache.set(x.path,{url:x.signedUrl,exp:now+55*60*1000}); });
+ }
+ els.forEach(el=>{
+  const path=_photoPathFrom(el.dataset.photoSrc);
+  const c=_signedUrlCache.get(path);
+  el.dataset.photoResolved=c?"1":"";
+  if(!c) return;
+  if(el.tagName==="IMG") el.src=c.url; else el.href=c.url;
+ });
+}
+let _photoResolveTimer=null;
+new MutationObserver(()=>{clearTimeout(_photoResolveTimer);_photoResolveTimer=setTimeout(()=>resolvePhotoTags(document),50);})
+  .observe(document.body,{childList:true,subtree:true});
+
 // ===== フォーマット定義（プロトタイプ準拠） =====
 const ROLE_NAME={AL:"アルバイト",SHAIN:"社員",TENCHO:"店長",TEAM:"チーム長",HQ:"本部",CEO:"社長",GAIHAN:"外販"}; // v2.6.25 外販先向け
 // ===== v2.4 機能権限 =====
@@ -1916,7 +1955,7 @@ function collectForm(){ // DOM→form
 function renderPhotoGrid(fk){
  const wrap=document.querySelector(`[data-phwrap="${fk}"]`);if(!wrap)return;
  const arr=form[fk]||[];
- wrap.innerHTML=arr.map((u,i)=>`<div class="ph"><img src="${esc(u)}"><span class="del" data-phdel="${fk}" data-i="${i}">✕</span></div>`).join("")+
+ wrap.innerHTML=arr.map((u,i)=>`<div class="ph"><img data-photo-src="${esc(u)}"><span class="del" data-phdel="${fk}" data-i="${i}">✕</span></div>`).join("")+
   `<label class="addph">＋<input type="file" accept="image/*" data-phadd="${fk}" style="display:none" multiple></label>`;
  wrap.querySelectorAll("[data-phdel]").forEach(d=>d.onclick=()=>{
   form[fk]=(form[fk]||[]).filter((_,x)=>x!==+d.dataset.i);renderPhotoGrid(fk);
@@ -2076,8 +2115,8 @@ async function taskUpload(f,prefix){ // 添付ファイルをStorageへ → {url
 }
 function taskFileHtml(fl){
  return (fl||[]).map(f=>(f.type||"").startsWith("image/")
-  ?`<a href="${esc(f.url)}" target="_blank"><img src="${esc(f.url)}" style="max-width:120px;max-height:120px;border-radius:8px;margin:4px 4px 0 0;vertical-align:top"></a>`
-  :`<a href="${esc(f.url)}" target="_blank" style="display:inline-block;margin:4px 6px 0 0;font-size:13px">📎 ${esc(f.name||"ファイル")}</a>`).join("");
+  ?`<a data-photo-src="${esc(f.url)}" href="#" target="_blank"><img data-photo-src="${esc(f.url)}" style="max-width:120px;max-height:120px;border-radius:8px;margin:4px 4px 0 0;vertical-align:top"></a>`
+  :`<a data-photo-src="${esc(f.url)}" href="#" target="_blank" style="display:inline-block;margin:4px 6px 0 0;font-size:13px">📎 ${esc(f.name||"ファイル")}</a>`).join("");
 }
 const fmtDue=d=>{if(!d)return"";const t=new Date(d);return (t.getMonth()+1)+"/"+t.getDate()+" "+String(t.getHours()).padStart(2,"0")+":"+String(t.getMinutes()).padStart(2,"0")};
 function taskUserName(id){const u=(tskUsers||[]).find(x=>x.id===id);return u?u.name:"未定"}
@@ -2147,7 +2186,7 @@ async function checkView(){
     <button class="btn sm ${c?"":"sub"}" data-cktoggle="${i.id}" data-photoreq="${i.photo_required?1:0}" style="flex-shrink:0;min-width:64px">${c?"✅ 済":"⬜ する"}</button>
     <div style="flex:1">
      <div>${esc(i.label)}${i.photo_required?' <span class="badge" style="background:#b58a00">📷 写真必須</span>':""}${dueHM?` <span class="muted" style="font-size:11px">⏰${esc(dueHM)}まで</span>`:""}${isOverdue?' <span class="badge" style="background:#c0392b">⚠️ 期限切れ</span>':""}${c&&c.late?' <span class="badge" style="background:#d97706">⏰ 期限切れ完了</span>':""}</div>
-     ${c?`<div class="muted" style="font-size:11px">${esc((c.checker&&c.checker.name)||"")} ／ ${new Date(c.checked_at).toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"})}${c.photo_url?` ／ <a href="${esc(c.photo_url)}" target="_blank" rel="noopener">写真を見る</a>`:""}</div>`:""}
+     ${c?`<div class="muted" style="font-size:11px">${esc((c.checker&&c.checker.name)||"")} ／ ${new Date(c.checked_at).toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"})}${c.photo_url?` ／ <a data-photo-src="${esc(c.photo_url)}" href="#" target="_blank" rel="noopener">写真を見る</a>`:""}</div>`:""}
      ${hist.length>1?`<div style="margin-top:2px"><span class="muted" style="font-size:11px;color:var(--blue);cursor:pointer" data-ckhist="${i.id}">🕘 履歴（${hist.length}件）${ckHistOpen[i.id]?"を閉じる":"を見る"}</span>
       ${ckHistOpen[i.id]?`<div style="margin-top:4px;font-size:11px;color:#666;line-height:1.7">${hist.slice().reverse().map(l=>`${l.action==="checked"?"✅":"❌"} ${new Date(l.acted_at).toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"})} ${esc((l.actor&&l.actor.name)||"（不明）")}${l.action==="unchecked"?"（取消）":""}`).join("<br>")}</div>`:""}</div>`:""}
     </div></div>`;
@@ -4320,7 +4359,7 @@ async function adminEditView(){
    フリガナ: ${esc(prof.name_kana||"—")}<br>性別: ${{male:"男性",female:"女性",none:"回答しない"}[prof.gender]||"—"}<br>社員番号: ${esc(prof.staff_code||"—")}<br>生年月日: ${prof.birth_date||"—"}<br>電話: ${esc(prof.phone||"—")}<br>
    住所: ${esc([prof.postal_code,prof.address].filter(Boolean).join(" ")||"—")}<br>
    緊急連絡先: ${esc(prof.emergency_name||"—")}${prof.emergency_relation?`（${esc(prof.emergency_relation)}）`:""} ${esc(prof.emergency_phone||"")}<br>
-   入社日: ${prof.hire_date||"—"}<br>${prof.termination_date?`退職日: <b style="color:var(--red)">${prof.termination_date}</b><br>`:""}${prof.extra?Object.entries(prof.extra).map(([k,v])=>Array.isArray(v)?`${esc(k)}: `+v.map((u,x)=>`<a href="${esc(u)}" target="_blank">写真${x+1}</a>`).join(" ")+"<br>":`${esc(k)}: ${esc(v)}<br>`).join(""):""}スマレジ連携: ${smaregi}</p>
+   入社日: ${prof.hire_date||"—"}<br>${prof.termination_date?`退職日: <b style="color:var(--red)">${prof.termination_date}</b><br>`:""}${prof.extra?Object.entries(prof.extra).map(([k,v])=>Array.isArray(v)?`${esc(k)}: `+v.map((u,x)=>`<a data-photo-src="${esc(u)}" href="#" target="_blank">写真${x+1}</a>`).join(" ")+"<br>":`${esc(k)}: ${esc(v)}<br>`).join(""):""}スマレジ連携: ${smaregi}</p>
    ${prof.smaregi_sync_status!=="synced"?'<button class="btn sm" id="eu-smaregi" style="margin-top:10px">スマレジに再同期する</button>':""}
    ${prof.smaregi_staff_id?'<button class="btn sm sub" id="eu-resend" style="margin-top:10px">通知を送り直す（スマレジのリンク付き）</button>':""}</div>`;
   h+=fareCardHtml(u,prof); // v2.6.66 交通費の自動計算（表示専用）

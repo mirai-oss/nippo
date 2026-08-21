@@ -325,6 +325,7 @@ let joinGender=null; // v2.6.7
 let cwToken=null,smUrlTpl=null; // v2.6.9 Chatwork・スマレジURL
 let ekispertKey=null,fareCache={}; // v2.6.66 交通費の自動計算（駅すぱあと）
 let lineToken=null,lineSecret=null,lineOa=null; // v2.6.20 求人用LINE
+let lineLinkInfo=null; // v2.6.81 従業員本人のLINE連携（発行した合言葉・OA。応募者側のline_intakeとは独立）
 let dashId=null,dashPw=null,dashLog; // v2.6.57 売上ダッシュボード連携
 let teams=[],euTeam=null,lrList=null,lrEdit=null; // v2.6.2 チーム・日報Lark通知
 // v2.6.3 Lark通知のイベント（この動きがあったら通知する）
@@ -2493,7 +2494,24 @@ let sfMode="submit",sfSubStore=null,sfSubPeriodIdx=null,sfEditDate=null;
 let sfMgStore=null,sfMgPeriodIdx=null;
 let sfPsStore=null;
 
+// v2.6.81 未提出者へのLINEリマインド。hq_generate_today()と同じ「画面を開いたときにチェック」方式（外部cronなし）
+async function sfEnsureReminders(){
+ if(!(me.is_master||["CEO","HQ","TEAM","TENCHO"].includes(me.role)))return;
+ if(sessionStorage.getItem("sf_reminder_checked_"+todayStr()))return; // 同じセッション内で2回叩かない（最終防衛はDB側のユニーク制約）
+ sessionStorage.setItem("sf_reminder_checked_"+todayStr(),"1");
+ try{
+  const {data:targets,error}=await sb.rpc("sf_reminder_targets");
+  if(error||!targets||!targets.length)return;
+  for(const t of targets){
+   if(!t.line_user_id)continue; // LINE未連携の人は送れない
+   const text=`${t.name}さん\n\nシフト提出のリマインドです。\n本日 ${t.deadline} が「${t.period_key}」期間の提出期限です。\nお手数ですが、日報アプリの📅シフトからご提出をお願いします。`;
+   const r=await lineFn({action:"push_user",user_id:t.user_id,text});
+   if(r&&r.ok)await sb.rpc("sf_mark_reminded",{p_user_id:t.user_id,p_period_key:t.period_key});
+  }
+ }catch(e){} // 失敗してもシフト画面の表示は妨げない
+}
 async function shiftView(){
+ sfEnsureReminders(); // await しない（表示をブロックしない・裏で試みるだけ）
  const canManageAny=sfCanManage(null)||(me.stores||[]).length; // 表示切替の判定はざっくりでOK（各モード側でRLSが最終判定）
  let h=`<h2>📅 シフト</h2>
  <div class="card" style="display:flex;gap:8px;flex-wrap:wrap">
@@ -2581,7 +2599,7 @@ async function sfManageView(){
  const [{data:presets},{data:shifts},{data:members},{data:reqs}]=await Promise.all([
   sb.from("sf_time_presets").select("*").eq("store_id",sfMgStore).eq("is_active",true).order("sort_order"),
   sb.from("sf_shifts").select("*").eq("store_id",sfMgStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
-  sb.from("user_stores").select("user_id,users(id,name,role,is_active)").eq("store_id",sfMgStore),
+  sb.from("user_stores").select("user_id,users(id,name,role,is_active,line_user_id)").eq("store_id",sfMgStore),
   sb.from("sf_required_headcounts").select("*").eq("store_id",sfMgStore)
  ]);
  const people=(members||[]).map(m=>m.users).filter(u=>u&&u.is_active).sort((a,b)=>a.name.localeCompare(b.name,"ja"));
@@ -2594,7 +2612,7 @@ async function sfManageView(){
   <select class="inp" id="sfmg-period" style="flex:1;min-width:140px;margin:0">${sfPeriodSelectHtml(sfMgPeriodIdx)}</select>
  </div>
  <div class="info">${esc(p.label)}｜提出済み ${submittedCount}件／公開済み ${publishedCount}件${publishedCount>0&&publishedCount===submittedCount?'　<span class="badge" style="background:#1e8e5a">全て公開済み</span>':""}</div>`;
- if(notSubmitted.length)h+=`<div class="card" style="border-color:#b58a00"><b>⚠️ 未提出（1日も入力なし）</b>: ${notSubmitted.map(u=>esc(u.name)).join("・")}</div>`;
+ if(notSubmitted.length)h+=`<div class="card" style="border-color:#b58a00"><b>⚠️ 未提出（1日も入力なし）</b>: ${notSubmitted.map(u=>esc(u.name)+(u.line_user_id?"":"（⚠️LINE未連携）")).join("・")}</div>`;
  // 必要人数シミュレーション（同一画面に表示。sf_required_headcounts未設定なら「未設定」）
  h+=`<div class="card"><h3>👥 必要人数（時間帯別）</h3><div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:12px">
   <tr><th style="text-align:left;padding:4px">日付</th>${(presets||[]).map(pr=>`<th style="padding:4px">${esc(pr.label)}</th>`).join("")}</tr>
@@ -4363,7 +4381,23 @@ async function settingsView(){
   <div class="card"><h3>🔑 パスワードの変更</h3>
    <input type="password" id="pf-pw" placeholder="新しいパスワード（8文字以上）" autocomplete="new-password">
    <input type="password" id="pf-pw2" placeholder="確認のためもう一度" autocomplete="new-password">
-   <button class="btn sm" id="pf-pwsave">パスワードを変更</button></div>`;
+   <button class="btn sm" id="pf-pwsave">パスワードを変更</button></div>
+  <div class="card"><h3>💚 シフト連絡用LINE</h3>
+   <p class="muted" style="margin:0">シフト提出の締切が近いときなどに、LINEでお知らせが届くようになります。</p>
+   ${me.line_user_id?`
+    <p style="margin:10px 0 0">✅ 連携済みです</p>
+    <button class="btn sm sub" id="line-unlink" style="margin-top:8px">連携を解除する</button>
+   `:lineLinkInfo&&lineLinkInfo.oa?`
+    <div style="background:#f0fff4;border:2px solid #06c755;border-radius:8px;padding:14px;margin-top:10px">
+     <p style="margin:0 0 10px;font-size:14px">下のボタンを押すとLINEが開き、文字が入った状態になりますので、<b>そのまま送信してください。</b></p>
+     <a href="https://line.me/R/oaMessage/${encodeURIComponent(lineLinkInfo.oa)}/?${encodeURIComponent(lineLinkInfo.code)}" class="btn" style="background:#06c755;display:block;text-align:center;text-decoration:none;color:#fff;padding:12px">💚 LINEで連携する</a>
+     <p class="muted" style="margin:10px 0 0;font-size:12px;text-align:center">うまく開かない場合は、LINEで下の合言葉を送ってください</p>
+     <p style="font-size:22px;font-weight:700;letter-spacing:4px;margin:4px 0 0;text-align:center">${esc(lineLinkInfo.code)}</p>
+    </div>
+   `:`
+    <button class="btn sm" id="line-link-start" style="margin-top:8px">LINEと連携する</button>
+   `}
+  </div>`;
  if(can("format_config")){
   h+=`<div class="card"><h3>🛠 カスタマイズ</h3>
    <button class="btn sm" id="set-join" style="margin-bottom:8px">入社フォームの項目設定</button>
@@ -6180,6 +6214,19 @@ function bindPage(){
   $("pf-pwsave").disabled=false;
   if(error){toast("変更エラー: "+error.message,true);return}
   $("pf-pw").value="";$("pf-pw2").value="";toast("パスワードを変更しました");
+ };
+ // v2.6.81 従業員本人のLINE連携
+ if($("line-link-start"))$("line-link-start").onclick=async()=>{
+  $("line-link-start").disabled=true;
+  const {data,error}=await sb.rpc("user_issue_line_code");
+  if(error||!data||!data.ok){toast("エラー: "+(error?error.message:"合言葉の発行に失敗しました"),true);$("line-link-start").disabled=false;return}
+  lineLinkInfo=data;render();
+ };
+ if($("line-unlink"))$("line-unlink").onclick=async()=>{
+  if(!confirm("LINE連携を解除しますか？"))return;
+  const {error}=await sb.rpc("user_unlink_line");
+  if(error){toast("解除エラー: "+error.message,true);return}
+  me.line_user_id=null;me.line_linked_at=null;lineLinkInfo=null;toast("LINE連携を解除しました");render();
  };
  if($("editthis"))$("editthis").onclick=async()=>{
   const {data:r}=await sb.from("reports").select("kind").eq("id",detail).single();

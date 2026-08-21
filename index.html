@@ -2646,7 +2646,7 @@ async function sfManageView(){
   h+=`</div>`;
  }
  if(enteredCount>0&&publishedCount<enteredCount)h+=`<button class="btn" id="sfmg-publish" style="margin-top:10px">📣 この期間を公開する（スマレジにも反映）</button>`;
- h+=`<button class="btn sm sub" id="sfmg-import" style="margin-top:10px">📥 スマレジから取り込む（既にスマレジにある予定を反映）</button>`;
+ h+=`<button class="btn sm sub" id="sfmg-import" style="margin-top:10px">🔄 スマレジと同期する（追加・変更・削除を反映）</button>`;
  return h;
 }
 function sfPeriodSelectHtml(curIdx){
@@ -2802,6 +2802,7 @@ function bindShiftPage(){
   render();
  };
  if($("sfmg-import"))$("sfmg-import").onclick=async()=>{
+  if(!confirm("この期間をスマレジ・タイムカードの内容に合わせます。スマレジ側で消された分はポータルからも削除されます。よろしいですか？"))return;
   const p=sfPeriodFromIdx(sfMgPeriodIdx);
   $("sfmg-import").disabled=true;
   const {data:sess}=await sb.auth.getSession();
@@ -2809,9 +2810,9 @@ function bindShiftPage(){
   try{
    const r=await fetch(SUPA_URL+"/functions/v1/smaregi-shift-sync",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({action:"import_from_smaregi",period_key:p.key,store_id:sfMgStore})});
    const j=await r.json().catch(()=>null);
-   if(j&&j.ok)toast(`スマレジから取り込み: ${j.imported||0}件追加${j.skipped?`（既存のため${j.skipped}件はスキップ）`:""}`);
-   else toast("取り込みでエラーが出ました: "+(j&&j.error||"不明"),true);
-  }catch(e){toast("取り込みに失敗しました",true)}
+   if(j&&j.ok)toast(`スマレジと同期しました: 追加${j.added||0}件／更新${j.updated||0}件／削除${j.removed||0}件`);
+   else toast("同期でエラーが出ました: "+(j&&j.error||"不明"),true);
+  }catch(e){toast("同期に失敗しました",true)}
   $("sfmg-import").disabled=false;
   render();
  };

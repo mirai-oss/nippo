@@ -4127,7 +4127,7 @@ async function saveRecruitCost(){ // v2.5.2 月別の求人費用
 }
 
 // ===== 店舗マスタ管理（v1.6） =====
-let stList=null,stSmaregi,corpList=null; // v2.6.84 corpList: 法人プルダウン用
+let stList=null,stSmaregi,corpList=null,chanList=null; // v2.6.84 corpList: 法人プルダウン用／v2.6.85 chanList: 配信グループ（Day6③）
 async function smaregiStores(){ // スマレジ店舗一覧（紐付け用）
  try{
   const {data:{session}}=await sb.auth.getSession();
@@ -4149,15 +4149,19 @@ const WX_PRESETS=[
 ];
 async function adminStoresView(){
  if(!stList){
-  const [{data},{data:corps},{data:aliases}]=await Promise.all([
+  const [{data},{data:corps},{data:aliases},{data:channels},{data:chanStores}]=await Promise.all([
    sb.from("stores").select("*").order("sort_order"),
    sb.from("corporations").select("id,name").eq("is_active",true).order("sort_order"),
-   sb.from("store_aliases").select("store_id,alias,source")
+   sb.from("store_aliases").select("store_id,alias,source"),
+   sb.from("report_channels").select("*").order("sort_order"), // v2.6.85 データ基盤Day6③：配信グループ（チャネル非依存・Lark/Chatwork混在可）
+   sb.from("report_channel_stores").select("channel_id,store_id")
   ]);
   corpList=corps||[];
+  chanList=(channels||[]).map(c=>({id:c.id,name:c.name,kind:c.kind||"lark",secret_name:c.secret_name||"",chatwork_room_id:c.chatwork_room_id||"",report_kinds:Array.isArray(c.report_kinds)?c.report_kinds.slice():["daily","weekly","monthly"],is_active:c.is_active!==false}));
   const aliasByStore={};(aliases||[]).forEach(a=>{(aliasByStore[a.store_id]=aliasByStore[a.store_id]||[]).push(a.alias)});
+  const chanByStore={};(chanStores||[]).forEach(r=>{(chanByStore[r.store_id]=chanByStore[r.store_id]||[]).push(r.channel_id)});
   stList=(data||[]).map(s=>({id:s.id,name:s.name,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||"",interviewer_id:s.interviewer_id||"",dash_store_name:s.dash_store_name||"",nearest_station:s.nearest_station||"", // v2.6.66 最寄り駅（交通費の自動計算に使う）
-   store_no:s.store_no||"",corporation_id:s.corporation_id||"",signs:Array.isArray(s.signs)?s.signs.slice():[],aliasesOrig:aliasByStore[s.id]||[],aliases:(aliasByStore[s.id]||[]).slice(),weather_lat:s.weather_lat,weather_lon:s.weather_lon,lark_enabled:!!s.lark_enabled,seisan_target:!!s.seisan_target})); // v2.6.84 データ基盤Day6：法人・別名・看板・天気地点・Lark配信/精算対象フラグ
+   store_no:s.store_no||"",corporation_id:s.corporation_id||"",signs:Array.isArray(s.signs)?s.signs.slice():[],aliasesOrig:aliasByStore[s.id]||[],aliases:(aliasByStore[s.id]||[]).slice(),weather_lat:s.weather_lat,weather_lon:s.weather_lon,seisan_target:!!s.seisan_target,channelsOrig:chanByStore[s.id]||[],channels:(chanByStore[s.id]||[]).slice()})); // v2.6.84 データ基盤Day6：法人・別名・看板・天気地点・精算対象フラグ／v2.6.85 lark_enabledは参照しない（配信グループ所属へ移行。列は残す）
   await chatEnsureUsers(); // v2.6.36 面接担当を選ぶため
  }
  if(stSmaregi===undefined)stSmaregi=await smaregiStores();
@@ -4183,7 +4187,6 @@ async function adminStoresView(){
   </div>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
    <span class="chip st-act ${s.is_active?"on":""}" data-i="${i}">${s.is_active?"営業中":"非表示"}</span>
-   <span class="chip st-lark ${s.lark_enabled?"on":""}" data-i="${i}">${s.lark_enabled?"📮 Lark配信:する":"📮 Lark配信:しない"}</span>
    <span class="chip st-seisan ${s.seisan_target?"on":""}" data-i="${i}">${s.seisan_target?"💰 精算対象:する":"💰 精算対象:しない"}</span>
    <span class="chip" data-stup="${i}">↑</span><span class="chip" data-stdn="${i}">↓</span>
   </div>
@@ -4203,16 +4206,40 @@ async function adminStoresView(){
   <p class="muted" style="margin:8px 0 2px;font-size:12px">🌤 天気地点（近い地域を選ぶか、緯度経度を直接入力）</p>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${WX_PRESETS.map(w=>`<button class="btn sm sub" data-stwxpreset="${i}|${w.key}" style="margin:0">${w.label}</button>`).join("")}</div>
   <div style="display:flex;gap:6px"><input type="number" step="0.0001" data-stwxlat="${i}" value="${s.weather_lat??""}" placeholder="緯度" style="flex:1;margin:0;font-size:13px"><input type="number" step="0.0001" data-stwxlon="${i}" value="${s.weather_lon??""}" placeholder="経度" style="flex:1;margin:0;font-size:13px"></div>
+  <p class="muted" style="margin:8px 0 2px;font-size:12px">📮 配信グループ所属（日報・週報・月報の自動配信。複数選択可）</p>
+  <div style="display:flex;gap:6px;flex-wrap:wrap">${chanList.length?chanList.map(c=>`<span class="chip stchan ${s.channels.includes(c.id)?"on":""}" data-i="${i}" data-c="${c.id}">${c.kind==="chatwork"?"💬":"📮"} ${esc(c.name)}</span>`).join(""):`<span class="muted" style="font-size:12px">配信グループが未登録です（下の「配信グループ管理」で追加）</span>`}</div>
  </div>`).join("");
  h+=`<div class="card"><h3>＋ 店舗を追加</h3><input type="text" id="st-newname" placeholder="店舗名（例: 鳥一代 渋谷店）"><button class="btn sm" id="st-add">追加する</button><p class="muted">追加すると店舗チャットも自動で作成され、店舗番号も自動採番されます</p></div>
- <button class="btn" id="st-save">この内容で保存する</button>`;
+ <button class="btn" id="st-save">この内容で保存する</button>
+ <div class="card" style="margin-top:20px">
+  <h3>📮 配信グループ管理</h3>
+  <p class="muted" style="margin-top:-4px;font-size:13px">経営ダッシュボードの日報・週報・月報の自動配信先（Lark／Chatwork）。店舗の所属は上の各店舗カードで設定します。Secret名はGitHub Secretsに登録した名前のみ（トークンやWebhook URLの値はここには置きません）。</p>
+  ${(chanList||[]).map((c,ci)=>`<div class="card" style="padding:10px;margin-bottom:8px">
+   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <input type="text" data-chname="${ci}" value="${esc(c.name)}" placeholder="グループ名（例: group1）" style="flex:1;min-width:120px;margin:0;font-size:13px">
+    <select class="inp" data-chkind="${ci}" style="font-size:13px;margin:0"><option value="lark" ${c.kind==="lark"?"selected":""}>📮 Lark</option><option value="chatwork" ${c.kind==="chatwork"?"selected":""}>💬 Chatwork</option></select>
+    <span class="chip ch-active ${c.is_active?"on":""}" data-ci="${ci}">${c.is_active?"有効":"無効"}</span>
+   </div>
+   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+    <input type="text" data-chsecret="${ci}" value="${esc(c.secret_name)}" placeholder="GitHub Secret名（例: LARK_WEBHOOK_GROUP1／Chatworkは共通でCHATWORK_API_TOKEN）" style="flex:1;min-width:220px;margin:0;font-size:13px">
+    ${c.kind==="chatwork"?`<input type="text" data-chroom="${ci}" value="${esc(c.chatwork_room_id)}" placeholder="ChatworkルームID（URLのrid以降の数字）" style="flex:1;min-width:160px;margin:0;font-size:13px">`:""}
+   </div>
+   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+    ${[["daily","日次"],["weekly","週次"],["monthly","月次"]].map(([k,label])=>`<span class="chip chrep ${c.report_kinds.includes(k)?"on":""}" data-ci="${ci}" data-k="${k}">${label}</span>`).join("")}
+    <span class="chip" data-chdel="${ci}" style="margin-left:auto;color:#b03030">削除</span>
+   </div>
+  </div>`).join("")}
+  <div style="display:flex;gap:6px;margin-top:8px"><input type="text" id="ch-newname" placeholder="新しいグループ名（例: group4）" style="flex:1;margin:0"><button class="btn sm sub" id="ch-add">追加する</button></div>
+  <button class="btn sm" id="ch-save" style="margin-top:10px">配信グループを保存する</button>
+ </div>`;
  return h;
 }
 function collectStoresDom(){
  document.querySelectorAll("input[data-stname]").forEach(inp=>stList[+inp.dataset.stname].name=inp.value.trim());
  document.querySelectorAll(".chip.st-act").forEach(c=>stList[+c.dataset.i].is_active=c.classList.contains("on"));
- document.querySelectorAll(".chip.st-lark").forEach(c=>stList[+c.dataset.i].lark_enabled=c.classList.contains("on")); // v2.6.84
  document.querySelectorAll(".chip.st-seisan").forEach(c=>stList[+c.dataset.i].seisan_target=c.classList.contains("on")); // v2.6.84
+ stList.forEach(s=>s.channels=[]); // v2.6.85 配信グループ所属（固定チップの現在状態から作り直す）
+ document.querySelectorAll(".chip.stchan.on").forEach(c=>stList[+c.dataset.i].channels.push(c.dataset.c));
  document.querySelectorAll("select[data-stsm]").forEach(s=>stList[+s.dataset.stsm].smaregi_store_id=s.value);
  document.querySelectorAll("select[data-stiv]").forEach(s=>stList[+s.dataset.stiv].interviewer_id=s.value); // v2.6.36
  document.querySelectorAll("select[data-stcorp]").forEach(s=>stList[+s.dataset.stcorp].corporation_id=s.value); // v2.6.84
@@ -4242,7 +4269,7 @@ async function addStore(){
  const nextNo=String((nums.length?Math.max(...nums):0)+1).padStart(2,"0");
  const {data:ns,error}=await sb.from("stores").insert({name,sort_order:stList.length+1,store_no:nextNo}).select().single();
  if(error){toast("追加エラー: "+(error.message.includes("duplicate")?"同じ名前の店舗がすでにあります":error.message),true);$("st-add").disabled=false;return}
- stList.push({id:ns.id,name:ns.name,is_active:true,smaregi_store_id:"",interviewer_id:"",dash_store_name:"",nearest_station:"",store_no:nextNo,corporation_id:"",signs:[],aliasesOrig:[],aliases:[],weather_lat:null,weather_lon:null,lark_enabled:false,seisan_target:false});
+ stList.push({id:ns.id,name:ns.name,is_active:true,smaregi_store_id:"",interviewer_id:"",dash_store_name:"",nearest_station:"",store_no:nextNo,corporation_id:"",signs:[],aliasesOrig:[],aliases:[],weather_lat:null,weather_lon:null,seisan_target:false,channelsOrig:[],channels:[]});
  toast(`店舗を追加しました（No.${nextNo}・チャットも自動作成）`);render();
 }
 async function saveStores(){
@@ -4250,18 +4277,66 @@ async function saveStores(){
  if(stList.some(s=>!s.name)){toast("店舗名を入力してください",true);return}
  $("st-save").disabled=true;
  for(const [i,s] of stList.entries()){
-  const {error}=await sb.from("stores").update({name:s.name,sort_order:i+1,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||null,interviewer_id:s.interviewer_id||null,dash_store_name:s.dash_store_name||null,nearest_station:s.nearest_station||null,corporation_id:s.corporation_id||null,signs:s.signs.length?s.signs:null,weather_lat:s.weather_lat,weather_lon:s.weather_lon,lark_enabled:s.lark_enabled,seisan_target:s.seisan_target}).eq("id",s.id);
+  const {error}=await sb.from("stores").update({name:s.name,sort_order:i+1,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||null,interviewer_id:s.interviewer_id||null,dash_store_name:s.dash_store_name||null,nearest_station:s.nearest_station||null,corporation_id:s.corporation_id||null,signs:s.signs.length?s.signs:null,weather_lat:s.weather_lat,weather_lon:s.weather_lon,seisan_target:s.seisan_target}).eq("id",s.id); // v2.6.85 lark_enabledは参照しない（配信グループ所属へ移行。列は残す）
   if(error){toast("保存エラー: "+error.message,true);$("st-save").disabled=false;return}
   // v2.6.84 別名は差分だけstore_aliasesへ反映（追加分はinsert、削除分はdelete。既存の日報/正準ソースは通常触らない想定）
   const added=s.aliases.filter(a=>!s.aliasesOrig.includes(a));
   const removed=s.aliasesOrig.filter(a=>!s.aliases.includes(a));
   if(added.length){const {error:ae}=await sb.from("store_aliases").upsert(added.map(alias=>({store_id:s.id,alias,source:"手動"})),{onConflict:"alias"});if(ae){toast(`別名の保存エラー(${s.name}): `+ae.message,true);$("st-save").disabled=false;return}}
   if(removed.length){const {error:re}=await sb.from("store_aliases").delete().eq("store_id",s.id).in("alias",removed);if(re){toast(`別名の削除エラー(${s.name}): `+re.message,true);$("st-save").disabled=false;return}}
+  // v2.6.85 配信グループ所属も差分だけreport_channel_storesへ反映
+  const chAdded=s.channels.filter(c=>!s.channelsOrig.includes(c));
+  const chRemoved=s.channelsOrig.filter(c=>!s.channels.includes(c));
+  if(chAdded.length){const {error:cae}=await sb.from("report_channel_stores").upsert(chAdded.map(channel_id=>({channel_id,store_id:s.id})),{onConflict:"channel_id,store_id"});if(cae){toast(`配信グループの保存エラー(${s.name}): `+cae.message,true);$("st-save").disabled=false;return}}
+  if(chRemoved.length){const {error:cre}=await sb.from("report_channel_stores").delete().eq("store_id",s.id).in("channel_id",chRemoved);if(cre){toast(`配信グループの削除エラー(${s.name}): `+cre.message,true);$("st-save").disabled=false;return}}
  }
  const {data:st2}=await sb.from("stores").select("id,name").eq("is_active",true).order("sort_order");
  if(st2)stores=st2;
  toast("店舗を保存しました");
  stList=null;corpList=null;adminMode="list";render();
+}
+
+// v2.6.85 配信グループ管理（Day6③：チャネル非依存。Lark/Chatwork混在可）
+function collectChannelsDom(){
+ document.querySelectorAll("input[data-chname]").forEach(inp=>chanList[+inp.dataset.chname].name=inp.value.trim());
+ document.querySelectorAll("select[data-chkind]").forEach(s=>chanList[+s.dataset.chkind].kind=s.value);
+ document.querySelectorAll("input[data-chsecret]").forEach(inp=>chanList[+inp.dataset.chsecret].secret_name=inp.value.trim());
+ document.querySelectorAll("input[data-chroom]").forEach(inp=>chanList[+inp.dataset.chroom].chatwork_room_id=inp.value.trim());
+ document.querySelectorAll(".chip.ch-active").forEach(c=>chanList[+c.dataset.ci].is_active=c.classList.contains("on"));
+ chanList.forEach(c=>c.report_kinds=[]);
+ document.querySelectorAll(".chip.chrep.on").forEach(c=>chanList[+c.dataset.ci].report_kinds.push(c.dataset.k));
+}
+async function addChannel(){
+ const name=$("ch-newname").value.trim();
+ if(!name){toast("グループ名を入力してください",true);return}
+ collectChannelsDom();
+ $("ch-add").disabled=true;
+ const {data:nc,error}=await sb.from("report_channels").insert({name,kind:"lark",secret_name:"",sort_order:chanList.length+1}).select().single();
+ if(error){toast("追加エラー: "+(error.message.includes("duplicate")?"同じ名前の配信グループがすでにあります":error.message),true);$("ch-add").disabled=false;return}
+ chanList.push({id:nc.id,name:nc.name,kind:nc.kind||"lark",secret_name:nc.secret_name||"",chatwork_room_id:nc.chatwork_room_id||"",report_kinds:Array.isArray(nc.report_kinds)?nc.report_kinds.slice():["daily","weekly","monthly"],is_active:nc.is_active!==false});
+ toast("配信グループを追加しました。種別・Secret名を設定してください");render();
+}
+async function saveChannels(){
+ collectChannelsDom();
+ if(chanList.some(c=>!c.name)){toast("グループ名を入力してください",true);return}
+ if(chanList.some(c=>c.kind==="chatwork"&&!c.chatwork_room_id)){toast("ChatworkのグループはルームIDを入力してください",true);return}
+ $("ch-save").disabled=true;
+ for(const c of chanList){
+  const {error}=await sb.from("report_channels").update({name:c.name,kind:c.kind,secret_name:c.secret_name||null,chatwork_room_id:c.kind==="chatwork"?(c.chatwork_room_id||null):null,report_kinds:c.report_kinds.length?c.report_kinds:["daily","weekly","monthly"],is_active:c.is_active}).eq("id",c.id);
+  if(error){toast(`配信グループの保存エラー(${c.name}): `+error.message,true);$("ch-save").disabled=false;return}
+ }
+ toast("配信グループを保存しました");
+ stList=null;chanList=null;render();
+}
+async function deleteChannel(ci){
+ collectChannelsDom();
+ const c=chanList[ci];
+ if(!confirm(`配信グループ「${c.name}」を削除しますか？（所属店舗の設定も一緒に消えます）`))return;
+ const {error}=await sb.from("report_channels").delete().eq("id",c.id);
+ if(error){toast("削除エラー: "+error.message,true);return}
+ chanList.splice(ci,1);
+ stList=null; // 店舗側の所属チップ表示も作り直す
+ toast("配信グループを削除しました");render();
 }
 
 async function adminSmaregiView(){
@@ -5911,8 +5986,14 @@ function bindPage(){
   toast("削除しました");rcDetail=null;rcList=null;rcHiredInfo=null;render();
  };
  document.querySelectorAll(".chip.st-act").forEach(c=>c.onclick=()=>{c.classList.toggle("on");c.textContent=c.classList.contains("on")?"営業中":"非表示"});
- document.querySelectorAll(".chip.st-lark").forEach(c=>c.onclick=()=>{c.classList.toggle("on");c.textContent=c.classList.contains("on")?"📮 Lark配信:する":"📮 Lark配信:しない"}); // v2.6.84
  document.querySelectorAll(".chip.st-seisan").forEach(c=>c.onclick=()=>{c.classList.toggle("on");c.textContent=c.classList.contains("on")?"💰 精算対象:する":"💰 精算対象:しない"}); // v2.6.84
+ document.querySelectorAll(".chip.stchan").forEach(c=>c.onclick=()=>c.classList.toggle("on")); // v2.6.85 配信グループ所属（複数選択・保存時にcollectStoresDomで回収）
+ document.querySelectorAll(".chip.ch-active").forEach(c=>c.onclick=()=>{c.classList.toggle("on");c.textContent=c.classList.contains("on")?"有効":"無効"}); // v2.6.85
+ document.querySelectorAll(".chip.chrep").forEach(c=>c.onclick=()=>c.classList.toggle("on")); // v2.6.85
+ document.querySelectorAll("select[data-chkind]").forEach(s=>s.onchange=()=>{collectChannelsDom();render()}); // v2.6.85 Chatworkを選んだらルームID欄を出す
+ if($("ch-add"))$("ch-add").onclick=addChannel;
+ if($("ch-save"))$("ch-save").onclick=saveChannels;
+ document.querySelectorAll("[data-chdel]").forEach(b=>b.onclick=()=>deleteChannel(+b.dataset.chdel));
  document.querySelectorAll("[data-stup]").forEach(c=>c.onclick=()=>{collectStoresDom();const i=+c.dataset.stup;if(i>0){[stList[i-1],stList[i]]=[stList[i],stList[i-1]]}render()});
  document.querySelectorAll("[data-stdn]").forEach(c=>c.onclick=()=>{collectStoresDom();const i=+c.dataset.stdn;if(i<stList.length-1){[stList[i+1],stList[i]]=[stList[i],stList[i+1]]}render()});
  if($("st-add"))$("st-add").onclick=addStore;

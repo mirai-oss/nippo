@@ -4161,7 +4161,7 @@ async function adminStoresView(){
   const aliasByStore={};(aliases||[]).forEach(a=>{(aliasByStore[a.store_id]=aliasByStore[a.store_id]||[]).push(a.alias)});
   const chanByStore={};(chanStores||[]).forEach(r=>{(chanByStore[r.store_id]=chanByStore[r.store_id]||[]).push(r.channel_id)});
   stList=(data||[]).map(s=>({id:s.id,name:s.name,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||"",interviewer_id:s.interviewer_id||"",dash_store_name:s.dash_store_name||"",nearest_station:s.nearest_station||"", // v2.6.66 最寄り駅（交通費の自動計算に使う）
-   store_no:s.store_no||"",corporation_id:s.corporation_id||"",signs:Array.isArray(s.signs)?s.signs.slice():[],aliasesOrig:aliasByStore[s.id]||[],aliases:(aliasByStore[s.id]||[]).slice(),weather_lat:s.weather_lat,weather_lon:s.weather_lon,seisan_target:!!s.seisan_target,channelsOrig:chanByStore[s.id]||[],channels:(chanByStore[s.id]||[]).slice()})); // v2.6.84 データ基盤Day6：法人・別名・看板・天気地点・精算対象フラグ／v2.6.85 lark_enabledは参照しない（配信グループ所属へ移行。列は残す）
+   store_no:s.store_no||"",corporation_id:s.corporation_id||"",signs:Array.isArray(s.signs)?s.signs.slice():[],aliasesOrig:aliasByStore[s.id]||[],aliases:(aliasByStore[s.id]||[]).slice(),weather_lat:s.weather_lat,weather_lon:s.weather_lon,seisan_target:!!s.seisan_target,seisan_store_name:s.seisan_store_name||"",channelsOrig:chanByStore[s.id]||[],channels:(chanByStore[s.id]||[]).slice()})); // v2.6.84 データ基盤Day6：法人・別名・看板・天気地点・精算対象フラグ／v2.6.85 lark_enabledは参照しない（配信グループ所属へ移行。列は残す）／v2.6.86 精算システム側の店舗名（運営委託費PL自動連携）
   await chatEnsureUsers(); // v2.6.36 面接担当を選ぶため
  }
  if(stSmaregi===undefined)stSmaregi=await smaregiStores();
@@ -4195,6 +4195,8 @@ async function adminStoresView(){
   <select class="inp" data-stcorp="${i}" style="font-size:13px"><option value="">🏢 法人: 未設定</option>${corpList.map(c=>`<option value="${c.id}" ${s.corporation_id===c.id?"selected":""}>🏢 法人: ${esc(c.name)}</option>`).join("")}</select>
   <p class="muted" style="margin:8px 0 2px;font-size:12px">📊 売上ダッシュボード側の店舗名（日報・週報の売上表示に使います。空欄なら上の店舗名と同じ名前で自動対応）</p>
   <input type="text" data-stdash="${i}" value="${esc(s.dash_store_name)}" placeholder="例: 鳥一代 はなれ" style="font-size:13px;margin-top:0">
+  <p class="muted" style="margin:8px 0 2px;font-size:12px">🧾 精算システム側の店舗名（💰精算対象の店舗のみ関係します。運営委託費をPLへ自動反映する際に使います。空欄なら上の店舗名と同じ名前で自動対応）</p>
+  <input type="text" data-stseisan="${i}" value="${esc(s.seisan_store_name)}" placeholder="例: 川崎　じんべぇ" style="font-size:13px;margin-top:0">
   <p class="muted" style="margin:8px 0 2px;font-size:12px">🚃 最寄り駅（通勤の交通費を自動計算するときに使います。駅名だけでOK）</p>
   <input type="text" data-stnearest="${i}" value="${esc(s.nearest_station)}" placeholder="例: 新横浜" style="font-size:13px;margin-top:0">
   <p class="muted" style="margin:8px 0 2px;font-size:12px">🏷 看板（同じ場所で複数ブランドを掲げている場合は全部）</p>
@@ -4244,6 +4246,7 @@ function collectStoresDom(){
  document.querySelectorAll("select[data-stiv]").forEach(s=>stList[+s.dataset.stiv].interviewer_id=s.value); // v2.6.36
  document.querySelectorAll("select[data-stcorp]").forEach(s=>stList[+s.dataset.stcorp].corporation_id=s.value); // v2.6.84
  document.querySelectorAll("input[data-stdash]").forEach(inp=>stList[+inp.dataset.stdash].dash_store_name=inp.value.trim()); // v2.6.57
+ document.querySelectorAll("input[data-stseisan]").forEach(inp=>stList[+inp.dataset.stseisan].seisan_store_name=inp.value.trim()); // v2.6.86
  document.querySelectorAll("input[data-stnearest]").forEach(inp=>stList[+inp.dataset.stnearest].nearest_station=inp.value.trim()); // v2.6.66
  document.querySelectorAll("input[data-stwxlat]").forEach(inp=>stList[+inp.dataset.stwxlat].weather_lat=inp.value===""?null:Number(inp.value)); // v2.6.84
  document.querySelectorAll("input[data-stwxlon]").forEach(inp=>stList[+inp.dataset.stwxlon].weather_lon=inp.value===""?null:Number(inp.value)); // v2.6.84
@@ -4269,7 +4272,7 @@ async function addStore(){
  const nextNo=String((nums.length?Math.max(...nums):0)+1).padStart(2,"0");
  const {data:ns,error}=await sb.from("stores").insert({name,sort_order:stList.length+1,store_no:nextNo}).select().single();
  if(error){toast("追加エラー: "+(error.message.includes("duplicate")?"同じ名前の店舗がすでにあります":error.message),true);$("st-add").disabled=false;return}
- stList.push({id:ns.id,name:ns.name,is_active:true,smaregi_store_id:"",interviewer_id:"",dash_store_name:"",nearest_station:"",store_no:nextNo,corporation_id:"",signs:[],aliasesOrig:[],aliases:[],weather_lat:null,weather_lon:null,seisan_target:false,channelsOrig:[],channels:[]});
+ stList.push({id:ns.id,name:ns.name,is_active:true,smaregi_store_id:"",interviewer_id:"",dash_store_name:"",nearest_station:"",store_no:nextNo,corporation_id:"",signs:[],aliasesOrig:[],aliases:[],weather_lat:null,weather_lon:null,seisan_target:false,seisan_store_name:"",channelsOrig:[],channels:[]});
  toast(`店舗を追加しました（No.${nextNo}・チャットも自動作成）`);render();
 }
 async function saveStores(){
@@ -4277,7 +4280,7 @@ async function saveStores(){
  if(stList.some(s=>!s.name)){toast("店舗名を入力してください",true);return}
  $("st-save").disabled=true;
  for(const [i,s] of stList.entries()){
-  const {error}=await sb.from("stores").update({name:s.name,sort_order:i+1,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||null,interviewer_id:s.interviewer_id||null,dash_store_name:s.dash_store_name||null,nearest_station:s.nearest_station||null,corporation_id:s.corporation_id||null,signs:s.signs.length?s.signs:null,weather_lat:s.weather_lat,weather_lon:s.weather_lon,seisan_target:s.seisan_target}).eq("id",s.id); // v2.6.85 lark_enabledは参照しない（配信グループ所属へ移行。列は残す）
+  const {error}=await sb.from("stores").update({name:s.name,sort_order:i+1,is_active:s.is_active,smaregi_store_id:s.smaregi_store_id||null,interviewer_id:s.interviewer_id||null,dash_store_name:s.dash_store_name||null,nearest_station:s.nearest_station||null,corporation_id:s.corporation_id||null,signs:s.signs.length?s.signs:null,weather_lat:s.weather_lat,weather_lon:s.weather_lon,seisan_target:s.seisan_target,seisan_store_name:s.seisan_store_name||null}).eq("id",s.id); // v2.6.85 lark_enabledは参照しない（配信グループ所属へ移行。列は残す）／v2.6.86 精算システム側の店舗名
   if(error){toast("保存エラー: "+error.message,true);$("st-save").disabled=false;return}
   // v2.6.84 別名は差分だけstore_aliasesへ反映（追加分はinsert、削除分はdelete。既存の日報/正準ソースは通常触らない想定）
   const added=s.aliases.filter(a=>!s.aliasesOrig.includes(a));

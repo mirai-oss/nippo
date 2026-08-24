@@ -2989,7 +2989,7 @@ function sfActualStepHtml(ctx){
   return {ds,target,actual,plannedRate,actualRate,plannedMin,actualMin};
  });
  const rows=dayRows.map(r=>{
-  const salesDiff=r.actual?(r.actual.sales-r.target):null;
+  const salesDiff=(r.actual&&r.target>0)?(r.actual.sales-r.target):null; // 目標未設定(target=0)の日は差分も「—」にする（実績のみで目標が無いのに差分だけ出るバグを修正）
   const rateDiff=(r.plannedRate!=null&&r.actualRate!=null)?(r.actualRate-r.plannedRate):null;
   const hourDiff=(r.actualMin-r.plannedMin)/60;
   return `<tr>

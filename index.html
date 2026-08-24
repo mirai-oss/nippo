@@ -106,6 +106,60 @@
    body.withnav header{padding:14px 36px}
    .loginwrap{max-width:480px;margin:0 auto}
   }
+  /* ===== v2.7 シフト管理 v5 UI（実装指示書_担当B_シフトUIv5_2026-08-24.md B-1: ①希望確認 ②調整） ===== */
+  .badge.p{background:#6849a8}
+  .sf-stepnav{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}
+  .sf-stepbtn{border:1px solid var(--line);background:#fff;border-radius:12px;padding:10px;text-align:left;cursor:pointer}
+  .sf-stepbtn b{display:block;font-size:12px}
+  .sf-stepbtn small{display:block;color:#8a93a2;font-size:10px;margin-top:2px}
+  .sf-stepbtn.active{background:#211d18;color:#fff;border-color:#211d18}
+  .sf-stepbtn.active small{color:#cfc9c2}
+  .sf-halfgrid{display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}
+  .sf-day{flex:0 0 84px;border:1px solid var(--line);border-radius:10px;padding:8px;cursor:pointer;background:#fff}
+  .sf-day b{font-size:12px}
+  .sf-day.active{box-shadow:0 0 0 2px var(--blue) inset}
+  .sf-day.short{background:#fff6ec}
+  .sf-coverage{margin-top:6px}
+  .sf-coverage strong{display:block;font-size:14px}
+  .sf-tag{display:inline-block;font-size:9px;padding:2px 6px;border-radius:6px;background:#eef1f5;color:#67707e;margin-top:4px}
+  .sf-tag.short{background:#fde3d3;color:#b0530e}
+  .sf-tag.ok{background:#e3f4ec;color:var(--green)}
+  .sf-mini-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+  .sf-mini{border:1px solid var(--line);border-radius:8px;padding:8px;background:#f8fafc}
+  .sf-mini small{display:block;color:#8a93a2;font-size:10px}
+  .sf-mini b{font-size:15px}
+  .sf-person{padding:8px 0;border-bottom:1px solid #f0f2f5}
+  .sf-person:last-child{border:0}
+  .sf-person .row{display:flex;justify-content:space-between;gap:8px;padding:0;border:0;cursor:default}
+  .sf-person .shift{font-size:11px;margin-top:3px}
+  .sf-gantt-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--line);border-radius:10px}
+  .sf-gantt{min-width:560px;padding:8px}
+  .sf-ghead,.sf-grow{display:grid;gap:2px;align-items:center}
+  .sf-ghead div{font-size:9px;color:#8a93a2;text-align:center}
+  .sf-ghead div:first-child{text-align:left}
+  .sf-grow{min-height:34px;border-top:1px solid #f0f2f5}
+  .sf-gname{font-size:11px;padding:6px 4px}
+  .sf-gname b{display:block;font-size:12px}
+  .sf-gname small{font-size:9px;color:#8a93a2}
+  .sf-gslot{height:24px;border-radius:5px;background:#f4f6f9}
+  .sf-gslot.emp{background:#e3f4ec;border:1px solid #bfe4d1}
+  .sf-gslot.pa{background:#fff3d8;border:1px solid #efd9a4}
+  .sf-gslot.help{background:#f1ebff;border:1px solid #d9cbf4}
+  .sf-role-summary{border-top:2px solid var(--line);margin-top:8px}
+  .sf-role-row{display:flex;justify-content:space-between;padding:6px 2px;border-bottom:1px solid #f0f2f5;font-size:12px}
+  .sf-finance{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:8px}
+  .sf-finance .card{padding:10px;margin-bottom:0}
+  .sf-finance small{display:block;color:#8a93a2;font-size:10px}
+  .sf-finance b{font-size:16px;display:block;margin-top:3px}
+  .sf-reqbox .sf-reqday{padding:8px 0;border-bottom:1px solid #f0f2f5}
+  .sf-reqbox .sf-reqday:last-child{border:0}
+  .sf-reqbox .sf-reqday p{margin:3px 0 0;font-size:11px;color:#8a93a2}
+  .sf-note{padding:8px 10px;border-radius:8px;background:#fff8ec;border:1px solid #f0dfb8;font-size:11px;color:#7a5a10;margin-bottom:10px}
+  .sf-bottom-action{display:flex;flex-direction:column;gap:8px;margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:#fff}
+  @media(min-width:900px){
+   .sf-finance{grid-template-columns:repeat(5,1fr)}
+   .sf-stepnav{grid-template-columns:repeat(4,1fr)}
+  }
 </style>
 </head>
 <body>
@@ -2529,6 +2583,7 @@ function sfFmtTime(t){return (t||"").slice(0,5)}
 let sfMode="submit",sfSubStore=null,sfSubPeriodIdx=null,sfEditDate=null;
 let sfMgStore=null,sfMgPeriodIdx=null;
 let sfPsStore=null;
+let sfMgStep="request",sfReqDate=null; // v2.7 ①希望確認 ②調整（担当BシフトUIv5）
 
 // v2.6.81 未提出者へのLINEリマインド。hq_generate_today()と同じ「画面を開いたときにチェック」方式（外部cronなし）
 async function sfEnsureReminders(){
@@ -2625,7 +2680,180 @@ function sfEditDayHtml(ds,presets,cur){
  </div>`;
 }
 
-// ---- 管理・公開（店長・本部） ----
+// ---- 管理・公開（店長・本部） v5 UI: ①希望確認 ②調整（実装指示書_担当B_シフトUIv5_2026-08-24.md B-1） ----
+function sfRoleTag(u){ // 表示用の区分（AL=PA、それ以外は社員扱い）
+ if(u.role==="AL")return {cls:"pa",label:"PA"};
+ return {cls:"emp",label:ROLE_NAME[u.role]||u.role};
+}
+function sfTimeToHour(t){if(!t)return 0;const parts=String(t).split(":");return (+parts[0]||0)+(+parts[1]||0)/60}
+function sfShiftMinutes(s){
+ if(!s||s.is_off)return 0;
+ let mins=(sfTimeToHour(s.end_time)-sfTimeToHour(s.start_time))*60-(s.break_minutes||0);
+ if(mins<0)mins+=24*60; // 深夜またぎ
+ return Math.max(0,mins);
+}
+function sfDayNeedTotal(ds,presets,reqs){ // その日の必要人数合計（1件も設定が無ければnull=未設定）
+ const wd=new Date(ds+"T00:00:00").getDay();
+ let anySet=false,total=0;
+ (presets||[]).forEach(pr=>{
+  const need=(reqs||[]).find(r=>r.preset_id===pr.id&&(r.specific_date===ds||(r.specific_date===null&&r.weekday===wd)));
+  if(need){anySet=true;total+=need.required_count}
+ });
+ return anySet?total:null;
+}
+function sfDayHaveTotal(ds,people,shByUserDate){
+ return people.filter(u=>{const s=shByUserDate[u.id+"|"+ds];return s&&!s.is_off}).length;
+}
+async function sfComputeWageRates(storeId,peopleIds){ // labor_cost_daily（担当D管轄・読み取りのみ）の直近実績から時間単価を概算
+ if(!peopleIds.length)return {};
+ const since=sfFmtDate(new Date(Date.now()-60*86400000));
+ const {data}=await sb.from("labor_cost_daily").select("user_id,worked_minutes,computed_cost,smaregi_estimate_cost").eq("store_id",storeId).gte("work_date",since).in("user_id",peopleIds);
+ const agg={};
+ (data||[]).forEach(r=>{
+  const cost=r.computed_cost!=null?r.computed_cost:r.smaregi_estimate_cost;
+  if(cost==null||!r.worked_minutes)return;
+  const a=agg[r.user_id]||(agg[r.user_id]={cost:0,min:0});
+  a.cost+=cost;a.min+=r.worked_minutes;
+ });
+ const rates={};
+ Object.keys(agg).forEach(uid=>{if(agg[uid].min>0)rates[uid]=agg[uid].cost/agg[uid].min});
+ return rates;
+}
+function sfCalendarDayCard(ds,people,shByUserDate,presets,reqs,selected){
+ const have=sfDayHaveTotal(ds,people,shByUserDate),need=sfDayNeedTotal(ds,presets,reqs);
+ const short=need!==null&&have<need;
+ return `<div class="sf-day ${selected?"active":""} ${short?"short":""}" data-sfreqday="${ds}">
+  <b>${sfFmtDateShort(ds)}</b>
+  <div class="sf-coverage"><strong>${have}${need!==null?` / ${need}人`:""}</strong>
+   ${need===null?'<span class="sf-tag">未設定</span>':short?`<span class="sf-tag short">${need-have}人不足</span>`:'<span class="sf-tag ok">充足</span>'}</div>
+ </div>`;
+}
+function sfDayPeopleHtml(ds,people,shByUserDate,storeCountMap,presets){
+ const entries=people.map(u=>({u,s:shByUserDate[u.id+"|"+ds]})).filter(x=>x.s&&!x.s.is_off);
+ if(!entries.length)return `<p class="muted">この日の希望提出はまだありません。</p>`;
+ return entries.map(({u,s})=>{
+  const multi=(storeCountMap[u.id]||1)>1,tag=sfRoleTag(u);
+  const pr=(presets||[]).find(p=>p.id===s.preset_id);
+  return `<div class="sf-person"><div class="row"><b>${esc(u.name)}</b>${multi?'<span class="badge p">兼務</span>':`<span class="badge ${tag.cls==="pa"?"b":"g"}">${esc(tag.label)}</span>`}</div>
+   <div class="shift muted">${pr?esc(pr.label)+"・":""}${sfFmtTime(s.start_time)}〜${sfFmtTime(s.end_time)}</div></div>`;
+ }).join("");
+}
+function sfDayGanttHtml(ds,people,shByUserDate,storeCountMap){
+ const entries=people.map(u=>({u,s:shByUserDate[u.id+"|"+ds]})).filter(x=>x.s&&!x.s.is_off);
+ if(!entries.length)return "";
+ let minH=24,maxH=0;
+ entries.forEach(({s})=>{const sh=sfTimeToHour(s.start_time),eh=sfTimeToHour(s.end_time);if(sh<minH)minH=sh;if(eh>maxH)maxH=eh});
+ minH=Math.max(0,Math.floor(minH));maxH=Math.min(30,Math.ceil(maxH));
+ if(maxH<=minH){minH=10;maxH=24}
+ const cols=(maxH-minH)*2; // 30分刻み
+ let head=`<div class="sf-ghead" style="grid-template-columns:120px repeat(${cols},1fr)"><div>従業員</div>`;
+ for(let c=0;c<cols;c++)head+=`<div>${c%2===0?minH+c/2:""}</div>`;
+ head+="</div>";
+ const rows=entries.map(({u,s})=>{
+  const multi=(storeCountMap[u.id]||1)>1,tag=sfRoleTag(u);
+  const sc=Math.max(0,Math.round((sfTimeToHour(s.start_time)-minH)*2));
+  const ec=Math.min(cols,Math.round((sfTimeToHour(s.end_time)-minH)*2));
+  const cls=multi?"help":(tag.cls==="pa"?"pa":"emp");
+  let slots="";for(let c=0;c<cols;c++)slots+=`<div class="sf-gslot ${c>=sc&&c<ec?cls:""}"></div>`;
+  return `<div class="sf-grow" style="grid-template-columns:120px repeat(${cols},1fr)"><div class="sf-gname"><b>${esc(u.name)}</b><small>${multi?"兼務":esc(tag.label)}</small></div>${slots}</div>`;
+ }).join("");
+ return `<div class="sf-gantt-wrap"><div class="sf-gantt">${head}${rows}</div></div>`;
+}
+function sfRoleSummaryHtml(ds,people,shByUserDate,storeCountMap){
+ const entries=people.map(u=>({u,s:shByUserDate[u.id+"|"+ds]})).filter(x=>x.s&&!x.s.is_off);
+ const help=entries.filter(x=>(storeCountMap[x.u.id]||1)>1).length;
+ const emp=entries.filter(x=>(storeCountMap[x.u.id]||1)<=1&&sfRoleTag(x.u).cls!=="pa").length;
+ const pa=entries.filter(x=>(storeCountMap[x.u.id]||1)<=1&&sfRoleTag(x.u).cls==="pa").length;
+ return `<div class="sf-role-summary">
+  <div class="sf-role-row"><b>社員</b><span>${emp}人</span></div>
+  <div class="sf-role-row"><b>PA</b><span>${pa}人</span></div>
+  <div class="sf-role-row"><b>兼務・ヘルプ</b><span>${help}人</span></div>
+  <div class="sf-role-row"><b>合計</b><span>${entries.length}人</span></div>
+ </div>`;
+}
+// v2.7注記: 「ヘルプ」判定はsf_help_availability（U2）未実装のため、複数店舗に所属する人を暫定的に「兼務」として代用表示している
+function sfRequestStepHtml(dates,people,shByUserDate,presets,reqs,storeCountMap){
+ if(!sfReqDate||!dates.includes(sfReqDate))sfReqDate=dates[0];
+ const cards=dates.map(ds=>sfCalendarDayCard(ds,people,shByUserDate,presets,reqs,ds===sfReqDate)).join("");
+ const need=sfDayNeedTotal(sfReqDate,presets,reqs),have=sfDayHaveTotal(sfReqDate,people,shByUserDate);
+ return `<div class="card"><h3>①希望確認</h3><div class="muted" style="margin-bottom:8px">日付をタップすると、その日の希望者一覧・出勤希望を確認できます</div>
+  <div class="sf-halfgrid">${cards}</div></div>
+ <div class="card"><h3>${sfFmtDateShort(sfReqDate)}の希望シフト</h3>
+  <div class="sf-mini-grid"><div class="sf-mini"><small>必要</small><b>${need===null?"未設定":need+"人"}</b></div><div class="sf-mini"><small>希望提出</small><b>${have}人</b></div></div>
+  ${sfDayPeopleHtml(sfReqDate,people,shByUserDate,storeCountMap,presets)}
+ </div>
+ <div class="card"><h3>出勤希望ガント（${sfFmtDateShort(sfReqDate)}）</h3>
+  ${sfDayGanttHtml(sfReqDate,people,shByUserDate,storeCountMap)||'<p class="muted">この日の希望提出はまだありません。</p>'}
+  ${sfRoleSummaryHtml(sfReqDate,people,shByUserDate,storeCountMap)}
+ </div>`;
+}
+// 必要人数シミュレーション（sf_required_headcounts未設定なら「未設定」表示のみ）
+function sfHeadcountTableHtml(dates,presets,reqs,people,shByUserDate){
+ return `<div class="card"><h3>👥 必要人数（時間帯別）</h3><div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:12px">
+  <tr><th style="text-align:left;padding:4px">日付</th>${(presets||[]).map(pr=>`<th style="padding:4px">${esc(pr.label)}</th>`).join("")}</tr>
+  ${dates.map(ds=>{
+   const wd=new Date(ds+"T00:00:00").getDay();
+   return `<tr><td style="padding:4px">${sfFmtDateShort(ds)}</td>${(presets||[]).map(pr=>{
+    const need=(reqs||[]).find(r=>r.preset_id===pr.id&&(r.specific_date===ds||(r.specific_date===null&&r.weekday===wd)));
+    const have=people.filter(u=>{const s=shByUserDate[u.id+"|"+ds];return s&&s.preset_id===pr.id}).length;
+    if(!need)return `<td style="padding:4px;text-align:center;color:#999">${have}/未設定</td>`;
+    const ok=have>=need.required_count;
+    return `<td style="padding:4px;text-align:center;color:${ok?"#1e8e5a":"#c8401f"}">${have}/${need.required_count}</td>`;
+   }).join("")}</tr>`;
+  }).join("")}
+ </table></div></div>`;
+}
+// シフト表（縦=人、横=日付。セルクリックで代理編集）
+function sfShiftTableHtml(dates,people,shByUserDate){
+ return `<div class="card"><div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:12px">
+  <tr><th style="text-align:left;padding:4px;position:sticky;left:0;background:var(--bg,#fff)">氏名</th>${dates.map(ds=>`<th style="padding:4px;min-width:56px">${sfFmtDateShort(ds)}</th>`).join("")}</tr>
+  ${people.map(u=>`<tr><td style="padding:4px;position:sticky;left:0;background:var(--bg,#fff)">${esc(u.name)}</td>${dates.map(ds=>{
+   const s=shByUserDate[u.id+"|"+ds];
+   const label=s?(s.is_off?"休み":sfFmtTime(s.start_time)+"-"+sfFmtTime(s.end_time)):"-";
+   const badge=s&&s.status==="published"?(s.smaregi_sync_status==="error"?"⚠️":"✅"):s&&s.status==="submitted"?"📝":"";
+   const title=s&&s.smaregi_sync_status==="error"?` title="スマレジ未反映: ${esc(s.smaregi_error||"")}"`:"";
+   return `<td style="padding:4px;text-align:center;cursor:pointer" data-sfmgcell="${u.id}|${ds}"${title}>${badge}${esc(label)}</td>`;
+  }).join("")}</tr>`).join("")}
+ </table></div></div>`;
+}
+// ②調整: 4カード＋想定人件費率（売上目標=dash_sales_target_daily、時給はlabor_cost_daily直近実績からの概算）＋調整が必要な日
+function sfAdjustStepHtml(ctx){
+ const {dates,people,shByUserDate,presets,reqs,storeCountMap,salesTotal,wageRates,unlinkedCount}=ctx;
+ let empCost=0,paCost=0;const unknownWage=new Set();
+ people.forEach(u=>{
+  let minutes=0;dates.forEach(ds=>{minutes+=sfShiftMinutes(shByUserDate[u.id+"|"+ds])});
+  if(!minutes)return;
+  const rate=wageRates[u.id];
+  if(rate==null)unknownWage.add(u.id);
+  const cost=rate!=null?minutes*rate:0;
+  if(sfRoleTag(u).cls==="pa")paCost+=cost;else empCost+=cost;
+ });
+ const totalCost=empCost+paCost;
+ const rateText=salesTotal>0?((totalCost/salesTotal*100).toFixed(1)+"%"):"算出不可";
+ const needDays=[];
+ dates.forEach(ds=>{
+  const wd=new Date(ds+"T00:00:00").getDay();
+  (presets||[]).forEach(pr=>{
+   const need=(reqs||[]).find(r=>r.preset_id===pr.id&&(r.specific_date===ds||(r.specific_date===null&&r.weekday===wd)));
+   if(!need)return;
+   const have=people.filter(u=>{const s=shByUserDate[u.id+"|"+ds];return s&&!s.is_off&&s.preset_id===pr.id}).length;
+   if(have<need.required_count)needDays.push({ds,label:pr.label,short:need.required_count-have});
+  });
+ });
+ const checkMsgs=[];
+ if(needDays.length)checkMsgs.push(`不足枠 ${needDays.length}件`);
+ if(unlinkedCount)checkMsgs.push(`スマレジ未連携 ${unlinkedCount}名`);
+ let h=`<div class="sf-finance">
+  <div class="card"><small>売上予想</small><b>${salesTotal?Math.round(salesTotal).toLocaleString()+"円":"未設定"}</b></div>
+  <div class="card"><small>社員人件費</small><b>${Math.round(empCost).toLocaleString()}円</b></div>
+  <div class="card"><small>PA人件費</small><b>${Math.round(paCost).toLocaleString()}円</b></div>
+  <div class="card"><small>総人件費</small><b>${Math.round(totalCost).toLocaleString()}円</b></div>
+  <div class="card"><small>想定人件費率</small><b>${rateText}</b></div>
+ </div>`;
+ if(unknownWage.size)h+=`<div class="sf-note">⚠️ ${unknownWage.size}名は勤怠実績がまだ無いため人件費の概算に含めていません（実績が貯まると自動的に反映されます）</div>`;
+ if(needDays.length)h+=`<div class="card sf-reqbox"><b>調整が必要な日</b>${needDays.map(d=>`<div class="sf-reqday"><b>${sfFmtDateShort(d.ds)}</b><p>${esc(d.label)} ${d.short}名不足</p></div>`).join("")}</div>`;
+ return {html:h,checkText:checkMsgs.length?checkMsgs.join("・"):"問題ありません"};
+}
 async function sfManageView(){
  const pickable=sfCanManage(null)?stores:(me.stores||[]).filter(s=>sfCanManage(s.id));
  if(!pickable.length)return `<p class="muted">管理できる店舗がありません。</p>`;
@@ -2640,6 +2868,8 @@ async function sfManageView(){
   sb.from("sf_required_headcounts").select("*").eq("store_id",sfMgStore)
  ]);
  const people=(members||[]).map(m=>m.users).filter(u=>u&&u.is_active).sort((a,b)=>a.name.localeCompare(b.name,"ja"));
+ const peopleIds=people.map(u=>u.id);
+ const idsForIn=peopleIds.length?peopleIds:["00000000-0000-0000-0000-000000000000"]; // .in()の空配列対策
  const shByUserDate={};(shifts||[]).forEach(s=>{shByUserDate[s.user_id+"|"+s.work_date]=s});
  const enteredCount=(shifts||[]).length; // v2.6.82 店長・本部の代理入力もdraftのまま止まるため「提出済み」ではなく「入力済み」で判定する
  const publishedCount=(shifts||[]).filter(s=>s.status==="published").length;
@@ -2650,39 +2880,43 @@ async function sfManageView(){
  </div>
  <div class="info">${esc(p.label)}｜入力済み ${enteredCount}件／公開済み ${publishedCount}件${publishedCount>0&&publishedCount===enteredCount?'　<span class="badge" style="background:#1e8e5a">全て公開済み</span>':""}</div>`;
  if(notSubmitted.length)h+=`<div class="card" style="border-color:#b58a00"><b>⚠️ 未提出（1日も入力なし）</b>: ${notSubmitted.map(u=>esc(u.name)+(u.line_user_id?"":"（⚠️LINE未連携）")).join("・")}</div>`;
- // 必要人数シミュレーション（同一画面に表示。sf_required_headcounts未設定なら「未設定」）
- h+=`<div class="card"><h3>👥 必要人数（時間帯別）</h3><div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:12px">
-  <tr><th style="text-align:left;padding:4px">日付</th>${(presets||[]).map(pr=>`<th style="padding:4px">${esc(pr.label)}</th>`).join("")}</tr>
-  ${dates.map(ds=>{
-   const wd=new Date(ds+"T00:00:00").getDay();
-   return `<tr><td style="padding:4px">${sfFmtDateShort(ds)}</td>${(presets||[]).map(pr=>{
-    const need=(reqs||[]).find(r=>r.preset_id===pr.id&&(r.specific_date===ds||(r.specific_date===null&&r.weekday===wd)));
-    const have=people.filter(u=>{const s=shByUserDate[u.id+"|"+ds];return s&&s.preset_id===pr.id}).length;
-    if(!need)return `<td style="padding:4px;text-align:center;color:#999">${have}/未設定</td>`;
-    const ok=have>=need.required_count;
-    return `<td style="padding:4px;text-align:center;color:${ok?"#1e8e5a":"#c8401f"}">${have}/${need.required_count}</td>`;
-   }).join("")}</tr>`;
-  }).join("")}
- </table></div></div>`;
- // シフト表（縦=人、横=日付）
- h+=`<div class="card"><div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:12px">
-  <tr><th style="text-align:left;padding:4px;position:sticky;left:0;background:var(--bg,#fff)">氏名</th>${dates.map(ds=>`<th style="padding:4px;min-width:56px">${sfFmtDateShort(ds)}</th>`).join("")}</tr>
-  ${people.map(u=>`<tr><td style="padding:4px;position:sticky;left:0;background:var(--bg,#fff)">${esc(u.name)}</td>${dates.map(ds=>{
-   const s=shByUserDate[u.id+"|"+ds];
-   const label=s?(s.is_off?"休み":sfFmtTime(s.start_time)+"-"+sfFmtTime(s.end_time)):"-";
-   const badge=s&&s.status==="published"?(s.smaregi_sync_status==="error"?"⚠️":"✅"):s&&s.status==="submitted"?"📝":"";
-   const title=s&&s.smaregi_sync_status==="error"?` title="スマレジ未反映: ${esc(s.smaregi_error||"")}"`:"";
-   return `<td style="padding:4px;text-align:center;cursor:pointer" data-sfmgcell="${u.id}|${ds}"${title}>${badge}${esc(label)}</td>`;
-  }).join("")}</tr>`).join("")}
- </table></div></div>`;
- if(sfEditDate){
-  const [uid,ds]=sfEditDate.split("|");
-  const u=people.find(x=>x.id===uid);
-  h+=`<div class="card" style="border-color:var(--accent,#c8401f)"><h3>${esc(u?u.name:"")}｜${sfFmtDateShort(ds)}</h3>`+sfEditDayHtml(ds,presets||[],shByUserDate[uid+"|"+ds]).replace('id="sf-daysave"','id="sfmg-daysave" data-sfmguid="'+uid+'"').replace('id="sf-daydelete"','id="sfmg-daydelete" data-sfmguid="'+uid+'"').replace('id="sf-dayclose"','id="sfmg-dayclose"');
-  h+=`</div>`;
+ h+=`<div class="sf-stepnav">
+  <button class="sf-stepbtn ${sfMgStep==="request"?"active":""}" data-sfstep="request"><b>①希望確認</b><small>半月・日別・出勤希望</small></button>
+  <button class="sf-stepbtn ${sfMgStep==="adjust"?"active":""}" data-sfstep="adjust"><b>②調整</b><small>不足・人件費を見て調整</small></button>
+  <button class="sf-stepbtn ${sfMgStep==="confirmed"?"active":""}" data-sfstep="confirmed"><b>③確定</b><small>準備中（次回実装）</small></button>
+  <button class="sf-stepbtn ${sfMgStep==="actual"?"active":""}" data-sfstep="actual"><b>④実績</b><small>準備中（次回実装）</small></button>
+ </div>`;
+ if(sfMgStep==="adjust"){
+  const [{data:allUS},{data:targets},{data:profs}]=await Promise.all([
+   sb.from("user_stores").select("user_id").in("user_id",idsForIn),
+   sb.from("dash_sales_target_daily").select("sales_target").eq("store_id",sfMgStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]),
+   sb.from("employee_profiles").select("user_id,smaregi_staff_id").in("user_id",idsForIn)
+  ]);
+  const storeCountMap={};(allUS||[]).forEach(r=>{storeCountMap[r.user_id]=(storeCountMap[r.user_id]||0)+1});
+  const salesTotal=(targets||[]).reduce((a,r)=>a+(r.sales_target||0),0);
+  const linkedSet=new Set((profs||[]).filter(pr=>pr.smaregi_staff_id).map(pr=>pr.user_id));
+  const unlinkedCount=people.filter(u=>!linkedSet.has(u.id)).length;
+  const wageRates=await sfComputeWageRates(sfMgStore,peopleIds);
+  const adj=sfAdjustStepHtml({dates,people,shByUserDate,presets:presets||[],reqs:reqs||[],storeCountMap,salesTotal,wageRates,unlinkedCount});
+  h+=adj.html;
+  h+=sfHeadcountTableHtml(dates,presets||[],reqs||[],people,shByUserDate);
+  h+=sfShiftTableHtml(dates,people,shByUserDate);
+  if(sfEditDate){
+   const [uid,ds]=sfEditDate.split("|");
+   const u=people.find(x=>x.id===uid);
+   h+=`<div class="card" style="border-color:var(--accent,#c8401f)"><h3>${esc(u?u.name:"")}｜${sfFmtDateShort(ds)}</h3>`+sfEditDayHtml(ds,presets||[],shByUserDate[uid+"|"+ds]).replace('id="sf-daysave"','id="sfmg-daysave" data-sfmguid="'+uid+'"').replace('id="sf-daydelete"','id="sfmg-daydelete" data-sfmguid="'+uid+'"').replace('id="sf-dayclose"','id="sfmg-dayclose"');
+   h+=`</div>`;
+  }
+  h+=`<div class="sf-bottom-action"><div><b>公開前チェック（U8）</b><div class="muted">${esc(adj.checkText)}</div></div><div>
+   ${enteredCount>0&&publishedCount<enteredCount?'<button class="btn" id="sfmg-publish">📣 このシフトで確定・公開（スマレジにも反映）</button>':""}
+   <button class="btn sm sub" id="sfmg-import">🔄 スマレジと同期する</button></div></div>`;
+ }else if(sfMgStep==="confirmed"||sfMgStep==="actual"){
+  h+=`<div class="card"><p class="muted">この画面（③確定・④実績・叶え率）は次のマイルストーン（B-2）で実装予定です。</p></div>`;
+ }else{
+  const {data:allUS}=await sb.from("user_stores").select("user_id").in("user_id",idsForIn);
+  const storeCountMap={};(allUS||[]).forEach(r=>{storeCountMap[r.user_id]=(storeCountMap[r.user_id]||0)+1});
+  h+=sfRequestStepHtml(dates,people,shByUserDate,presets||[],reqs||[],storeCountMap);
  }
- if(enteredCount>0&&publishedCount<enteredCount)h+=`<button class="btn" id="sfmg-publish" style="margin-top:10px">📣 この期間を公開する（スマレジにも反映）</button>`;
- h+=`<button class="btn sm sub" id="sfmg-import" style="margin-top:10px">🔄 スマレジと同期する（追加・変更・削除を反映）</button>`;
  return h;
 }
 function sfPeriodSelectHtml(curIdx){
@@ -2792,6 +3026,8 @@ function bindShiftPage(){
  // 管理
  if($("sfmg-store"))$("sfmg-store").onchange=e=>{sfMgStore=e.target.value;sfEditDate=null;render()};
  if($("sfmg-period"))$("sfmg-period").onchange=e=>{sfMgPeriodIdx=+e.target.value;sfEditDate=null;render()};
+ document.querySelectorAll("[data-sfstep]").forEach(b=>b.onclick=()=>{sfMgStep=b.dataset.sfstep;sfEditDate=null;render()});
+ document.querySelectorAll("[data-sfreqday]").forEach(b=>b.onclick=()=>{sfReqDate=b.dataset.sfreqday;render()});
  document.querySelectorAll("[data-sfmgcell]").forEach(td=>td.onclick=()=>{sfEditDate=td.dataset.sfmgcell;render()});
  if(sfMode==="manage"&&$("sfmg-dayclose"))$("sfmg-dayclose").onclick=()=>{sfEditDate=null;render()};
  let sfMgPickedPreset=null,sfMgPickedOff=false;

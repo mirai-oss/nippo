@@ -374,7 +374,10 @@ const WEEKLY_FMT=[
 
 // ===== 状態 =====
 let me=null;          // {id,name,role,concurrent_role,stores:[{id,name}],team_id}
-let stores=[];        // 全店舗
+let stores=[];        // 全店舗（is_active=trueのみ。通常の店舗一覧UI用）
+let storesHidden=[];  // v2.7 バグ修正: is_active=falseだがsmaregi_store_id設定済みの疑似店舗（本部＝hq_pseudo_store等）。
+ // 通常の店舗一覧には出さない設計だが、「人をその店舗に所属させる」系の選択肢（従業員編集・招待・新規登録・シフト管理等）
+ // からは選べないと本部所属者を一切扱えなくなってしまうため、それらの店舗選択肢にだけ別途含める
 let page="home",detail=null,form={},seg="daily",editId=null,writeKind="daily";
 let skipDraftLoad=false; // v2.6.75 書いている途中の再描画で下書きを読み直さないようにするフラグ
 let todayDaily=null,todayWeekly=null;
@@ -1459,6 +1462,10 @@ async function loadMe(uid){
  if(!u){renderLogin("ユーザー情報を取得できませんでした。管理者にお問い合わせください。");await sb.auth.signOut();return}
  if(!u.is_active){renderLogin("このアカウントは無効化されています。本部までお問い合わせください。");await sb.auth.signOut();return}
  stores=st||[];
+ { // v2.7 バグ修正: 本部(hq_pseudo_store)等の疑似店舗を、店舗の所属選択肢（従業員編集・招待・シフト管理等）に含める
+  const {data:sh}=await sb.from("stores").select("id,name").eq("is_active",false).not("smaregi_store_id","is",null).order("sort_order");
+  storesHidden=sh||[];
+ }
  const [{data:tms}]=await Promise.all([sb.from("teams").select("id,name").order("name")]); // v2.6.2
  teams=tms||[];
  const [{data:us},{data:as},{data:rfeat},{data:ufeat}]=await Promise.all([
@@ -2563,16 +2570,8 @@ function sfCanManage(storeId){
  if(me.role==="TENCHO")return (me.stores||[]).some(s=>s.id===storeId);
  return false;
 }
-let sfExtraStores=null; // v2.7 バグ修正: 本部等（is_active=false・hq_pseudo_store）はグローバルstoresから除外されているため、
- // シフト管理・時間帯設定の店舗選択に別途取り込む（本部所属者の代理入力・スマレジ同期が一切できなかった不具合の修正）
-async function sfPickableStores(){
- if(sfCanManage(null)){
-  if(sfExtraStores===null){
-   const {data}=await sb.from("stores").select("id,name").eq("is_active",false).not("smaregi_store_id","is",null).order("sort_order");
-   sfExtraStores=data||[];
-  }
-  return [...stores,...sfExtraStores];
- }
+function sfPickableStores(){ // storesHiddenはloadMe()でログイン時に取得済み（本部等の疑似店舗）
+ if(sfCanManage(null))return [...stores,...storesHidden];
  return (me.stores||[]).filter(s=>sfCanManage(s.id));
 }
 function sfPeriodIdx(y,m,half){return y*24+m*2+(half==="A"?0:1)}
@@ -4194,7 +4193,7 @@ function recruitDetailView(){
    <p class="muted" style="margin:0">発行すると氏名・電話が入社フォームに自動入力された状態で本人が登録できます</p>
    <select class="inp" id="rc-hrole">${["AL","SHAIN","TENCHO","TEAM","HQ"].map(r=>`<option value="${r}" ${r===defRole?"selected":""}>${ROLE_NAME[r]}</option>`).join("")}</select>
    <p class="muted" style="margin:8px 0 0">所属店舗（タップで選択）</p>
-   <div>${stores.map(s=>`<span class="chip" data-rchst="${s.id}">${esc(s.name)}</span>`).join("")}</div>
+   <div>${[...stores,...storesHidden].map(s=>`<span class="chip" data-rchst="${s.id}">${esc(s.name)}</span>`).join("")}</div>
    <button class="btn" id="rc-hire" style="background:var(--green)">採用・招待リンクを発行する</button></div>`;
  }
  if(a.invite_token){
@@ -4616,7 +4615,7 @@ async function adminSmaregiView(){
   h+=`<div class="card" style="border-color:var(--blue)"><h3>🔗 ${esc(smSel.name)} さんをアプリに招待</h3>
    <p class="muted" style="margin:0">スマレジ登録メール: ${smSel.mail?`<b>${esc(smSel.mail)}</b>`:"未登録（リンクを発行してLINE等で送ってください）"}</p>
    <p class="muted" style="margin:8px 0 0">役職</p>${Object.keys(ROLE_NAME).map(r=>`<span class="chip smrole ${smRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}
-   <p class="muted" style="margin:8px 0 0">所属店舗（複数可）</p>${stores.map(s=>`<span class="chip smstore ${smStores.includes(s.id)?"on":""}" data-s="${s.id}">${esc(s.name)}</span>`).join("")}
+   <p class="muted" style="margin:8px 0 0">所属店舗（複数可）</p>${[...stores,...storesHidden].map(s=>`<span class="chip smstore ${smStores.includes(s.id)?"on":""}" data-s="${s.id}">${esc(s.name)}</span>`).join("")}
    <select class="inp" id="sm-days"><option value="7">有効期限: 7日間</option><option value="14">14日間</option><option value="30">30日間</option></select>
    ${smSel.mail?`<button class="btn" id="sm-mail">📧 招待メールを送信する</button>`:""}
    <button class="btn sub" id="sm-link">🔗 招待リンクを発行してコピー</button>
@@ -4660,7 +4659,7 @@ async function adminInviteView(){
   <button class="btn sm" id="iv-copy">📋 リンクをコピー</button><br>
   <span class="muted">LINEやメールで本人に送ってください</span></div>`}
  h+=`<div class="card"><h3>役職 <span class="req">必須</span></h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip ivrole ${ivRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
- <div class="card"><h3>所属店舗（複数可・最初に選んだ店舗がメイン）</h3>${stores.map(s=>`<span class="chip ivstore ${ivStores.includes(s.id)?"on":""}" data-s="${s.id}">${esc(s.name)}</span>`).join("")}</div>
+ <div class="card"><h3>所属店舗（複数可・最初に選んだ店舗がメイン）</h3>${[...stores,...storesHidden].map(s=>`<span class="chip ivstore ${ivStores.includes(s.id)?"on":""}" data-s="${s.id}">${esc(s.name)}</span>`).join("")}</div>
  <div class="card"><h3>🕐 スマレジ・タイムカード</h3>
   <label class="radio-row"><input type="radio" name="ivsm" value="no" ${ivSkipSm?"checked":""}>登録しない（アプリのみ・管理用アカウントなど）</label>
   <label class="radio-row"><input type="radio" name="ivsm" value="yes" ${ivSkipSm?"":"checked"}>登録する（お店で働く方・出勤打刻あり）</label>
@@ -4696,7 +4695,7 @@ function adminNewView(){
   <input type="text" id="nu-pw" placeholder="初期パスワード（8文字以上）">
   <button class="btn sm sub" id="nu-gen">🎲 パスワード自動生成</button></div>
  <div class="card"><h3>役職 <span class="req">必須</span></h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip nurole" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
- <div class="card"><h3>所属店舗（複数可・最初に選んだ店舗がメイン）</h3>${stores.map(s=>`<span class="chip nustore" data-s="${s.id}">${esc(s.name)}</span>`).join("")}</div>
+ <div class="card"><h3>所属店舗（複数可・最初に選んだ店舗がメイン）</h3>${[...stores,...storesHidden].map(s=>`<span class="chip nustore" data-s="${s.id}">${esc(s.name)}</span>`).join("")}</div>
  <button class="btn" id="nu-submit">アカウントを発行する</button>`;
 }
 async function adminCreate(){
@@ -4758,7 +4757,7 @@ async function adminEditView(){
  h+=`<div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
  <div class="card"><h3>所属チーム</h3><span class="chip euteam ${!euTeam?"on":""}" data-t="">なし</span>${teams.map(t=>`<span class="chip euteam ${euTeam===t.id?"on":""}" data-t="${t.id}">${esc(t.name)}</span>`).join("")}
   <p class="muted" style="margin:6px 0 0">チームを設定すると、日報のLark通知をチーム単位で振り分けられます</p></div>
- <div class="card"><h3>所属店舗（複数可）</h3>${stores.map(s=>`<span class="chip eustore ${euStores.includes(s.id)?"on":""}" data-s="${s.id}">${esc(s.name)}</span>`).join("")}</div>
+ <div class="card"><h3>所属店舗（複数可）</h3>${[...stores,...storesHidden].map(s=>`<span class="chip eustore ${euStores.includes(s.id)?"on":""}" data-s="${s.id}">${esc(s.name)}</span>`).join("")}</div>
  <button class="btn" id="eu-save">変更を保存する</button>
  <div class="card" style="margin-top:16px"><h3>パスワード再設定</h3>
   <input type="text" id="eu-pw" placeholder="新しいパスワード（8文字以上）">

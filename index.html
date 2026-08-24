@@ -1477,7 +1477,12 @@ async function loadMe(uid){
  }
  appSettings={};(as||[]).forEach(r=>appSettings[r.key]=r.value);
  const fmap={};(rfeat||[]).forEach(x=>fmap[x.feature]=x.allowed);(ufeat||[]).forEach(x=>fmap[x.feature]=x.allowed);
- me={...u,stores:stores.filter(s=>myIds.includes(s.id)),features:fmap};
+ // v2.7 バグ修正: me.storesは「本人が実際に所属する店舗」を表すべきだが、以前はis_active=true限定の
+ //   グローバルstores（通常の店舗一覧UI用）から絞り込んでいたため、本部（hq_pseudo_store・is_active=false）
+ //   等に所属する人がここで丸ごと欠落していた（シフト同期が本部所属の人にだけ効かない不具合の根本原因）。
+ //   本人のuser_stores行にひもづく店舗は、is_activeに関わらずそのまま解決する。
+ const {data:myStoreRows}=myIds.length?await sb.from("stores").select("id,name").in("id",myIds).order("sort_order"):{data:[]};
+ me={...u,stores:myStoreRows||[],features:fmap};
  // v2.6.64 応募者詳細への直接リンクで開いたときは、ホームではなくその応募者の詳細を開く
  if(openApplicant&&can("recruit")){page="recruit";rcDetail=openApplicant}else{page="home"}
  if(openApplicant)history.replaceState({},"",location.pathname); // 開いたらURLのパラメータは消す（再読み込みで毎回同じ人が開かないように）
@@ -2558,6 +2563,18 @@ function sfCanManage(storeId){
  if(me.role==="TENCHO")return (me.stores||[]).some(s=>s.id===storeId);
  return false;
 }
+let sfExtraStores=null; // v2.7 バグ修正: 本部等（is_active=false・hq_pseudo_store）はグローバルstoresから除外されているため、
+ // シフト管理・時間帯設定の店舗選択に別途取り込む（本部所属者の代理入力・スマレジ同期が一切できなかった不具合の修正）
+async function sfPickableStores(){
+ if(sfCanManage(null)){
+  if(sfExtraStores===null){
+   const {data}=await sb.from("stores").select("id,name").eq("is_active",false).not("smaregi_store_id","is",null).order("sort_order");
+   sfExtraStores=data||[];
+  }
+  return [...stores,...sfExtraStores];
+ }
+ return (me.stores||[]).filter(s=>sfCanManage(s.id));
+}
 function sfPeriodIdx(y,m,half){return y*24+m*2+(half==="A"?0:1)}
 function sfPeriodInfo(y,m,half){ // m=0-indexed月
  if(half==="A"){
@@ -2855,7 +2872,7 @@ function sfAdjustStepHtml(ctx){
  return {html:h,checkText:checkMsgs.length?checkMsgs.join("・"):"問題ありません"};
 }
 async function sfManageView(){
- const pickable=sfCanManage(null)?stores:(me.stores||[]).filter(s=>sfCanManage(s.id));
+ const pickable=await sfPickableStores();
  if(!pickable.length)return `<p class="muted">管理できる店舗がありません。</p>`;
  if(!sfMgStore||!pickable.find(s=>s.id===sfMgStore))sfMgStore=pickable[0].id;
  if(sfMgPeriodIdx===null){const cp=sfCurrentPeriod();sfMgPeriodIdx=sfPeriodIdx(cp.y,cp.m,cp.half)}
@@ -2930,7 +2947,7 @@ function sfPeriodSelectHtml(curIdx){
 
 // ---- 時間帯プリセット設定 ----
 async function sfPresetsView(){
- const pickable=sfCanManage(null)?stores:(me.stores||[]).filter(s=>sfCanManage(s.id));
+ const pickable=await sfPickableStores();
  if(!pickable.length)return `<p class="muted">設定できる店舗がありません。</p>`;
  if(!sfPsStore||!pickable.find(s=>s.id===sfPsStore))sfPsStore=pickable[0].id;
  const {data:presets}=await sb.from("sf_time_presets").select("*").eq("store_id",sfPsStore).order("sort_order");

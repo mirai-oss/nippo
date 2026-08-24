@@ -414,6 +414,7 @@ const rcStoreName=a=>{
 const RC_TOUCH_COLS=["updated_at","last_actor_at","last_msg_at","line_linked_at","invite_sent_at","invite_reminded_at","form_received_at","interview_sent_at","status_changed_at","applied_at"];
 const rcTouchAt=a=>{let m=0;RC_TOUCH_COLS.forEach(k=>{const v=a&&a[k];if(v){const t=Date.parse(v);if(t>m)m=t}});return m};
 let rcFForm="",rcFAssignee="",rcFArea="",rcSort="touch",rcCosts=null,rcHiredInfo=null,joinSmSel=null,joinSmNo=false; // v2.5.2
+let rcCostEdit=null; // v2.7 B-3(C7): 求人費用の「入力済み」項目をタップして編集するときの選択中の項目
 let rcFStatus=""; // v2.5.6 選考ステータス絞り込み
 let csvRows=null,csvBusy=false; // v2.6.5 CSV取り込み
 let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8
@@ -4096,14 +4097,15 @@ async function recruitView(){
  const curMonth=(()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")})();
  if(rcAll)h+=`<div class="card"><h3>💰 求人費用（月別・店舗別・区分別）</h3>
   <p class="muted" style="margin:0">「全体・共通」でざっくり入れてもOK、店舗や区分ごとに分けてもOK。上の表は絞り込み条件と同じ条件で入力した費用を使って単価を出します（全体と内訳の両方を入れると合算されるので、どちらかに統一がおすすめ）</p>
+  ${rcCostEdit?`<div class="info" style="margin-top:6px">✏️ 編集中の項目です。金額を書き換えて保存すると上書きされます　<span class="back" id="rc-cedit-cancel">キャンセルして新規入力に戻す</span></div>`:""}
   <div style="display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap">
-   <input type="month" class="inp" id="rc-cmonth" value="${curMonth}" style="flex:1.2;min-width:130px;margin:0">
-   <select class="inp" id="rc-carea" style="flex:1;min-width:96px;margin:0;font-size:13px"><option value="">全体</option>${AREAS.map(x=>`<option>${esc(x)}</option>`).join("")}</select>
-   <select class="inp" id="rc-cform" style="flex:1;min-width:96px;margin:0;font-size:13px"><option value="">共通</option><option value="al">アルバイト</option><option value="shain">社員</option></select>
+   <input type="month" class="inp" id="rc-cmonth" value="${rcCostEdit?rcCostEdit.month.slice(0,7):curMonth}" style="flex:1.2;min-width:130px;margin:0">
+   <select class="inp" id="rc-carea" style="flex:1;min-width:96px;margin:0;font-size:13px"><option value="" ${!rcCostEdit||!rcCostEdit.area?"selected":""}>全体</option>${AREAS.map(x=>`<option ${rcCostEdit&&rcCostEdit.area===x?"selected":""}>${esc(x)}</option>`).join("")}</select>
+   <select class="inp" id="rc-cform" style="flex:1;min-width:96px;margin:0;font-size:13px"><option value="" ${!rcCostEdit||!rcCostEdit.form_key?"selected":""}>共通</option><option value="al" ${rcCostEdit&&rcCostEdit.form_key==="al"?"selected":""}>アルバイト</option><option value="shain" ${rcCostEdit&&rcCostEdit.form_key==="shain"?"selected":""}>社員</option></select>
   </div>
-  <input type="text" id="rc-camount" placeholder="金額（円）" inputmode="numeric">
-  <button class="btn sm" id="rc-csave">この条件の費用を保存</button>
-  ${(rcCosts||[]).length?`<p class="muted" style="margin:8px 0 0">入力済み: ${(rcCosts||[]).slice().sort((a,b)=>(b.month+(b.area||""))<(a.month+(a.area||""))?-1:1).slice(0,10).map(c=>{const d=new Date(c.month+"T00:00:00");return d.getFullYear()+"/"+(d.getMonth()+1)+" "+esc(c.area||"全体")+(c.form_key==="al"?"・アルバイト":c.form_key==="shain"?"・社員":"")+" ¥"+(+c.amount).toLocaleString("ja-JP")}).join("　／　")}</p>`:""}</div>`;
+  <input type="text" id="rc-camount" placeholder="金額（円）" inputmode="numeric" value="${rcCostEdit?(+rcCostEdit.amount).toLocaleString("ja-JP"):""}">
+  <button class="btn sm" id="rc-csave">${rcCostEdit?"この内容で上書き保存する":"この条件の費用を保存"}</button>
+  ${(rcCosts||[]).length?`<p class="muted" style="margin:8px 0 0">入力済み（タップで編集）: ${(rcCosts||[]).slice().sort((a,b)=>(b.month+(b.area||""))<(a.month+(a.area||""))?-1:1).slice(0,10).map(c=>{const d=new Date(c.month+"T00:00:00");return `<span class="chip" data-rccostedit="${esc(c.month)}|${esc(c.area||"")}|${esc(c.form_key||"")}" style="margin:2px 4px 2px 0">${d.getFullYear()}/${d.getMonth()+1} ${esc(c.area||"全体")}${c.form_key==="al"?"・アルバイト":c.form_key==="shain"?"・社員":""} ¥${(+c.amount).toLocaleString("ja-JP")}</span>`}).join("")}</p>`:""}</div>`;
  // 手動追加
  h+=`<div class="card"><h3>＋ 手動で追加（電話・紹介など）</h3>
   <input type="text" id="rc-aname" placeholder="氏名">
@@ -4581,7 +4583,7 @@ async function saveRecruitCost(){ // v2.5.2 月別の求人費用
  if(!m||isNaN(amt)){toast("月と金額を入力してください",true);return}
  const {error}=await sb.from("recruit_costs").upsert({month:m+"-01",area:$("rc-carea").value||"",form_key:$("rc-cform").value||"",amount:amt,note:null,updated_by:me.id,updated_at:new Date().toISOString()},{onConflict:"month,area,form_key"});
  if(error){toast("保存エラー: "+error.message,true);return}
- toast("費用を保存しました");rcCosts=null;render();
+ toast(rcCostEdit?"上書き保存しました":"費用を保存しました");rcCostEdit=null;rcCosts=null;render();
 }
 
 // ===== 店舗マスタ管理（v1.6） =====
@@ -6353,6 +6355,12 @@ function bindPage(){
  if($("rc-csvcancel"))$("rc-csvcancel").onclick=()=>{csvRows=null;render()};
  if($("rc-statcsv"))$("rc-statcsv").onclick=exportStatsCsv;
  if($("rc-csave"))$("rc-csave").onclick=saveRecruitCost;
+ if($("rc-cedit-cancel"))$("rc-cedit-cancel").onclick=()=>{rcCostEdit=null;render()};
+ document.querySelectorAll("[data-rccostedit]").forEach(el=>el.onclick=()=>{
+  const [month,area,form_key]=el.dataset.rccostedit.split("|");
+  const c=(rcCosts||[]).find(x=>x.month===month&&(x.area||"")===area&&(x.form_key||"")===form_key);
+  if(c){rcCostEdit=c;render()}
+ });
  document.querySelectorAll(".chip[data-rcst]").forEach(c=>c.onclick=()=>{
   document.querySelectorAll(".chip[data-rcst]").forEach(x=>{x.classList.remove("on");x.style.background="";x.style.color=APPLICANT_COLOR[x.dataset.rcst]});
   c.classList.add("on");c.style.background=APPLICANT_COLOR[c.dataset.rcst];c.style.color="#fff";

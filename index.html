@@ -106,6 +106,9 @@
    body.withnav header{padding:14px 36px}
    .loginwrap{max-width:480px;margin:0 auto}
   }
+  /* v2.7 embed=1（統合ポータルシェル埋め込み）: withnavの940px拡張はサイドバー同梱の仕組みのため
+     embed時は使えない。iframeいっぱいに広げるための専用クラス（担当F報告のバグ修正） */
+  body.embedmode .app{max-width:none;margin:0}
   /* ===== v2.7 シフト管理 v5 UI（実装指示書_担当B_シフトUIv5_2026-08-24.md B-1: ①希望確認 ②調整） ===== */
   .badge.p{background:#6849a8}
   .sf-stepnav{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}
@@ -1539,6 +1542,7 @@ async function doLogin(){
 async function render(){
  document.getElementById("nav").style.display=embedMode?"none":"flex";
  document.body.classList.toggle("withnav",!embedMode);
+ document.body.classList.toggle("embedmode",embedMode); // v2.7 embed=1修正: withnavを外すとPC幅拡張(940px)も一緒に外れ480px固定に戻ってしまうため、別クラスで幅だけ確保する（担当F報告）
  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.p===page||(page==="weekly"&&b.dataset.p==="write")));
  document.getElementById("navadmin").style.display=(can("staff_admin")||can("store_admin"))?"":"none";
  // v2.6.25 外販の人は ホーム・日報・一覧・タスク・応募・設定 だけ

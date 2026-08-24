@@ -751,6 +751,7 @@ const openApplicant=new URLSearchParams(location.search).get("a"); // v2.6.64 �
 // v2.7 統合ポータルシェル（portal.html）からの深リンク対応（担当Fからの依頼・実装指示書_統合ポータルシェル）
 // 例: ?page=shift で開けば、ホームではなくシフト画面が最初から開く。埋め込みiframe用のためURLはクリアしない
 const deepLinkPage=new URLSearchParams(location.search).get("page");
+const embedMode=new URLSearchParams(location.search).get("embed")==="1"; // v2.7 統合ポータルシェルのiframe埋め込み用。自前のnav・headerを隠す（担当F依頼・tori-dashboardのembed=1と同じ考え方）
 const DEEPLINK_PAGES=["home","write","weekly","list","check","shift","tasks","chat","manuals","recruit","admin","settings","dash"]; // render()が分岐できるpage値のみ許可
 const GAIHAN_HIDDEN_PAGES=["check","chat","weekly","manuals","shift"]; // 1533行目付近のnav非表示ロジックと同じ基準（外販には深リンクさせない）
 async function init(){
@@ -1533,8 +1534,8 @@ async function doLogin(){
 
 // ===== 画面描画 =====
 async function render(){
- document.getElementById("nav").style.display="flex";
- document.body.classList.add("withnav");
+ document.getElementById("nav").style.display=embedMode?"none":"flex";
+ document.body.classList.toggle("withnav",!embedMode);
  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.p===page||(page==="weekly"&&b.dataset.p==="write")));
  document.getElementById("navadmin").style.display=(can("staff_admin")||can("store_admin"))?"":"none";
  // v2.6.25 外販の人は ホーム・日報・一覧・タスク・応募・設定 だけ
@@ -1555,7 +1556,7 @@ async function render(){
  else if(page==="recruit")body=await recruitView(); // v2.5.2
  else if(page==="admin")body=await adminView();
  else if(page==="settings")body=await settingsView();
- $("app").innerHTML=`<header><b>日報・週報システム</b><span style="font-size:12px">${esc(me.name)}（${ROLE_NAME[me.role]||""}）</span></header><main>${body}</main>`;
+ $("app").innerHTML=(embedMode?"":`<header><b>日報・週報システム</b><span style="font-size:12px">${esc(me.name)}（${ROLE_NAME[me.role]||""}）</span></header>`)+`<main>${body}</main>`;
  bindPage();
  navSync(); // v2.6.22 ブラウザの「戻る」で1つ前の画面に戻れるようにする
 }

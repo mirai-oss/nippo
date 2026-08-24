@@ -163,7 +163,7 @@
   .sf-neg{color:var(--red);font-weight:700}
   @media(min-width:900px){
    .sf-finance{grid-template-columns:repeat(5,1fr)}
-   .sf-stepnav{grid-template-columns:repeat(4,1fr)}
+   .sf-stepnav{grid-template-columns:repeat(3,1fr)}
   }
 </style>
 </head>
@@ -175,6 +175,7 @@
   <button data-p="list"><i>📋</i>一覧<span class="ndot" id="listdot" style="display:none"></span></button>
   <button data-p="check"><i>☑️</i>チェック</button>
   <button data-p="shift"><i>📅</i>シフト</button>
+  <button data-p="actual" id="navactual" style="display:none"><i>📊</i>実績確認</button>
   <button data-p="tasks"><i>✅</i>タスク<span class="ndot" id="taskdot" style="display:none"></span></button>
   <button data-p="chat"><i>💬</i>チャット<span class="ndot" id="chatdot" style="display:none"></span></button>
   <button data-p="manuals"><i>📎</i>マニュアル</button>
@@ -758,7 +759,7 @@ const openApplicant=new URLSearchParams(location.search).get("a"); // v2.6.64 �
 // 例: ?page=shift で開けば、ホームではなくシフト画面が最初から開く。埋め込みiframe用のためURLはクリアしない
 const deepLinkPage=new URLSearchParams(location.search).get("page");
 const embedMode=new URLSearchParams(location.search).get("embed")==="1"; // v2.7 統合ポータルシェルのiframe埋め込み用。自前のnav・headerを隠す（担当F依頼・tori-dashboardのembed=1と同じ考え方）
-const DEEPLINK_PAGES=["home","write","weekly","list","check","shift","tasks","chat","manuals","recruit","admin","settings","dash"]; // render()が分岐できるpage値のみ許可
+const DEEPLINK_PAGES=["home","write","weekly","list","check","shift","actual","tasks","chat","manuals","recruit","admin","settings","dash"]; // render()が分岐できるpage値のみ許可
 const GAIHAN_HIDDEN_PAGES=["check","chat","weekly","manuals","shift"]; // 1533行目付近のnav非表示ロジックと同じ基準（外販には深リンクさせない）
 async function init(){
  if(applyKey){await renderApply();return}
@@ -1548,6 +1549,7 @@ async function render(){
  // v2.6.25 外販の人は ホーム・日報・一覧・タスク・応募・設定 だけ
  if(me.role==="GAIHAN")document.querySelectorAll('nav button[data-p="check"],nav button[data-p="chat"],nav button[data-p="weekly"],nav button[data-p="manuals"],nav button[data-p="shift"]').forEach(b=>b.style.display="none");
  document.getElementById("navrecruit").style.display=can("recruit")?"":"none"; // v2.5.2 応募は独立タブ
+ document.getElementById("navactual").style.display=(sfCanManage(null)||me.role==="TENCHO")?"":"none"; // v2.7 実績確認（シフトから分離）
  updateDots();
  let body="";
  if(page==="home")body=await homeView();
@@ -1556,6 +1558,7 @@ async function render(){
  else if(page==="list")body=detail?await detailView():await listView();
  else if(page==="check")body=await checkView();
  else if(page==="shift")body=await shiftView();
+ else if(page==="actual")body=await actualReportView(); // v2.7 実績確認（シフトから分離・過去へ自由に遡れる）
  else if(page==="manuals")body=await manualsView(); // v2.6.59
  else if(page==="tasks")body=await tasksView();
  else if(page==="chat")body=await chatView();
@@ -2616,6 +2619,7 @@ let sfMode="submit",sfSubStore=null,sfSubPeriodIdx=null,sfEditDate=null,sfChange
 let sfMgStore=null,sfMgPeriodIdx=null;
 let sfPsStore=null;
 let sfMgStep="request",sfReqDate=null; // v2.7 ①希望確認 ②調整（担当BシフトUIv5）
+let arStore=null,arMode="half",arMonth=null,arHalf=null,arDate=null,arFrom=null,arTo=null; // v2.7 実績確認（シフトから分離。日別/半月/月次/期間で自由に遡れる）
 
 // v2.6.81 未提出者へのLINEリマインド。hq_generate_today()と同じ「画面を開いたときにチェック」方式（外部cronなし）
 async function sfEnsureReminders(){
@@ -3033,6 +3037,90 @@ function sfActualStepHtml(ctx){
  </div>
  <p class="muted" style="margin-top:6px">実績データはスマレジタイムカードの打刻実績(labor_cost_daily)・売上実績データ(dash_sales_daily)を読み取り専用で参照しています。PA予定・実績・削減・超過は今日（${esc(today)}）までに経過した日だけで集計しています。</p>`;
 }
+
+// ===== 実績確認（シフトから独立・v2.7） =====
+// ユーザー要望: 「実績確認とシフトはページを分けたい」「過去分もさかのぼって見たい。日別・半月毎・1ヵ月毎・期間」
+function arComputeRange(){
+ if(arMode==="day"){const d=new Date(arDate+"T00:00:00");return {start:d,end:d}}
+ if(arMode==="month"){const [y,m]=arMonth.split("-").map(Number);return {start:new Date(y,m-1,1),end:new Date(y,m,0)}}
+ if(arMode==="half"){
+  const [y,m]=arMonth.split("-").map(Number);
+  return arHalf==="A"?{start:new Date(y,m-1,1),end:new Date(y,m-1,15)}:{start:new Date(y,m-1,16),end:new Date(y,m,0)};
+ }
+ return {start:new Date(arFrom+"T00:00:00"),end:new Date(arTo+"T00:00:00")}; // range
+}
+async function actualReportView(){
+ const pickable=sfPickableStores();
+ if(!pickable.length)return `<h2>📊 実績確認</h2><p class="muted">確認できる店舗がありません。</p>`;
+ if(!arStore||!pickable.find(s=>s.id===arStore))arStore=pickable[0].id;
+ if(!arMonth){const t=new Date();arMonth=t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0");arHalf=t.getDate()<=15?"A":"B"}
+ if(!arDate)arDate=todayStr();
+ if(!arFrom){const t=new Date();const f=new Date(t.getFullYear(),t.getMonth(),t.getDate()-14);arFrom=sfFmtDate(f);arTo=todayStr()}
+ const range=arComputeRange();
+ let h=`<h2>📊 実績確認</h2>
+ <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+  <select class="inp" id="ar-store" style="flex:1;min-width:140px;margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===arStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select>
+ </div>
+ <div class="seg" id="ar-mode">
+  <div class="${arMode==="day"?"on":""}" data-m="day">日別</div>
+  <div class="${arMode==="half"?"on":""}" data-m="half">半月</div>
+  <div class="${arMode==="month"?"on":""}" data-m="month">月次</div>
+  <div class="${arMode==="range"?"on":""}" data-m="range">期間</div>
+ </div>
+ <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">`;
+ if(arMode==="day"){
+  h+=`<input type="date" class="inp" id="ar-date" value="${arDate}" style="flex:1;min-width:140px;margin:0">`;
+ }else if(arMode==="half"){
+  h+=`<input type="month" class="inp" id="ar-month" value="${arMonth}" style="flex:1;min-width:140px;margin:0">
+  <div class="seg" id="ar-half" style="margin:0;flex:1;min-width:160px">
+   <div class="${arHalf==="A"?"on":""}" data-h="A">1〜15日</div>
+   <div class="${arHalf==="B"?"on":""}" data-h="B">16〜末日</div>
+  </div>`;
+ }else if(arMode==="month"){
+  h+=`<input type="month" class="inp" id="ar-month2" value="${arMonth}" style="flex:1;min-width:140px;margin:0">`;
+ }else{
+  h+=`<input type="date" class="inp" id="ar-from" value="${arFrom}" style="flex:1;min-width:130px;margin:0"><span class="muted">〜</span><input type="date" class="inp" id="ar-to" value="${arTo}" style="flex:1;min-width:130px;margin:0">`;
+ }
+ h+=`</div>`;
+ if(range.end<range.start)return h+`<div class="alert">終了日が開始日より前です。日付を見直してください。</div>`;
+ const dates=sfDateList(range);
+ if(dates.length>366)return h+`<div class="alert">一度に見られるのは366日分までです。期間を短くしてください（現在: ${dates.length}日間）。</div>`;
+ h+=`<div class="info">対象: <b>${sfFmtDate(range.start)}〜${sfFmtDate(range.end)}</b>（${dates.length}日間）</div>`;
+
+ const {data:members}=await sb.from("user_stores").select("user_id,users(id,name,role,is_active)").eq("store_id",arStore);
+ const people=(members||[]).map(m=>m.users).filter(u=>u&&u.is_active).sort((a,b)=>a.name.localeCompare(b.name,"ja"));
+ const peopleIds=people.map(u=>u.id);
+ const [{data:shifts},{data:laborRows},{data:targets},{data:actualsRows},wageRates]=await Promise.all([
+  sb.from("sf_shifts").select("user_id,work_date,start_time,end_time,break_minutes,is_off").eq("store_id",arStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
+  sb.from("labor_cost_daily").select("user_id,work_date,worked_minutes,computed_cost,smaregi_estimate_cost").eq("store_id",arStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
+  sb.from("dash_sales_target_daily").select("biz_date,sales_target").eq("store_id",arStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]),
+  sb.from("dash_sales_daily").select("biz_date,sales,cost,labor").eq("store_id",arStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]),
+  sfComputeWageRates(arStore,peopleIds)
+ ]);
+ const shByUserDate={};(shifts||[]).forEach(s=>{shByUserDate[s.user_id+"|"+s.work_date]=s});
+ const laborByUserDate={};
+ (laborRows||[]).forEach(r=>{
+  const key=r.user_id+"|"+r.work_date;
+  const a=laborByUserDate[key]||(laborByUserDate[key]={minutes:0,cost:0});
+  a.minutes+=r.worked_minutes||0;
+  a.cost+=(r.computed_cost!=null?r.computed_cost:r.smaregi_estimate_cost)||0;
+ });
+ const salesTargetByDate={};(targets||[]).forEach(r=>{salesTargetByDate[r.biz_date]=r.sales_target||0});
+ const salesActualByDate={};(actualsRows||[]).forEach(r=>{salesActualByDate[r.biz_date]={sales:r.sales||0,cost:r.cost||0,labor:r.labor||0}});
+ h+=sfActualStepHtml({dates,people,shByUserDate,laborByUserDate,salesTargetByDate,salesActualByDate,wageRates});
+ return h;
+}
+function bindActualPage(){
+ if($("ar-store"))$("ar-store").onchange=e=>{arStore=e.target.value;render()};
+ document.querySelectorAll("#ar-mode>div").forEach(d=>d.onclick=()=>{arMode=d.dataset.m;render()});
+ if($("ar-date"))$("ar-date").onchange=e=>{arDate=e.target.value;render()};
+ if($("ar-month"))$("ar-month").onchange=e=>{arMonth=e.target.value;render()};
+ if($("ar-month2"))$("ar-month2").onchange=e=>{arMonth=e.target.value;render()};
+ document.querySelectorAll("#ar-half>div").forEach(d=>d.onclick=()=>{arHalf=d.dataset.h;render()});
+ if($("ar-from"))$("ar-from").onchange=e=>{arFrom=e.target.value;render()};
+ if($("ar-to"))$("ar-to").onchange=e=>{arTo=e.target.value;render()};
+}
+
 async function sfManageView(){
  const pickable=await sfPickableStores();
  if(!pickable.length)return `<p class="muted">管理できる店舗がありません。</p>`;
@@ -3063,8 +3151,8 @@ async function sfManageView(){
   <button class="sf-stepbtn ${sfMgStep==="request"?"active":""}" data-sfstep="request"><b>①希望確認</b><small>半月・日別・出勤希望</small></button>
   <button class="sf-stepbtn ${sfMgStep==="adjust"?"active":""}" data-sfstep="adjust"><b>②調整</b><small>不足・人件費を見て調整</small></button>
   <button class="sf-stepbtn ${sfMgStep==="confirmed"?"active":""}" data-sfstep="confirmed"><b>③確定</b><small>未確認・変更申請</small></button>
-  <button class="sf-stepbtn ${sfMgStep==="actual"?"active":""}" data-sfstep="actual"><b>④実績</b><small>叶え率・日別差分</small></button>
- </div>`;
+ </div>
+ <p class="muted" style="margin-top:-2px">叶え率・日別差分などの実績確認は「📊実績確認」タブに分けました。</p>`;
  if(sfMgStep==="adjust"){
   const [{data:allUS},{data:targets},{data:profs}]=await Promise.all([
    sb.from("user_stores").select("user_id").in("user_id",idsForIn),
@@ -3093,23 +3181,6 @@ async function sfManageView(){
   const {data:changeReqs}=await sb.from("sf_change_requests").select("*").eq("store_id",sfMgStore).eq("period_key",p.key).order("created_at",{ascending:false});
   h+=sfConfirmedStepHtml({dates,people,shByUserDate,changeReqs:changeReqs||[]});
   h+=sfShiftTableHtml(dates,people,shByUserDate); // 月間確定ビューとして既存のシフト表を流用
- }else if(sfMgStep==="actual"){
-  const [{data:laborRows},{data:targets2},{data:actualsRows},wageRates2]=await Promise.all([
-   sb.from("labor_cost_daily").select("user_id,work_date,worked_minutes,computed_cost,smaregi_estimate_cost").eq("store_id",sfMgStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
-   sb.from("dash_sales_target_daily").select("biz_date,sales_target").eq("store_id",sfMgStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]),
-   sb.from("dash_sales_daily").select("biz_date,sales,cost,labor").eq("store_id",sfMgStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]),
-   sfComputeWageRates(sfMgStore,peopleIds)
-  ]);
-  const laborByUserDate={};
-  (laborRows||[]).forEach(r=>{
-   const key=r.user_id+"|"+r.work_date;
-   const a=laborByUserDate[key]||(laborByUserDate[key]={minutes:0,cost:0});
-   a.minutes+=r.worked_minutes||0;
-   a.cost+=(r.computed_cost!=null?r.computed_cost:r.smaregi_estimate_cost)||0;
-  });
-  const salesTargetByDate={};(targets2||[]).forEach(r=>{salesTargetByDate[r.biz_date]=r.sales_target||0});
-  const salesActualByDate={};(actualsRows||[]).forEach(r=>{salesActualByDate[r.biz_date]={sales:r.sales||0,cost:r.cost||0,labor:r.labor||0}});
-  h+=sfActualStepHtml({dates,people,shByUserDate,laborByUserDate,salesTargetByDate,salesActualByDate,wageRates:wageRates2});
  }else{
   const {data:allUS}=await sb.from("user_stores").select("user_id").in("user_id",idsForIn);
   const storeCountMap={};(allUS||[]).forEach(r=>{storeCountMap[r.user_id]=(storeCountMap[r.user_id]||0)+1});
@@ -5685,6 +5756,7 @@ function bindPage(){
  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=()=>{page=el.dataset.nav;detail=null;editId=null;render()});
  if(page==="check")bindCheckPage();
  if(page==="shift")bindShiftPage();
+ if(page==="actual")bindActualPage();
  if(page==="manuals")bindManualsPage(); // v2.6.59
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
  if($("goweekly"))$("goweekly").onclick=()=>{page="weekly";render()};

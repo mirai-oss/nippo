@@ -156,6 +156,8 @@
   .sf-reqbox .sf-reqday p{margin:3px 0 0;font-size:11px;color:#8a93a2}
   .sf-note{padding:8px 10px;border-radius:8px;background:#fff8ec;border:1px solid #f0dfb8;font-size:11px;color:#7a5a10;margin-bottom:10px}
   .sf-bottom-action{display:flex;flex-direction:column;gap:8px;margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:#fff}
+  .sf-pos{color:var(--green);font-weight:700}
+  .sf-neg{color:var(--red);font-weight:700}
   @media(min-width:900px){
    .sf-finance{grid-template-columns:repeat(5,1fr)}
    .sf-stepnav{grid-template-columns:repeat(4,1fr)}
@@ -2605,7 +2607,7 @@ function sfFmtDate(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart
 function sfFmtDateShort(ds){const d=new Date(ds+"T00:00:00");const w=["日","月","火","水","木","金","土"][d.getDay()];return (d.getMonth()+1)+"/"+d.getDate()+"("+w+")"}
 function sfFmtTime(t){return (t||"").slice(0,5)}
 
-let sfMode="submit",sfSubStore=null,sfSubPeriodIdx=null,sfEditDate=null;
+let sfMode="submit",sfSubStore=null,sfSubPeriodIdx=null,sfEditDate=null,sfChangeDate=null; // sfChangeDate: B-2 ③変更希望フォームの対象日
 let sfMgStore=null,sfMgPeriodIdx=null;
 let sfPsStore=null;
 let sfMgStep="request",sfReqDate=null; // v2.7 ①希望確認 ②調整（担当BシフトUIv5）
@@ -2650,33 +2652,52 @@ async function sfSubmitView(){
  const dates=sfDateList(p);
  const now=new Date();
  const isPastDeadline=now>p.deadline;
- const [{data:presets},{data:shifts}]=await Promise.all([
+ const [{data:presets},{data:shifts},{data:changeReqs}]=await Promise.all([
   sb.from("sf_time_presets").select("*").eq("store_id",sfSubStore).eq("is_active",true).order("sort_order"),
-  sb.from("sf_shifts").select("*").eq("user_id",me.id).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1])
+  sb.from("sf_shifts").select("*").eq("user_id",me.id).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
+  sb.from("sf_change_requests").select("work_date,status").eq("user_id",me.id).eq("period_key",p.key) // B-2 ③
  ]);
  const shMap={};(shifts||[]).forEach(s=>shMap[s.work_date]=s);
+ const crMap={};(changeReqs||[]).forEach(c=>crMap[c.work_date]=c);
  const anyPublished=(shifts||[]).some(s=>s.status==="published");
+ const unconfirmedCount=(shifts||[]).filter(s=>s.status==="published"&&!s.confirmed_at).length; // B-2 ③
  let h=`<div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
   ${myStores.length>1?`<select class="inp" id="sf-store" style="flex:1;min-width:140px;margin:0">${myStores.map(s=>`<option value="${s.id}" ${s.id===sfSubStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select>`:`<b>${esc(myStores[0].name)}</b>`}
   <select class="inp" id="sf-period" style="flex:1;min-width:140px;margin:0">${sfPeriodOptions(sfSubPeriodIdx)}</select>
  </div>
  <div class="info">対象期間: <b>${esc(p.label)}</b>｜提出期限: <b>${p.deadline.getMonth()+1}/${p.deadline.getDate()}</b>｜公開日: ${p.publish.getMonth()+1}/${p.publish.getDate()}${anyPublished?'　<span class="badge" style="background:#1e8e5a">公開済み</span>':""}</div>`;
+ if(unconfirmedCount>0)h+=`<div class="card" style="border-color:var(--blue)"><b>✅ 確定シフトの確認</b><p class="muted" style="margin:6px 0 0">この期間の確定シフトを確認したら、下のボタンを押してください。</p><button class="btn sm" id="sf-confirm" style="margin-top:8px">確認しました</button></div>`;
  if(!presets||!presets.length)h+=`<p class="muted" style="margin-top:10px">この店舗の時間帯設定がまだありません。店長・本部が「⏱ 時間帯設定」から用意します。</p>`;
  h+=`<div class="card">`;
  dates.forEach(ds=>{
   const s=shMap[ds];
   const locked=isPastDeadline||anyPublished;
   const label=s?(s.is_off?"🌙 休み":`${sfFmtTime(s.start_time)}〜${sfFmtTime(s.end_time)}`):"未入力";
+  const cr=crMap[ds];
+  const crBadge=cr?`<br><span class="badge ${cr.status==="pending"?"":"g"}" style="font-size:9px">${cr.status==="pending"?"変更申請中":cr.status==="resolved"?"変更対応済み":"変更申請却下"}</span>`:"";
   h+=`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line,#eee)">
    <div style="width:64px;flex-shrink:0">${sfFmtDateShort(ds)}</div>
-   <div style="flex:1">${esc(label)}</div>
-   ${locked?"":`<button class="btn sm sub" data-sfedit="${ds}">編集</button>`}
+   <div style="flex:1">${esc(label)}${crBadge}</div>
+   ${locked?(s&&s.status==="published"&&!cr?`<button class="btn sm sub" data-sfchange="${ds}">🔁変更希望</button>`:""):`<button class="btn sm sub" data-sfedit="${ds}">編集</button>`}
   </div>`;
  });
  h+=`</div>`;
  if(!isPastDeadline&&!anyPublished&&presets&&presets.length)h+=`<button class="btn" id="sf-submitall" style="margin-top:10px">✅ この内容で提出する</button>`;
  if(sfEditDate)h+=sfEditDayHtml(sfEditDate,presets||[],shMap[sfEditDate]);
+ if(sfChangeDate)h+=sfChangeRequestHtml(sfChangeDate,shMap[sfChangeDate]);
  return h;
+}
+// B-2 ③ 公開後の変更希望フォーム（受付のみ。反映は店長・本部が代理編集＋再公開で対応）
+function sfChangeRequestHtml(ds,s){
+ return `<div class="card" style="border-color:var(--accent,#c8401f)">
+  <h3>${sfFmtDateShort(ds)} の変更希望</h3>
+  <p class="muted" style="margin:0 0 6px">現在の確定内容: ${s?(s.is_off?"🌙 休み":sfFmtTime(s.start_time)+"〜"+sfFmtTime(s.end_time)):"—"}</p>
+  <textarea id="sf-change-reason" rows="2" placeholder="理由・希望内容（例: 体調不良のため17時からに変更したい）"></textarea>
+  <div style="margin-top:8px;display:flex;gap:8px">
+   <button class="btn sm" id="sf-change-send">送信する</button>
+   <button class="btn sm sub" id="sf-change-close">閉じる</button>
+  </div>
+ </div>`;
 }
 function sfPeriodOptions(curIdx){
  let h="";
@@ -2879,6 +2900,122 @@ function sfAdjustStepHtml(ctx){
  if(needDays.length)h+=`<div class="card sf-reqbox"><b>調整が必要な日</b>${needDays.map(d=>`<div class="sf-reqday"><b>${sfFmtDateShort(d.ds)}</b><p>${esc(d.label)} ${d.short}名不足</p></div>`).join("")}</div>`;
  return {html:h,checkText:checkMsgs.length?checkMsgs.join("・"):"問題ありません"};
 }
+// ③確定: 公開後の未確認者一覧・再通知・変更申請の受付一覧（実装指示書_担当B_シフトUIv5_2026-08-24.md B-2）
+function sfConfirmedStepHtml(ctx){
+ const {dates,people,shByUserDate,changeReqs}=ctx;
+ const unconfirmed=people.filter(u=>dates.some(ds=>{const s=shByUserDate[u.id+"|"+ds];return s&&s.status==="published"&&!s.confirmed_at}));
+ const pending=(changeReqs||[]).filter(c=>c.status==="pending");
+ const resolved=(changeReqs||[]).filter(c=>c.status!=="pending");
+ let h=`<div class="card"><b>👀 未確認 ${unconfirmed.length}名</b>`;
+ if(unconfirmed.length){
+  h+=`<p class="muted" style="margin:6px 0">${unconfirmed.map(u=>esc(u.name)).join("・")}</p>
+  <button class="btn sm" id="sfcf-notify">🔔 未確認者へ再通知</button>`;
+ }else{
+  h+=`<p class="muted" style="margin:6px 0 0">全員確認済みです</p>`;
+ }
+ h+=`</div>`;
+ h+=`<div class="card"><b>🔁 変更申請 ${pending.length}件</b>`;
+ if(pending.length){
+  h+=pending.map(c=>{
+   const u=people.find(x=>x.id===c.user_id);
+   return `<div style="padding:8px 0;border-bottom:1px solid var(--line,#eee)">
+    <div><b>${esc(u?u.name:"?")}</b>　${sfFmtDateShort(c.work_date)}</div>
+    <div class="muted" style="margin:3px 0">${esc(c.reason||"（理由の記載なし）")}</div>
+    <button class="btn sm sub" data-sfcrresolve="${c.id}">対応済みにする</button>
+   </div>`;
+  }).join("");
+ }else{
+  h+=`<p class="muted" style="margin:6px 0 0">未対応の申請はありません</p>`;
+ }
+ if(resolved.length)h+=`<p class="muted" style="margin-top:8px;font-size:11px">対応済み・却下: ${resolved.length}件</p>`;
+ h+=`</div>`;
+ return h;
+}
+// ④実績・差分: 従業員ごとの叶え率（希望vs実績）
+function sfFulfillmentTableHtml(dates,people,shByUserDate,laborByUserDate){
+ const rows=people.map(u=>{
+  let wishDays=0,wishMin=0,actualDays=0,actualMin=0;
+  dates.forEach(ds=>{
+   const s=shByUserDate[u.id+"|"+ds];
+   if(s&&!s.is_off){wishDays++;wishMin+=sfShiftMinutes(s)}
+   const lk=laborByUserDate[u.id+"|"+ds];
+   if(lk&&lk.minutes>0){actualDays++;actualMin+=lk.minutes}
+  });
+  return {u,wishDays,actualDays,wishMin,actualMin};
+ }).filter(r=>r.wishDays>0||r.actualDays>0);
+ if(!rows.length)return `<p class="muted">この期間の希望・実績データがまだありません。</p>`;
+ return `<div class="tblwrap"><table class="tbl">
+  <tr><th>氏名</th><th>区分</th><th>希望日数</th><th>実績日数</th><th>叶え率</th><th>希望時間</th><th>実績時間</th><th>差分</th></tr>
+  ${rows.map(r=>{
+   const tag=sfRoleTag(r.u);
+   const rate=r.wishDays>0?Math.round(r.actualDays/r.wishDays*1000)/10:null;
+   const wishH=(r.wishMin/60).toFixed(1),actualH=(r.actualMin/60).toFixed(1);
+   const diffH=(r.actualMin-r.wishMin)/60;
+   return `<tr><td>${esc(r.u.name)}</td><td>${esc(tag.label)}</td><td>${r.wishDays}</td><td>${r.actualDays}</td><td>${rate===null?"—":rate+"%"}</td><td>${wishH}h</td><td>${actualH}h</td><td><span class="${diffH<0?"sf-neg":"sf-pos"}">${diffH>=0?"+":""}${diffH.toFixed(1)}h</span></td></tr>`;
+  }).join("")}
+ </table></div>`;
+}
+// ④実績・差分: 日別（売上・人件費率・シフト時間）＋PA削減/超過サマリー
+function sfActualStepHtml(ctx){
+ const {dates,people,shByUserDate,laborByUserDate,salesTargetByDate,salesActualByDate,wageRates}=ctx;
+ let paWishMin=0,paActualMin=0;
+ const dayRows=dates.map(ds=>{
+  const target=salesTargetByDate[ds]||0;
+  const actual=salesActualByDate[ds]||null;
+  let plannedMin=0,plannedCost=0,actualMin=0;
+  people.forEach(u=>{
+   const s=shByUserDate[u.id+"|"+ds];
+   const isPA=sfRoleTag(u).cls==="pa";
+   const lk=laborByUserDate[u.id+"|"+ds];
+   if(s&&!s.is_off){
+    const min=sfShiftMinutes(s);
+    plannedMin+=min;
+    const rate=wageRates[u.id];
+    if(rate!=null)plannedCost+=min*rate;
+    if(isPA)paWishMin+=min;
+   }
+   if(lk){
+    actualMin+=lk.minutes;
+    if(isPA)paActualMin+=lk.minutes;
+   }
+  });
+  const plannedRate=target>0?(plannedCost/target*100):null;
+  const actualRate=(actual&&actual.sales>0)?(actual.labor/actual.sales*100):null;
+  return {ds,target,actual,plannedRate,actualRate,plannedMin,actualMin};
+ });
+ const rows=dayRows.map(r=>{
+  const salesDiff=r.actual?(r.actual.sales-r.target):null;
+  const rateDiff=(r.plannedRate!=null&&r.actualRate!=null)?(r.actualRate-r.plannedRate):null;
+  const hourDiff=(r.actualMin-r.plannedMin)/60;
+  return `<tr>
+   <td>${sfFmtDateShort(r.ds)}</td>
+   <td>${r.target?Math.round(r.target).toLocaleString()+"円":"—"}</td>
+   <td>${r.actual?Math.round(r.actual.sales).toLocaleString()+"円":"—"}</td>
+   <td>${salesDiff==null?"—":`<span class="${salesDiff>=0?"sf-pos":"sf-neg"}">${salesDiff>=0?"+":""}${Math.round(salesDiff).toLocaleString()}円</span>`}</td>
+   <td>${r.plannedRate==null?"—":r.plannedRate.toFixed(1)+"%"}</td>
+   <td>${r.actualRate==null?"—":r.actualRate.toFixed(1)+"%"}</td>
+   <td>${rateDiff==null?"—":`<span class="${rateDiff<=0?"sf-pos":"sf-neg"}">${rateDiff>=0?"+":""}${rateDiff.toFixed(1)}pt</span>`}</td>
+   <td>${(r.plannedMin/60).toFixed(1)}h</td>
+   <td>${(r.actualMin/60).toFixed(1)}h</td>
+   <td><span class="${hourDiff<=0?"sf-pos":"sf-neg"}">${hourDiff>=0?"+":""}${hourDiff.toFixed(1)}h</span></td>
+  </tr>`;
+ }).join("");
+ return `<div class="card"><h3>叶え率（希望 vs 実績）</h3><div class="muted" style="margin-bottom:8px">希望日数・時間に対して、実際に入った実績を比較します</div>
+  ${sfFulfillmentTableHtml(dates,people,shByUserDate,laborByUserDate)}</div>
+ <div class="card"><h3>日別 実績差分</h3><div class="muted" style="margin-bottom:8px">実績データが無い日（未来日・BQ未取込等）は—表示です</div>
+  <div class="tblwrap"><table class="tbl">
+   <tr><th>日付</th><th>売上予想</th><th>売上実績</th><th>差分</th><th>想定人件費率</th><th>実績人件費率</th><th>差分</th><th>シフト予定</th><th>実績打刻</th><th>差分</th></tr>
+   ${rows}
+  </table></div>
+ </div>
+ <div class="sf-finance">
+  <div class="card"><small>PA予定時間</small><b>${(paWishMin/60).toFixed(1)}h</b></div>
+  <div class="card"><small>PA実績時間</small><b>${(paActualMin/60).toFixed(1)}h</b></div>
+  <div class="card"><small>削減できた時間</small><b>${Math.max(0,(paWishMin-paActualMin)/60).toFixed(1)}h</b></div>
+  <div class="card"><small>超過した時間</small><b style="color:var(--red)">${Math.max(0,(paActualMin-paWishMin)/60).toFixed(1)}h</b></div>
+ </div>
+ <p class="muted" style="margin-top:6px">実績データはスマレジタイムカードの打刻実績(labor_cost_daily)・売上実績データ(dash_sales_daily)を読み取り専用で参照しています。</p>`;
+}
 async function sfManageView(){
  const pickable=await sfPickableStores();
  if(!pickable.length)return `<p class="muted">管理できる店舗がありません。</p>`;
@@ -2908,8 +3045,8 @@ async function sfManageView(){
  h+=`<div class="sf-stepnav">
   <button class="sf-stepbtn ${sfMgStep==="request"?"active":""}" data-sfstep="request"><b>①希望確認</b><small>半月・日別・出勤希望</small></button>
   <button class="sf-stepbtn ${sfMgStep==="adjust"?"active":""}" data-sfstep="adjust"><b>②調整</b><small>不足・人件費を見て調整</small></button>
-  <button class="sf-stepbtn ${sfMgStep==="confirmed"?"active":""}" data-sfstep="confirmed"><b>③確定</b><small>準備中（次回実装）</small></button>
-  <button class="sf-stepbtn ${sfMgStep==="actual"?"active":""}" data-sfstep="actual"><b>④実績</b><small>準備中（次回実装）</small></button>
+  <button class="sf-stepbtn ${sfMgStep==="confirmed"?"active":""}" data-sfstep="confirmed"><b>③確定</b><small>未確認・変更申請</small></button>
+  <button class="sf-stepbtn ${sfMgStep==="actual"?"active":""}" data-sfstep="actual"><b>④実績</b><small>叶え率・日別差分</small></button>
  </div>`;
  if(sfMgStep==="adjust"){
   const [{data:allUS},{data:targets},{data:profs}]=await Promise.all([
@@ -2935,8 +3072,27 @@ async function sfManageView(){
   h+=`<div class="sf-bottom-action"><div><b>公開前チェック（U8）</b><div class="muted">${esc(adj.checkText)}</div></div><div>
    ${enteredCount>0&&publishedCount<enteredCount?'<button class="btn" id="sfmg-publish">📣 このシフトで確定・公開（スマレジにも反映）</button>':""}
    <button class="btn sm sub" id="sfmg-import">🔄 スマレジと同期する</button></div></div>`;
- }else if(sfMgStep==="confirmed"||sfMgStep==="actual"){
-  h+=`<div class="card"><p class="muted">この画面（③確定・④実績・叶え率）は次のマイルストーン（B-2）で実装予定です。</p></div>`;
+ }else if(sfMgStep==="confirmed"){
+  const {data:changeReqs}=await sb.from("sf_change_requests").select("*").eq("store_id",sfMgStore).eq("period_key",p.key).order("created_at",{ascending:false});
+  h+=sfConfirmedStepHtml({dates,people,shByUserDate,changeReqs:changeReqs||[]});
+  h+=sfShiftTableHtml(dates,people,shByUserDate); // 月間確定ビューとして既存のシフト表を流用
+ }else if(sfMgStep==="actual"){
+  const [{data:laborRows},{data:targets2},{data:actualsRows},wageRates2]=await Promise.all([
+   sb.from("labor_cost_daily").select("user_id,work_date,worked_minutes,computed_cost,smaregi_estimate_cost").eq("store_id",sfMgStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
+   sb.from("dash_sales_target_daily").select("biz_date,sales_target").eq("store_id",sfMgStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]),
+   sb.from("dash_sales_daily").select("biz_date,sales,cost,labor").eq("store_id",sfMgStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]),
+   sfComputeWageRates(sfMgStore,peopleIds)
+  ]);
+  const laborByUserDate={};
+  (laborRows||[]).forEach(r=>{
+   const key=r.user_id+"|"+r.work_date;
+   const a=laborByUserDate[key]||(laborByUserDate[key]={minutes:0,cost:0});
+   a.minutes+=r.worked_minutes||0;
+   a.cost+=(r.computed_cost!=null?r.computed_cost:r.smaregi_estimate_cost)||0;
+  });
+  const salesTargetByDate={};(targets2||[]).forEach(r=>{salesTargetByDate[r.biz_date]=r.sales_target||0});
+  const salesActualByDate={};(actualsRows||[]).forEach(r=>{salesActualByDate[r.biz_date]={sales:r.sales||0,cost:r.cost||0,labor:r.labor||0}});
+  h+=sfActualStepHtml({dates,people,shByUserDate,laborByUserDate,salesTargetByDate,salesActualByDate,wageRates:wageRates2});
  }else{
   const {data:allUS}=await sb.from("user_stores").select("user_id").in("user_id",idsForIn);
   const storeCountMap={};(allUS||[]).forEach(r=>{storeCountMap[r.user_id]=(storeCountMap[r.user_id]||0)+1});
@@ -3048,11 +3204,52 @@ function bindShiftPage(){
   if(error){toast("提出エラー: "+error.message,true);return}
   toast("✅ 提出しました");render();
  };
+ // B-2 ③ 確定シフトの確認・変更希望（本人）
+ if($("sf-confirm"))$("sf-confirm").onclick=async()=>{
+  const p=sfPeriodFromIdx(sfSubPeriodIdx);
+  const {error}=await sb.rpc("sf_confirm_shifts",{p_period_key:p.key});
+  if(error){toast("確認処理エラー: "+error.message,true);return}
+  toast("確認しました");render();
+ };
+ document.querySelectorAll("[data-sfchange]").forEach(b=>b.onclick=()=>{sfChangeDate=b.dataset.sfchange;render()});
+ if($("sf-change-close"))$("sf-change-close").onclick=()=>{sfChangeDate=null;render()};
+ if($("sf-change-send"))$("sf-change-send").onclick=async()=>{
+  const reason=$("sf-change-reason").value.trim();
+  const p=sfPeriodFromIdx(sfSubPeriodIdx);
+  const {error}=await sb.from("sf_change_requests").insert({user_id:me.id,store_id:sfSubStore,work_date:sfChangeDate,period_key:p.key,reason:reason||null});
+  if(error){toast("送信エラー: "+error.message,true);return}
+  sfChangeDate=null;toast("変更希望を送信しました");render();
+ };
  // 管理
  if($("sfmg-store"))$("sfmg-store").onchange=e=>{sfMgStore=e.target.value;sfEditDate=null;render()};
  if($("sfmg-period"))$("sfmg-period").onchange=e=>{sfMgPeriodIdx=+e.target.value;sfEditDate=null;render()};
  document.querySelectorAll("[data-sfstep]").forEach(b=>b.onclick=()=>{sfMgStep=b.dataset.sfstep;sfEditDate=null;render()});
  document.querySelectorAll("[data-sfreqday]").forEach(b=>b.onclick=()=>{sfReqDate=b.dataset.sfreqday;render()});
+ // B-2 ③ 未確認者への再通知・変更申請の対応済み処理（店長・本部）
+ if($("sfcf-notify"))$("sfcf-notify").onclick=async()=>{
+  $("sfcf-notify").disabled=true;
+  const p=sfPeriodFromIdx(sfMgPeriodIdx);
+  const [{data:shifts},{data:members}]=await Promise.all([
+   sb.from("sf_shifts").select("user_id,confirmed_at").eq("store_id",sfMgStore).eq("period_key",p.key).eq("status","published"),
+   sb.from("user_stores").select("user_id,users(id,name,line_user_id)").eq("store_id",sfMgStore)
+  ]);
+  const unconfirmedIds=new Set((shifts||[]).filter(s=>!s.confirmed_at).map(s=>s.user_id));
+  const targets=(members||[]).map(m=>m.users).filter(u=>u&&unconfirmedIds.has(u.id));
+  let sent=0,skipped=0;
+  for(const u of targets){
+   if(!u.line_user_id){skipped++;continue}
+   const text=`${u.name}さん\n\n「${p.label}」の確定シフトをまだ確認していません。\nお手数ですが、日報アプリの📅シフトから確認をお願いします。`;
+   const r=await lineFn({action:"push_user",user_id:u.id,text});
+   if(r&&r.ok)sent++;else skipped++;
+  }
+  toast(`再通知: ${sent}件送信${skipped?`／届かなかった・LINE未連携 ${skipped}件`:""}`);
+  $("sfcf-notify").disabled=false;
+ };
+ document.querySelectorAll("[data-sfcrresolve]").forEach(b=>b.onclick=async()=>{
+  const {error}=await sb.from("sf_change_requests").update({status:"resolved",resolved_at:new Date().toISOString(),resolved_by:me.id}).eq("id",b.dataset.sfcrresolve);
+  if(error){toast("更新エラー: "+error.message,true);return}
+  toast("対応済みにしました");render();
+ });
  document.querySelectorAll("[data-sfmgcell]").forEach(td=>td.onclick=()=>{sfEditDate=td.dataset.sfmgcell;render()});
  if(sfMode==="manage"&&$("sfmg-dayclose"))$("sfmg-dayclose").onclick=()=>{sfEditDate=null;render()};
  let sfMgPickedPreset=null,sfMgPickedOff=false;

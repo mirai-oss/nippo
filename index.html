@@ -748,6 +748,11 @@ const hintLine=t=>t?`<p class="muted" style="margin:2px 0 6px;font-size:12px">${
 const inviteToken=new URLSearchParams(location.search).get("invite");
 const applyKey=new URLSearchParams(location.search).get("apply"); // v2.5 応募フォーム
 const openApplicant=new URLSearchParams(location.search).get("a"); // v2.6.64 応募者詳細への直接リンク（採用担当同士で共有する用。ログインは必要）
+// v2.7 統合ポータルシェル（portal.html）からの深リンク対応（担当Fからの依頼・実装指示書_統合ポータルシェル）
+// 例: ?page=shift で開けば、ホームではなくシフト画面が最初から開く。埋め込みiframe用のためURLはクリアしない
+const deepLinkPage=new URLSearchParams(location.search).get("page");
+const DEEPLINK_PAGES=["home","write","weekly","list","check","shift","tasks","chat","manuals","recruit","admin","settings","dash"]; // render()が分岐できるpage値のみ許可
+const GAIHAN_HIDDEN_PAGES=["check","chat","weekly","manuals","shift"]; // 1533行目付近のnav非表示ロジックと同じ基準（外販には深リンクさせない）
 async function init(){
  if(applyKey){await renderApply();return}
  if(inviteToken){await renderJoin();return}
@@ -1491,8 +1496,11 @@ async function loadMe(uid){
  const {data:myStoreRows}=myIds.length?await sb.from("stores").select("id,name").in("id",myIds).order("sort_order"):{data:[]};
  me={...u,stores:myStoreRows||[],features:fmap};
  // v2.6.64 応募者詳細への直接リンクで開いたときは、ホームではなくその応募者の詳細を開く
- if(openApplicant&&can("recruit")){page="recruit";rcDetail=openApplicant}else{page="home"}
- if(openApplicant)history.replaceState({},"",location.pathname); // 開いたらURLのパラメータは消す（再読み込みで毎回同じ人が開かないように）
+ // v2.7 統合ポータルシェルからの深リンク（?page=）。openApplicantのほうが優先、権限的に見られないページ・未知のキーは無視してホームのまま
+ if(openApplicant&&can("recruit")){page="recruit";rcDetail=openApplicant}
+ else if(deepLinkPage&&DEEPLINK_PAGES.includes(deepLinkPage)&&!(me.role==="GAIHAN"&&GAIHAN_HIDDEN_PAGES.includes(deepLinkPage))){page=deepLinkPage}
+ else{page="home"}
+ if(openApplicant)history.replaceState({},"",location.pathname); // 開いたらURLのパラメータは消す（再読み込みで毎回同じ人が開かないように）。?page=はiframeの再読み込みでも同じページを開き続けたいので消さない
  await render();
 }
 

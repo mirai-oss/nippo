@@ -761,10 +761,28 @@ const deepLinkPage=new URLSearchParams(location.search).get("page");
 const embedMode=new URLSearchParams(location.search).get("embed")==="1"; // v2.7 統合ポータルシェルのiframe埋め込み用。自前のnav・headerを隠す（担当F依頼・tori-dashboardのembed=1と同じ考え方）
 const DEEPLINK_PAGES=["home","write","weekly","list","check","shift","actual","tasks","chat","manuals","recruit","admin","settings","dash"]; // render()が分岐できるpage値のみ許可
 const GAIHAN_HIDDEN_PAGES=["check","chat","weekly","manuals","shift"]; // 1533行目付近のnav非表示ロジックと同じ基準（外販には深リンクさせない）
+// v2.7 統合ポータルシェル（ns-portal）とのSSO。同一Supabaseプロジェクト・同一オリジンなので、
+// ポータル側が保存しているトークンでnippo自身のセッションを黙って復元できる（担当F調査・依頼分）。
+// nsportal_session_v1のキー名・{at,rt,uid}形式はポータル側の絶対不変ルールのため読み取り専用で扱い、書き戻しはしない。
+// 失敗しても何もせず、従来どおりのログイン画面にフォールバックするだけ（実害なし）
+async function trySilentPortalLogin(){
+ try{
+  const raw=localStorage.getItem("nsportal_session_v1");
+  if(!raw)return false;
+  const s=JSON.parse(raw);
+  if(!s||!s.at||!s.rt)return false;
+  const {data,error}=await sb.auth.setSession({access_token:s.at,refresh_token:s.rt});
+  return !error&&!!(data&&data.session);
+ }catch(e){return false}
+}
 async function init(){
  if(applyKey){await renderApply();return}
  if(inviteToken){await renderJoin();return}
- const {data:{session}}=await sb.auth.getSession();
+ let {data:{session}}=await sb.auth.getSession();
+ if(!session){
+  await trySilentPortalLogin();
+  ({data:{session}}=await sb.auth.getSession());
+ }
  if(!session){renderLogin();return}
  await loadMe(session.user.id);
 }

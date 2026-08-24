@@ -2937,10 +2937,15 @@ function sfConfirmedStepHtml(ctx){
  return h;
 }
 // ④実績・差分: 従業員ごとの叶え率（希望vs実績）
+// v2.7 バグ修正: 未来日（まだ実績が発生しようがない日）を実績0として数えると、期間の途中で見たときに
+//   叶え率が不当に低く出てしまう（例: 今日以降の希望日数ぶんだけ実績0が積み上がる）。
+//   希望日数・時間も「今日までの経過日」だけに絞って集計し、未来日は両側とも対象外にする
 function sfFulfillmentTableHtml(dates,people,shByUserDate,laborByUserDate){
+ const today=todayStr();
+ const pastDates=dates.filter(ds=>ds<=today);
  const rows=people.map(u=>{
   let wishDays=0,wishMin=0,actualDays=0,actualMin=0;
-  dates.forEach(ds=>{
+  pastDates.forEach(ds=>{
    const s=shByUserDate[u.id+"|"+ds];
    if(s&&!s.is_off){wishDays++;wishMin+=sfShiftMinutes(s)}
    const lk=laborByUserDate[u.id+"|"+ds];
@@ -2948,8 +2953,10 @@ function sfFulfillmentTableHtml(dates,people,shByUserDate,laborByUserDate){
   });
   return {u,wishDays,actualDays,wishMin,actualMin};
  }).filter(r=>r.wishDays>0||r.actualDays>0);
- if(!rows.length)return `<p class="muted">この期間の希望・実績データがまだありません。</p>`;
- return `<div class="tblwrap"><table class="tbl">
+ if(!pastDates.length)return `<p class="muted">この期間はまだ始まっていません（実績はまだ発生していません）。</p>`;
+ if(!rows.length)return `<p class="muted">この期間（経過日ぶん）の希望・実績データがまだありません。</p>`;
+ return `<div class="muted" style="margin-bottom:6px;font-size:11px">${esc(pastDates[0])}〜${esc(pastDates[pastDates.length-1])}（今日までの${pastDates.length}日）で集計。未来日は対象外</div>
+ <div class="tblwrap"><table class="tbl">
   <tr><th>氏名</th><th>区分</th><th>希望日数</th><th>実績日数</th><th>叶え率</th><th>希望時間</th><th>実績時間</th><th>差分</th></tr>
   ${rows.map(r=>{
    const tag=sfRoleTag(r.u);
@@ -2961,12 +2968,17 @@ function sfFulfillmentTableHtml(dates,people,shByUserDate,laborByUserDate){
  </table></div>`;
 }
 // ④実績・差分: 日別（売上・人件費率・シフト時間）＋PA削減/超過サマリー
+// v2.7 バグ修正: 未来日（実績がまだ発生しようがない日）を実績0として扱うと、「予定はあるのに実績が無い＝
+//   削減できた」ように見えてしまう（実際は単に「まだ来ていないだけ」）。今日より後の日は実績側を
+//   すべて「—」にし、PAサマリーの集計対象からも外す（予定側=plannedMinは表示上そのまま出す）
 function sfActualStepHtml(ctx){
  const {dates,people,shByUserDate,laborByUserDate,salesTargetByDate,salesActualByDate,wageRates}=ctx;
+ const today=todayStr();
  let paWishMin=0,paActualMin=0;
  const dayRows=dates.map(ds=>{
+  const isFuture=ds>today;
   const target=salesTargetByDate[ds]||0;
-  const actual=salesActualByDate[ds]||null;
+  const actual=isFuture?null:(salesActualByDate[ds]||null);
   let plannedMin=0,plannedCost=0,actualMin=0;
   people.forEach(u=>{
    const s=shByUserDate[u.id+"|"+ds];
@@ -2977,21 +2989,21 @@ function sfActualStepHtml(ctx){
     plannedMin+=min;
     const rate=wageRates[u.id];
     if(rate!=null)plannedCost+=min*rate;
-    if(isPA)paWishMin+=min;
+    if(isPA&&!isFuture)paWishMin+=min;
    }
-   if(lk){
+   if(lk&&!isFuture){
     actualMin+=lk.minutes;
     if(isPA)paActualMin+=lk.minutes;
    }
   });
   const plannedRate=target>0?(plannedCost/target*100):null;
   const actualRate=(actual&&actual.sales>0)?(actual.labor/actual.sales*100):null;
-  return {ds,target,actual,plannedRate,actualRate,plannedMin,actualMin};
+  return {ds,isFuture,target,actual,plannedRate,actualRate,plannedMin,actualMin:isFuture?null:actualMin};
  });
  const rows=dayRows.map(r=>{
-  const salesDiff=(r.actual&&r.target>0)?(r.actual.sales-r.target):null; // 目標未設定(target=0)の日は差分も「—」にする（実績のみで目標が無いのに差分だけ出るバグを修正）
+  const salesDiff=(r.actual&&r.target>0)?(r.actual.sales-r.target):null; // 目標未設定(target=0)の日は差分も「—」にする
   const rateDiff=(r.plannedRate!=null&&r.actualRate!=null)?(r.actualRate-r.plannedRate):null;
-  const hourDiff=(r.actualMin-r.plannedMin)/60;
+  const hourDiff=r.actualMin==null?null:(r.actualMin-r.plannedMin)/60;
   return `<tr>
    <td>${sfFmtDateShort(r.ds)}</td>
    <td>${r.target?Math.round(r.target).toLocaleString()+"円":"—"}</td>
@@ -3001,25 +3013,25 @@ function sfActualStepHtml(ctx){
    <td>${r.actualRate==null?"—":r.actualRate.toFixed(1)+"%"}</td>
    <td>${rateDiff==null?"—":`<span class="${rateDiff<=0?"sf-pos":"sf-neg"}">${rateDiff>=0?"+":""}${rateDiff.toFixed(1)}pt</span>`}</td>
    <td>${(r.plannedMin/60).toFixed(1)}h</td>
-   <td>${(r.actualMin/60).toFixed(1)}h</td>
-   <td><span class="${hourDiff<=0?"sf-pos":"sf-neg"}">${hourDiff>=0?"+":""}${hourDiff.toFixed(1)}h</span></td>
+   <td>${r.actualMin==null?"—":(r.actualMin/60).toFixed(1)+"h"}</td>
+   <td>${hourDiff==null?"—":`<span class="${hourDiff<=0?"sf-pos":"sf-neg"}">${hourDiff>=0?"+":""}${hourDiff.toFixed(1)}h</span>`}</td>
   </tr>`;
  }).join("");
  return `<div class="card"><h3>叶え率（希望 vs 実績）</h3><div class="muted" style="margin-bottom:8px">希望日数・時間に対して、実際に入った実績を比較します</div>
   ${sfFulfillmentTableHtml(dates,people,shByUserDate,laborByUserDate)}</div>
- <div class="card"><h3>日別 実績差分</h3><div class="muted" style="margin-bottom:8px">実績データが無い日（未来日・BQ未取込等）は—表示です</div>
+ <div class="card"><h3>日別 実績差分</h3><div class="muted" style="margin-bottom:8px">未来日（${esc(today)}より後）は実績側がすべて「—」になります</div>
   <div class="tblwrap"><table class="tbl">
    <tr><th>日付</th><th>売上予想</th><th>売上実績</th><th>差分</th><th>想定人件費率</th><th>実績人件費率</th><th>差分</th><th>シフト予定</th><th>実績打刻</th><th>差分</th></tr>
    ${rows}
   </table></div>
  </div>
  <div class="sf-finance">
-  <div class="card"><small>PA予定時間</small><b>${(paWishMin/60).toFixed(1)}h</b></div>
+  <div class="card"><small>PA予定時間（経過日）</small><b>${(paWishMin/60).toFixed(1)}h</b></div>
   <div class="card"><small>PA実績時間</small><b>${(paActualMin/60).toFixed(1)}h</b></div>
   <div class="card"><small>削減できた時間</small><b>${Math.max(0,(paWishMin-paActualMin)/60).toFixed(1)}h</b></div>
   <div class="card"><small>超過した時間</small><b style="color:var(--red)">${Math.max(0,(paActualMin-paWishMin)/60).toFixed(1)}h</b></div>
  </div>
- <p class="muted" style="margin-top:6px">実績データはスマレジタイムカードの打刻実績(labor_cost_daily)・売上実績データ(dash_sales_daily)を読み取り専用で参照しています。</p>`;
+ <p class="muted" style="margin-top:6px">実績データはスマレジタイムカードの打刻実績(labor_cost_daily)・売上実績データ(dash_sales_daily)を読み取り専用で参照しています。PA予定・実績・削減・超過は今日（${esc(today)}）までに経過した日だけで集計しています。</p>`;
 }
 async function sfManageView(){
  const pickable=await sfPickableStores();

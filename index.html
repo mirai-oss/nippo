@@ -400,6 +400,7 @@ let chatQ="",tskQ="",chatMeta={}; // v2.1 検索・メッセージ操作
 let chatReply=null,chatInvite=false,chatInviteSel=[]; // v2.2 返信・招待
 let permMatrix=null,permUserSel=null,permUserVals=null,permUsersCache=null; // v2.4 権限設定
 let rcList=null,rcSeg="active",rcQ="",rcDetail=null,rcForms=null,applyFormDef=null; // v2.5 応募者管理
+let rcCal=false,rcCalMonth=null,rcCalDay=null; // B-7 面接カレンダー（月表示・日クリックで当日一覧）
 let rcOnlyWait=false; // v2.6.31 未対応だけに絞るか
 let cfgShowOff=false; // v2.6.50 設定画面で「停止中の項目」も出すか（既定は隠す）
 let rcJobs=false,rcJobList=null,rcMsgs=null; // v2.6.16 求人タイトルの登録／Indeedメッセージ
@@ -442,9 +443,10 @@ const LARK_EVENTS={
  task_assigned:"タスクが割り当てられた",
  report_comment:"日報にコメントがついた",
  report_like:"日報にいいねがついた",
- chat_message:"チャットで名前が呼ばれた"
+ chat_message:"チャットで名前が呼ばれた",
+ interview_today:"本日面接の担当者へ朝に一覧を通知" // B-7
 };
-const LARK_PERSON_EVENTS=["report_daily","report_weekly","join_registered","task_assigned","report_comment","report_like","chat_message"];
+const LARK_PERSON_EVENTS=["report_daily","report_weekly","join_registered","task_assigned","report_comment","report_like","chat_message","interview_today"];
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 // v2.6.4 業務日: 日本時間の朝6時を境にした日付（JST -6時間 = UTC +3時間の日付）
@@ -1720,6 +1722,30 @@ async function dashPanelHtml(){
 // v2.6.68 日報の一覧から開いた「詳細」画面でも、その日報の店舗・日付を基準に前日・当月累計を見せる
 // v2.6.73 チーム長の日報・週報は、その日報が付いている店舗1つだけでなく、
 //   担当店舗（team_stores）全部の売上・FLを見せる（現場に出た店舗だけに限定されないように）
+// B-6 未提出判定の母数を「公開済みシフト（sf_shifts status=published）でその日出勤予定の人」に変更。
+//   ある人の所属店舗のどれかで、その日のシフトが公開済みなら「出勤予定の人だけ」を対象にする。
+//   1件も公開されていない店舗・期間は今までどおり「所属している人は全員対象」にフォールバックする
+async function expectedTodaySet(userIds){
+ const today=todayStr(),expected={};
+ userIds.forEach(id=>expected[id]=true); // 既定=全員対象（フォールバック）
+ if(!userIds.length)return expected;
+ try{
+  const [{data:us},{data:shifts}]=await Promise.all([
+   sb.from("user_stores").select("user_id,store_id").in("user_id",userIds),
+   sb.from("sf_shifts").select("user_id,store_id,is_off").eq("work_date",today).eq("status","published")
+  ]);
+  const storesPublished=new Set((shifts||[]).map(s=>s.store_id));
+  const working=new Set((shifts||[]).filter(s=>!s.is_off).map(s=>s.user_id));
+  const storesByUser={};(us||[]).forEach(row=>{(storesByUser[row.user_id]=storesByUser[row.user_id]||[]).push(row.store_id)});
+  userIds.forEach(id=>{
+   const uStores=storesByUser[id]||[];
+   const governed=uStores.some(sid=>storesPublished.has(sid)); // この人の店舗のどれかでシフトが公開済み
+   if(governed)expected[id]=working.has(id); // 公開済みなら「出勤予定か」で判定
+   // 公開されていない店舗の人は expected=true のまま（フォールバック）
+  });
+ }catch(e){} // 取得に失敗しても、これまでどおり全員を対象にして表示は壊さない
+ return expected;
+}
 async function authorStoreIds(r){
  if(r.author&&r.author.role==="TEAM"&&r.author.team_id){
   try{
@@ -1833,11 +1859,18 @@ function weeklyScorecardHtml(storeName,vals,editable){
  const yen=n=>"¥"+Math.round(n).toLocaleString("ja-JP");
  const num1=n=>(Math.round(n*10)/10).toLocaleString("ja-JP");
  const pct1=n=>(Math.round(n*10)/10)+"%";
- const autoRow=(label,budget,actual,fmt)=>{
+ // B-5.2 バグ修正: 「予算比率」は今まで一律「実績÷予算×100」だった。原価率のように
+ //   「低いほど良い」項目だとこの式のままでは、実績が予算より低い（＝良い結果）のに比率が100%未満になり、
+ //   感覚と逆に見えていた。reverse=trueのときは「予算÷実績×100」にして、
+ //   どの項目でも「100%以上＝目標達成・良い」に揃える（実績0のときは割れないので—表示のまま）
+ const autoRow=(label,budget,actual,fmt,reverse)=>{
   const hasB=budget!=null&&budget!=="",hasA=actual!=null&&actual!=="";
   const b=hasB?Number(budget):null,a=hasA?Number(actual):null;
   const diff=(hasB&&hasA)?a-b:null;
-  const rate=(hasB&&b!==0&&hasA)?Math.round(a/b*1000)/10:null;
+  let rate=null;
+  if(hasB&&hasA&&b!==0){
+   rate=reverse?(a!==0?Math.round(b/a*1000)/10:null):Math.round(a/b*1000)/10;
+  }
   return `<tr><td style="padding:4px 6px">${esc(label)}</td>
    <td style="padding:4px 6px;text-align:right">${hasB?fmt(b):"—"}</td>
    <td style="padding:4px 6px;text-align:right">${hasA?fmt(a):"—"}</td>
@@ -1881,7 +1914,7 @@ function weeklyScorecardHtml(storeName,vals,editable){
    <tr style="border-bottom:1px solid var(--line)"><th style="text-align:left;padding:4px 6px">項目</th><th style="text-align:right;padding:4px 6px">予算</th><th style="text-align:right;padding:4px 6px">実績</th><th style="text-align:right;padding:4px 6px">差異</th><th style="text-align:right;padding:4px 6px">予算比率</th></tr>
    ${autoRow("売上",vals.salesTgt,vals.salesAct,yen)}
    ${manualRow("PA時間数",{bKey:vals.paBudgetKey,aKey:vals.paActualKey,origKey:vals.paOrigKey,bVal:vals.paBudget,aVal:vals.paActual,fmt:n=>num1(n)+"h",locked:vals.paLocked,orig:vals.paOrig,canOverride:vals.canOverride,changedBy:vals.paChangedBy,changedAt:vals.paChangedAt})}
-   ${autoRow("原価率",vals.costTgt,vals.costAct,pct1)}
+   ${autoRow("原価率（低いほど◎）",vals.costTgt,vals.costAct,pct1,true)}
    ${manualRow("Google口コミ数",{bKey:vals.reviewBudgetKey,aKey:vals.reviewActualKey,origKey:vals.reviewOrigKey,bVal:vals.reviewBudget,aVal:vals.reviewActual,fmt:num1,locked:vals.reviewLocked,orig:vals.reviewOrig,canOverride:vals.canOverride,changedBy:vals.reviewChangedBy,changedAt:vals.reviewChangedAt})}
    ${manualRow("ダイニー点数",{bKey:vals.diniiBudgetKey,aKey:vals.diniiActualKey,origKey:vals.diniiOrigKey,bVal:vals.diniiBudget,aVal:vals.diniiActual,fmt:num1,locked:vals.diniiLocked,orig:vals.diniiOrig,canOverride:vals.canOverride,changedBy:vals.diniiChangedBy,changedAt:vals.diniiChangedAt})}
   </table>
@@ -1929,11 +1962,18 @@ async function weeklyDashPanelForReport(r){
  if(!r||r.kind!=="weekly"||!r.store_id||!r.report_date)return "";
  const {weekStart,weekEnd}=weekRangeFor(r.report_date);
  const ymList=ymListFor(weekStart,weekEnd);
- const storeIds=await authorStoreIds(r);
  const snapByStore={};
  if(r.sales_snapshot&&r.sales_snapshot.kind==="weekly"&&Array.isArray(r.sales_snapshot.stores)){
   r.sales_snapshot.stores.forEach(s=>{snapByStore[s.id]=s});
  }
+ // B-5.1 バグ修正: 複数店舗を担当する人（TENCHO/HQ等）の週報は、提出時点で入力したすべての店舗の
+ //   スコアカード値が answers（scoreKey="項目__店舗ID"）と sales_snapshot.stores の両方に残っている。
+ //   以前はここで authorStoreIds(r)（=常に r.store_id 1件だけ。TEAM以外はteam_storesも見ない）を
+ //   先に使っていたため、2店舗目以降のスコアカードが「入力したのに表示されない」状態になっていた。
+ //   スナップショット由来の店舗ID と answers のキーから拾える店舗ID を両方合わせて正とする
+ const answerStoreIds=Object.keys(r.answers||{}).map(k=>{const m=/__(.+)$/.exec(k);return m?m[1]:null}).filter(Boolean);
+ const storeIdSet=new Set([...Object.keys(snapByStore),...answerStoreIds]);
+ const storeIds=storeIdSet.size?[...storeIdSet]:await authorStoreIds(r);
  const needLive=storeIds.some(sid=>!snapByStore[sid]);
  const live=needLive?await fetchDashRange(storeIds,weekStart,weekEnd,ymList):{act:[],tgt:[],tm:[]};
  const ans=r.answers||{};
@@ -2412,6 +2452,31 @@ let mvStore=null,mvAdminMode=false,mvQ="",mvEditId=null,mvEditContent=null,mvPre
 // v2.6.61 マニュアル本文の部品（少ない種類からスタート。あとで追加できる）
 const MANUAL_BLOCK_TYPES={heading:{label:"見出し",icon:"🔤"},text:{label:"本文",icon:"📝"},photo:{label:"写真",icon:"🖼"},steps:{label:"手順（番号付き）",icon:"🔢"},video:{label:"動画",icon:"🎬"}};
 const manualScopeBadge=m=>m.hq_only?' <span class="badge" style="background:#7c3aed">🏢 本部専用</span>':(m.store_id?"":' <span class="badge b">🏪 店舗共通</span>');
+// B-4 リッチテキスト装飾（見出し・本文ブロックのみ。既存データにb.bold/size/colorが無ければ今までどおりの見た目）
+const MANUAL_SIZES={s:"13px",m:"15px",l:"19px",xl:"24px"};
+const MANUAL_HEX_RE=/^#[0-9a-fA-F]{3,8}$/;
+function manualBlockStyle(b){
+ let s="";
+ if(b.bold)s+="font-weight:700;";
+ if(b.size&&MANUAL_SIZES[b.size])s+=`font-size:${MANUAL_SIZES[b.size]};`;
+ if(b.color&&MANUAL_HEX_RE.test(b.color))s+=`color:${b.color};`;
+ return s;
+}
+// 見出し・本文ブロックの装飾ツールバー（太字・文字サイズ・文字色）
+function manualDecoBarHtml(b,i){
+ if(b.type!=="heading"&&b.type!=="text")return "";
+ return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+  <span class="chip ${b.bold?"on":""}" data-bbold="${i}" style="font-weight:700;font-size:12px;padding:3px 10px">B</span>
+  <select data-bsize="${i}" style="width:auto;margin:0;font-size:12px;padding:4px 6px">
+   <option value="s" ${b.size==="s"?"selected":""}>小</option>
+   <option value="m" ${(!b.size||b.size==="m")?"selected":""}>標準</option>
+   <option value="l" ${b.size==="l"?"selected":""}>大</option>
+   <option value="xl" ${b.size==="xl"?"selected":""}>特大</option>
+  </select>
+  <input type="color" data-bcolor="${i}" value="${MANUAL_HEX_RE.test(b.color)?b.color:"#1a1a1a"}" title="文字色" style="width:32px;height:28px;padding:0;border:1px solid var(--line);border-radius:6px;margin:0">
+  ${b.color?`<span class="chip" data-bcolorclear="${i}" style="font-size:11px">既定色に戻す</span>`:""}
+ </div>`;
+}
 async function manualsView(){
  const canEdit=manualCanEditAny();
  // v2.6.61 本文（部品）の編集中・プレビュー中は、そちらの画面を優先して出す
@@ -2485,6 +2550,11 @@ function bindManualsPage(){
  document.querySelectorAll("[data-bup]").forEach(b=>b.onclick=()=>{collectBlocksDom();const i=+b.dataset.bup;if(i>0){[mvEditContent[i-1],mvEditContent[i]]=[mvEditContent[i],mvEditContent[i-1]]}render()});
  document.querySelectorAll("[data-bdn]").forEach(b=>b.onclick=()=>{collectBlocksDom();const i=+b.dataset.bdn;if(i<mvEditContent.length-1){[mvEditContent[i+1],mvEditContent[i]]=[mvEditContent[i],mvEditContent[i+1]]}render()});
  document.querySelectorAll("[data-bdel]").forEach(b=>b.onclick=()=>{collectBlocksDom();mvEditContent.splice(+b.dataset.bdel,1);render()});
+ // B-4 リッチテキスト装飾（太字・文字サイズ・文字色）
+ document.querySelectorAll("[data-bbold]").forEach(el=>el.onclick=()=>{collectBlocksDom();const i=+el.dataset.bbold;mvEditContent[i].bold=!mvEditContent[i].bold;render()});
+ document.querySelectorAll("[data-bsize]").forEach(el=>el.onchange=()=>{collectBlocksDom();const i=+el.dataset.bsize;mvEditContent[i].size=el.value;render()});
+ document.querySelectorAll("[data-bcolor]").forEach(el=>el.onchange=()=>{collectBlocksDom();const i=+el.dataset.bcolor;mvEditContent[i].color=el.value;render()});
+ document.querySelectorAll("[data-bcolorclear]").forEach(el=>el.onclick=()=>{collectBlocksDom();const i=+el.dataset.bcolorclear;delete mvEditContent[i].color;render()});
  document.querySelectorAll("[data-bstepadd]").forEach(b=>b.onclick=()=>{collectBlocksDom();const i=+b.dataset.bstepadd;(mvEditContent[i].items=mvEditContent[i].items||[]).push({text:""});render()});
  document.querySelectorAll("[data-bstepdel]").forEach(b=>b.onclick=()=>{collectBlocksDom();const[i,j]=b.dataset.bstepdel.split("-").map(Number);mvEditContent[i].items.splice(j,1);render()});
  document.querySelectorAll("[data-bphadd]").forEach(inp=>inp.onchange=async e=>{
@@ -2525,8 +2595,8 @@ function bindManualsPage(){
 function manualBlocksInnerHtml(content){
  let h="";
  (content||[]).forEach(b=>{
-  if(b.type==="heading")h+=`<h3 style="margin:14px 0 6px">${esc(b.text||"")}</h3>`;
-  else if(b.type==="text")h+=`<p style="margin:6px 0;white-space:pre-wrap">${esc(b.text||"")}</p>`;
+  if(b.type==="heading")h+=`<h3 style="margin:14px 0 6px;${manualBlockStyle(b)}">${esc(b.text||"")}</h3>`;
+  else if(b.type==="text")h+=`<p style="margin:6px 0;white-space:pre-wrap;${manualBlockStyle(b)}">${esc(b.text||"")}</p>`;
   else if(b.type==="video")h+=b.url?`<p style="margin:10px 0"><a href="${esc(b.url)}" target="_blank" rel="noopener">🎬 動画を見る</a></p>`:"";
   else if(b.type==="photo")h+=(b.urls||[]).map(u=>`<img src="${esc(u)}" class="manual-photo" data-lightbox="${esc(u)}">`).join("");
   else if(b.type==="steps")h+=(b.items||[]).map((s,j)=>`<div class="manual-step"><span class="steplabel">STEP ${j+1}</span><p style="margin:8px 0 0;white-space:pre-wrap">${esc(s.text||"")}</p>${s.photo_url?`<img src="${esc(s.photo_url)}" class="manual-photo" data-lightbox="${esc(s.photo_url)}">`:""}</div>`).join("");
@@ -2576,6 +2646,7 @@ function manualBlockEditorHtml(){
   h+=`<div class="card" style="padding:10px 12px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
    <b style="font-size:13px">${t.icon} ${t.label}</b>
    <span style="display:flex;gap:6px"><span class="chip" data-bup="${i}">↑</span><span class="chip" data-bdn="${i}">↓</span><span class="chip" data-bdel="${i}" style="color:var(--red)">削除</span></span></div>`;
+  h+=manualDecoBarHtml(b,i);
   if(b.type==="heading")h+=`<input type="text" data-bhead="${i}" value="${esc(b.text||"")}" placeholder="見出しの文字" style="margin:0">`;
   else if(b.type==="text")h+=`<textarea data-btext="${i}" rows="4" placeholder="本文">${esc(b.text||"")}</textarea>`;
   else if(b.type==="video")h+=`<input type="url" data-bvideo="${i}" value="${esc(b.url||"")}" placeholder="動画のURL（貼り付け）" style="margin:0">
@@ -3721,8 +3792,11 @@ async function dashView(){
   if(!u||u.role==="CEO")return null; // 社長は集計対象外
   return {u,rep:+s.daily_cnt,wk:+s.weekly_cnt,today:todaySet.has(u.id),rate:Math.min(100,Math.round(+s.daily_cnt/dayN*100)),fb:+s.fb_cnt,like:+s.like_cnt,msg:+s.msg_cnt};
  }).filter(Boolean);
- const subN=rows.filter(r=>r.today).length;
- const missing=rows.filter(r=>!r.today);
+ // B-6 未提出判定の母数をシフト連動に（公開済みシフトでその日出勤予定の人だけを対象。未公開の店舗は今までどおり全員）
+ const expected=await expectedTodaySet(rows.map(r=>r.u.id));
+ const expectedRows=rows.filter(r=>expected[r.u.id]);
+ const subN=expectedRows.filter(r=>r.today).length;
+ const missing=expectedRows.filter(r=>!r.today);
  const val=r=>({rate:r.rate,rep:r.rep,fb:r.fb,like:r.like,msg:r.msg})[dashMetric];
  const unit=dashMetric==="rate"?"%":"件";
  const ranked=rows.slice().sort((a,b)=>val(b)-val(a));
@@ -3734,7 +3808,7 @@ async function dashView(){
   <select class="inp" id="dmetric" style="flex:1.4;margin:0;padding:8px;font-size:13px">${Object.entries(DMETRICS).map(([k,v])=>`<option value="${k}"${dashMetric===k?" selected":""}>🏆 ${v}</option>`).join("")}</select>
  </div>
  <div style="display:flex;gap:8px;margin-bottom:12px">
-  <div class="card" style="flex:1;text-align:center;margin:0"><h3 style="font-size:12px">本日の提出率</h3><p style="font-size:22px;font-weight:700;margin:0;color:${missing.length?"var(--red)":"var(--green)"}">${rows.length?Math.round(subN/rows.length*100):0}%</p><p class="muted">${subN}/${rows.length}名</p></div>
+  <div class="card" style="flex:1;text-align:center;margin:0"><h3 style="font-size:12px">本日の提出率</h3><p style="font-size:22px;font-weight:700;margin:0;color:${missing.length?"var(--red)":"var(--green)"}">${expectedRows.length?Math.round(subN/expectedRows.length*100):0}%</p><p class="muted">${subN}/${expectedRows.length}名${expectedRows.length<rows.length?`（シフト外 ${rows.length-expectedRows.length}名を除く）`:""}</p></div>
   <div class="card" style="flex:1;text-align:center;margin:0"><h3 style="font-size:12px">FB総数</h3><p style="font-size:22px;font-weight:700;margin:0">${rows.reduce((s,r)=>s+r.fb,0)}</p><p class="muted">${DPERIODS[dashPeriod]}</p></div>
   <div class="card" style="flex:1;text-align:center;margin:0"><h3 style="font-size:12px">いいね総数</h3><p style="font-size:22px;font-weight:700;margin:0">${rows.reduce((s,r)=>s+r.like,0)}</p><p class="muted">${DPERIODS[dashPeriod]}</p></div>
  </div>`;
@@ -3785,7 +3859,10 @@ async function listView(){
  const sname=id=>{const s=stores.find(x=>x.id===id);return s?s.name:""};
  list.forEach(r=>{
   const unread=r.author.id!==me.id&&isUnread(r,readAt[r.id]); // 未読 or 読んだ後に修正された（バッジと同じ判定）
-  h+=`<div class="row" data-r="${r.id}"><span>${unread?"🔵 ":""}<b>${esc(r.author.name)}</b> <span class="muted">${ROLE_NAME[r.author.role]||""}${r.store_id?"・"+esc(sname(r.store_id)):""}</span></span><span class="muted">${fmtDate(r.report_date)}</span></div>`;
+  // B-5.3 提出時刻・修正時刻を表示（updated_atが提出より1分以上あとなら「修正」を併記）
+  const edited=r.updated_at&&r.submitted_at&&(new Date(r.updated_at)-new Date(r.submitted_at))>60000;
+  const timeLine=r.submitted_at?`<br><span class="muted" style="font-size:11px">提出 ${fmtDue(r.submitted_at)}${edited?`　修正 ${fmtDue(r.updated_at)}`:""}</span>`:"";
+  h+=`<div class="row" data-r="${r.id}"><span>${unread?"🔵 ":""}<b>${esc(r.author.name)}</b> <span class="muted">${ROLE_NAME[r.author.role]||""}${r.store_id?"・"+esc(sname(r.store_id)):""}</span>${timeLine}</span><span class="muted">${fmtDate(r.report_date)}</span></div>`;
  });
  return h;
 }
@@ -3820,8 +3897,11 @@ async function detailView(){
  ]);
  const liked=(likes||[]).some(x=>x.user_id===me.id);
  const seen={};
+ // B-5.3 提出時刻・修正時刻を表示
+ const editedD=r.updated_at&&r.submitted_at&&(new Date(r.updated_at)-new Date(r.submitted_at))>60000;
  let h=`<span class="back" data-nav="list">← 一覧</span>
-  <h2>${esc(r.author.name)}さんの${r.kind==="weekly"?"週報":"日報"} <span class="muted">${fmtDate(r.report_date)}</span>${r.overdue?' <span class="badge" style="background:#c0392b">⚠️ 期限超過</span>':""}</h2>`;
+  <h2>${esc(r.author.name)}さんの${r.kind==="weekly"?"週報":"日報"} <span class="muted">${fmtDate(r.report_date)}</span>${r.overdue?' <span class="badge" style="background:#c0392b">⚠️ 期限超過</span>':""}</h2>
+  ${r.submitted_at?`<p class="muted" style="margin:-8px 0 10px;font-size:12px">提出: ${fmtDue(r.submitted_at)}${editedD?`　修正: ${fmtDue(r.updated_at)}`:""}</p>`:""}`;
  h+=r.kind==="weekly"?await weeklyDashPanelForReport(r):await dashPanelForReport(r); // v2.6.68 この日報の売上・FL
  const fmtList=r.kind==="weekly"?weeklyFmt(r.author.role):fmtAll(r.author.role); // v2.6.26 書いた人の役職で表示
  // v2.6.71 「担当店舗を複数選択」は、書いた人（チームなら担当店舗全て）の店舗一覧が選択肢になる
@@ -3932,6 +4012,82 @@ async function adminView(){
 }
 
 // ===== v2.5 応募者管理（v2.5.2で独立タブ・フィルタ・CSV・費用対応） =====
+// B-7 面接当日の朝、担当者へその日の面接一覧を通知（sfEnsureReminders と同じ「画面を開いたときにチェック」方式。
+//   アプリ内通知（notifications）＋ 既存のLarkルーティング（LARK_EVENTS.interview_todayを設定した宛先）に配信）
+async function rcEnsureInterviewNotify(){
+ if(!(me.is_master||["CEO","HQ","TEAM","TENCHO"].includes(me.role)))return;
+ const today=todayStr();
+ if(sessionStorage.getItem("rc_ivnotify_checked_"+today))return; // 同じセッション内で2回叩かない（最終防衛はDB側の重複チェック）
+ sessionStorage.setItem("rc_ivnotify_checked_"+today,"1");
+ try{
+  const dayStart=today+"T00:00:00",dayEnd=today+"T23:59:59";
+  const {data:list}=await sb.from("applicants").select("id,name,interview_at,assignee_id")
+   .gte("interview_at",dayStart).lte("interview_at",dayEnd).in("status",["interview_set","interviewed"]);
+  if(!list||!list.length)return;
+  const byAssignee={};
+  list.forEach(a=>{if(a.assignee_id)(byAssignee[a.assignee_id]=byAssignee[a.assignee_id]||[]).push(a)});
+  const recips=Object.keys(byAssignee);
+  if(!recips.length)return;
+  // 重複防止: 今日すでにこの宛先へ送っていれば送らない
+  const {data:already}=await sb.from("notifications").select("recipient_id").eq("type","interview_today")
+   .gte("created_at",dayStart).lte("created_at",dayEnd).in("recipient_id",recips);
+  const doneSet=new Set((already||[]).map(x=>x.recipient_id));
+  const rows=recips.filter(r=>!doneSet.has(r)).map(r=>{
+   const items=byAssignee[r].sort((a,b)=>(a.interview_at||"").localeCompare(b.interview_at||""));
+   const lines=items.map(a=>`・${fmtDue(a.interview_at).split(" ")[1]} ${a.name}さん`).join("\n");
+   return {recipient_id:r,type:"interview_today",body_i18n:{ja:`📅 本日の面接予定（${items.length}件）\n${lines}`},link:{rc_date:today}};
+  });
+  if(rows.length)await sb.from("notifications").insert(rows);
+ }catch(e){} // 失敗しても応募者管理の表示は妨げない
+}
+// B-7 面接カレンダー（月表示。日をクリックすると当日の面接一覧を下に出す）
+function recruitCalendarView(){
+ if(!rcCalMonth)rcCalMonth=todayStr().slice(0,7); // YYYY-MM
+ const [cy,cm]=rcCalMonth.split("-").map(Number); // cm=1-indexed
+ const first=new Date(cy,cm-1,1);
+ const startWd=first.getDay(); // 0=日曜
+ const daysInMonth=new Date(cy,cm,0).getDate();
+ const dkey=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+ const withIv=(rcList||[]).filter(a=>a.interview_at);
+ const byDay={};
+ withIv.forEach(a=>{const k=dkey(new Date(a.interview_at));(byDay[k]=byDay[k]||[]).push(a)});
+ const today=todayStr();
+ let h=`<span class="back" id="rc-cal-back">← 応募者管理</span><h2>📅 面接カレンダー</h2>
+ <div class="card" style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px">
+  <button class="btn sm sub" id="rc-cal-prev">‹ 前月</button>
+  <b>${cy}年${cm}月</b>
+  <button class="btn sm sub" id="rc-cal-next">次月 ›</button>
+ </div>
+ <div class="card" style="padding:10px 8px">
+  <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;text-align:center;font-size:11px;color:var(--muted,#888);margin-bottom:4px">
+   ${["日","月","火","水","木","金","土"].map(w=>`<div>${w}</div>`).join("")}
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">`;
+ for(let i=0;i<startWd;i++)h+=`<div></div>`;
+ for(let d=1;d<=daysInMonth;d++){
+  const k=cy+"-"+String(cm).padStart(2,"0")+"-"+String(d).padStart(2,"0");
+  const items=byDay[k]||[];
+  const isToday=k===today,isSel=k===rcCalDay;
+  h+=`<div data-rccalday="${k}" style="cursor:pointer;padding:6px 2px;border-radius:8px;text-align:center;min-height:44px;${isSel?"background:var(--blue);color:#fff":isToday?"background:#eef6ff":""}">
+   <div style="font-size:12px">${d}</div>
+   ${items.length?`<div style="font-size:10px;margin-top:2px;${isSel?"":"color:var(--blue)"}">●${items.length}</div>`:""}
+  </div>`;
+ }
+ h+=`</div></div>`;
+ if(rcCalDay){
+  const items=(byDay[rcCalDay]||[]).sort((a,b)=>(a.interview_at||"").localeCompare(b.interview_at||""));
+  h+=`<div class="card"><h3 style="margin:0 0 8px">${fmtDate(rcCalDay)} の面接（${items.length}件）</h3>`;
+  if(!items.length)h+=`<p class="muted" style="margin:0">この日の面接予定はありません</p>`;
+  items.forEach(a=>{
+   const u=(tskUsers||[]).find(x=>x.id===a.assignee_id);
+   const t=new Date(a.interview_at);
+   const hm=String(t.getHours()).padStart(2,"0")+":"+String(t.getMinutes()).padStart(2,"0");
+   h+=`<div class="row" data-rca="${a.id}" style="cursor:pointer"><span><b>${hm}</b> ${esc(a.name)}さん <span class="muted" style="font-size:12px">${APPLICANT_STATUS[a.status]||""}</span></span><span class="muted" style="font-size:12px">${u?esc(u.name):"担当なし"}</span></div>`;
+  });
+  h+=`</div>`;
+ }
+ return h;
+}
 async function recruitView(){
  if(!can("recruit"))return `<p class="muted">このページを表示する権限がありません。</p>`;
  try{await sb.from("applicants").delete().in("status",["rejected","declined"]).lt("status_changed_at",new Date(Date.now()-365*864e5).toISOString());}catch(e){}
@@ -3944,6 +4100,7 @@ async function recruitView(){
  const {data:as,error}=await sb.from("applicants").select("*").order("applied_at",{ascending:false}).limit(1000); // v2.5.3 移行データ対応で上限拡大
  if(error)return `<h2>📥 応募者管理</h2><div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
  rcList=as||[];
+ rcEnsureInterviewNotify(); // B-7 awaitしない（表示をブロックしない・裏で試みるだけ）
  await chatEnsureUsers();
  // v2.6.31 自分が開いた記録を読む（人ごとに未読を管理する）
  try{
@@ -3962,6 +4119,7 @@ async function recruitView(){
   return recruitDetailView();
  }
  if(rcJobs)return await recruitJobsView(); // v2.6.16 求人タイトルの登録
+ if(rcCal)return recruitCalendarView(); // B-7 面接カレンダー
  if(!rcCosts){const {data:c}=await sb.from("recruit_costs").select("*");rcCosts=c||[]}
  if(!rcHiredInfo){ // 採用者の在籍情報
   rcHiredInfo={users:[],profs:[]};
@@ -4000,7 +4158,8 @@ async function recruitView(){
  const closed=rcList.filter(a=>(a.status==="rejected"||a.status==="declined"||a.status==="noshow")&&match(a)).sort(sorter); // v2.6.17 バックレも「終了」側
  const fAll=rcList.filter(match); // v2.5.4 集計は絞り込み条件に連動
  const AREAS=(()=>{const base=["恵比寿","本店","川崎","新横浜","田町","三田","新橋","芝"];const found={};rcList.forEach(a=>{const v=rcAreaOf(a).split("、")[0].split(",")[0].trim();if(v&&v.length<=12)found[v]=(found[v]||0)+1});const extra=Object.keys(found).filter(v=>!base.includes(v)).sort((x,y)=>found[y]-found[x]).slice(0,8);return base.concat(extra)})();
- let h=`<h2>📥 応募者管理</h2>`;
+ let h=`<h2>📥 応募者管理</h2>
+ <div class="card" style="padding:10px 12px;display:flex;justify-content:flex-end"><button class="btn sm sub" id="rc-cal-open">📅 面接カレンダー</button></div>`;
  // v2.6.24 担当店舗だけの人には、その旨と全社共通の設定を出さない
  const rcAll=can("recruit_all");
  if(!rcAll)h+=`<div class="info" style="margin-top:-4px">🏪 <b>${esc((me.stores||[]).map(s=>s.name).join("・")||"所属店舗なし")}</b> の応募者のみ表示しています${(me.stores||[]).length?"":"（所属店舗が未設定のため何も表示されません。本部にご相談ください）"}</div>`;
@@ -5769,7 +5928,7 @@ async function resetFmt(){
 }
 
 // ===== イベント =====
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";chatReply=null;chatInvite=false;chatInviteSel=[];rcDetail=null;rcJobs=false;rcMsgs=null;rcDup=false;rcSimilar=[];rcPast=[];unlockedScoreKeys={};render()}); // v2.6.76 予算ロック解除の状態もリセット
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{page=b.dataset.p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";chatReply=null;chatInvite=false;chatInviteSel=[];rcDetail=null;rcJobs=false;rcMsgs=null;rcDup=false;rcSimilar=[];rcPast=[];rcCal=false;rcCalDay=null;unlockedScoreKeys={};render()}); // v2.6.76 予算ロック解除の状態もリセット
 function bindPage(){
  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=()=>{page=el.dataset.nav;detail=null;editId=null;render()});
  if(page==="check")bindCheckPage();
@@ -6403,6 +6562,12 @@ function bindPage(){
   const a=rcList.find(x=>x.id===b.dataset.rcsend);
   if(a)rcShareInvite(a);
  });
+ // B-7 面接カレンダー
+ if($("rc-cal-open"))$("rc-cal-open").onclick=()=>{rcCal=true;rcCalMonth=rcCalMonth||todayStr().slice(0,7);rcCalDay=todayStr();render()};
+ if($("rc-cal-back"))$("rc-cal-back").onclick=()=>{rcCal=false;render()};
+ if($("rc-cal-prev"))$("rc-cal-prev").onclick=()=>{const[y,m]=rcCalMonth.split("-").map(Number);const nd=new Date(y,m-2,1);rcCalMonth=nd.getFullYear()+"-"+String(nd.getMonth()+1).padStart(2,"0");rcCalDay=null;render()};
+ if($("rc-cal-next"))$("rc-cal-next").onclick=()=>{const[y,m]=rcCalMonth.split("-").map(Number);const nd=new Date(y,m,1);rcCalMonth=nd.getFullYear()+"-"+String(nd.getMonth()+1).padStart(2,"0");rcCalDay=null;render()};
+ document.querySelectorAll("[data-rccalday]").forEach(el=>el.onclick=()=>{const k=el.dataset.rccalday;rcCalDay=rcCalDay===k?null:k;render()});
  document.querySelectorAll("[data-rcseg]").forEach(el=>el.onclick=()=>{rcSeg=el.dataset.rcseg;if(rcFStatus&&rcSegOf(rcFStatus)!==rcSeg)rcFStatus="";render()});
  if($("rc-onlywait"))$("rc-onlywait").onclick=()=>{rcOnlyWait=!rcOnlyWait;render()}; // v2.6.31
  // v2.6.49 未読をまとめて片付ける

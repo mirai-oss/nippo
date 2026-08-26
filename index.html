@@ -2705,6 +2705,7 @@ function sfFmtDateShort(ds){const d=new Date(ds+"T00:00:00");const w=["日","月
 function sfFmtTime(t){return (t||"").slice(0,5)}
 
 let sfMode="submit",sfSubStore=null,sfSubPeriodIdx=null,sfEditDate=null,sfChangeDate=null; // sfChangeDate: B-2 ③変更希望フォームの対象日
+let sfScrollPending=false; // ユーザー要望（2026-08-25）: 調整グリッドのセルをクリックしても反応が分かりにくいため、編集パネル表示時に自動スクロールする
 let sfMgStore=null,sfMgPeriodIdx=null;
 let sfPsStore=null;
 let sfMgStep="request",sfReqDate=null; // v2.7 ①希望確認 ②調整（担当BシフトUIv5）
@@ -3260,7 +3261,7 @@ async function sfManageView(){
   if(sfEditDate){
    const [uid,ds]=sfEditDate.split("|");
    const u=people.find(x=>x.id===uid);
-   h+=`<div class="card" style="border-color:var(--accent,#c8401f)"><h3>${esc(u?u.name:"")}｜${sfFmtDateShort(ds)}</h3>`+sfEditDayHtml(ds,presets||[],shByUserDate[uid+"|"+ds]).replace('id="sf-daysave"','id="sfmg-daysave" data-sfmguid="'+uid+'"').replace('id="sf-daydelete"','id="sfmg-daydelete" data-sfmguid="'+uid+'"').replace('id="sf-dayclose"','id="sfmg-dayclose"');
+   h+=`<div class="card" id="sfmg-editpanel" style="border-color:var(--accent,#c8401f)"><h3>${esc(u?u.name:"")}｜${sfFmtDateShort(ds)}</h3>`+sfEditDayHtml(ds,presets||[],shByUserDate[uid+"|"+ds]).replace('id="sf-daysave"','id="sfmg-daysave" data-sfmguid="'+uid+'"').replace('id="sf-daydelete"','id="sfmg-daydelete" data-sfmguid="'+uid+'"').replace('id="sf-dayclose"','id="sfmg-dayclose"');
    h+=`</div>`;
   }
   h+=`<div class="sf-bottom-action"><div><b>公開前チェック（U8）</b><div class="muted">${esc(adj.checkText)}</div></div><div>
@@ -3427,7 +3428,12 @@ function bindShiftPage(){
   if(error){toast("更新エラー: "+error.message,true);return}
   toast("対応済みにしました");render();
  });
- document.querySelectorAll("[data-sfmgcell]").forEach(td=>td.onclick=()=>{sfEditDate=td.dataset.sfmgcell;render()});
+ document.querySelectorAll("[data-sfmgcell]").forEach(td=>td.onclick=()=>{sfEditDate=td.dataset.sfmgcell;sfScrollPending=true;render()}); // ユーザー要望: クリック位置が分かるよう編集パネルへ自動スクロール
+ if(sfScrollPending){ // render()後、DOMに編集パネルが入った状態でここが走る
+  sfScrollPending=false;
+  const panel=$("sfmg-editpanel");
+  if(panel)panel.scrollIntoView({behavior:"smooth",block:"center"});
+ }
  if(sfMode==="manage"&&$("sfmg-dayclose"))$("sfmg-dayclose").onclick=()=>{sfEditDate=null;render()};
  let sfMgPickedPreset=null,sfMgPickedOff=false;
  if(sfMode==="manage"){

@@ -829,7 +829,9 @@ async function renderApply(){
  // v2.6.35 面接の希望日時を3つまで。日時ぴったり／時間帯／いつでも から選べる
  h+=`<div class="card"><h3>面接の希望日時 <span class="req">必須</span></h3>
   <p class="muted" style="margin:0 0 4px">ご都合のよい日時を<b>3つまで</b>お知らせください。1つ目だけでも構いません。<br>
-  早くお決まりになるほど、面接のご案内も早くお送りできます。</p>`;
+  早くお決まりになるほど、面接のご案内も早くお送りできます。</p>
+  <p class="muted" style="margin:10px 0 4px">面接の形式 <span class="req">必須</span></p>
+  <div>${[["online","オンライン希望"],["onsite","対面希望"],["either","どちらでも"]].map(([v,l])=>`<span class="chip ivfmt" data-ivfmt="${v}">${l}</span>`).join("")}</div>`;
  for(let n=0;n<3;n++){
   h+=`<div style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px">
    <p class="muted" style="margin:0 0 4px">第${n+1}希望${n?"（任意）":""}</p>
@@ -851,6 +853,11 @@ async function renderApply(){
   <p class="muted center" style="margin-top:12px">送信すると採用担当者に届きます。ご連絡をお待ちください。</p></div>`;
  $("app").innerHTML=h;
  document.querySelectorAll(".chip[data-apm]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
+ // B-12(2026-08-27) 面接の形式（オンライン/対面/どちらでも）。単一選択
+ document.querySelectorAll(".chip.ivfmt").forEach(c=>c.onclick=()=>{
+  document.querySelectorAll(".chip.ivfmt").forEach(x=>x.classList.remove("on"));
+  c.classList.add("on");
+ });
  // v2.6.35 希望日時: 選んだ方式に合わせて入力欄を出し分ける
  document.querySelectorAll(".chip.ivmode").forEach(c=>c.onclick=()=>{
   const n=c.dataset.iv,m=c.dataset.m,on=!c.classList.contains("on");
@@ -888,6 +895,10 @@ async function doApply(){
   if(v)answers[fd.k]=v;
  });
  if(missing){toast(`「${missing}」は必須です`,true);return}
+ // B-12(2026-08-27) 面接の形式（オンライン/対面/どちらでも）
+ const ivFmtEl=document.querySelector(".chip.ivfmt.on");
+ if(!ivFmtEl){toast("面接の形式を選んでください",true);return}
+ answers._面接形式希望=ivFmtEl.dataset.ivfmt;
  // v2.6.35 面接の希望日時を集める
  const prefs=[];
  for(let n=0;n<3;n++){
@@ -1690,6 +1701,7 @@ async function fetchDashRange(storeIds,fromStr,toStr,ymList){
  }catch(e){return {act:[],tgt:[],tm:[]}}
 }
 // 日報を「書く」画面用。所属店舗ぶん（チーム長は担当店舗ぶん）を店舗別に見せる
+// B-8(2026-08-27) 日報からは呼ばれなくなった（ユーザー確定で表示廃止）。関数自体は将来の再利用に備えて残す
 async function dashPanelHtml(){
  if(!me||me.role==="AL"||me.role==="GAIHAN")return "";
  const storeIds=(me.stores||[]).map(s=>s.id);
@@ -1755,6 +1767,7 @@ async function authorStoreIds(r){
  }
  return [r.store_id];
 }
+// B-8(2026-08-27) 日報詳細からは呼ばれなくなった（ユーザー確定で表示廃止）。関数自体は将来の再利用に備えて残す
 async function dashPanelForReport(r){
  if(!me||me.role==="AL"||me.role==="GAIHAN")return "";
  if(!r||r.kind!=="daily"||!r.store_id||!r.report_date)return "";
@@ -1793,13 +1806,18 @@ async function dashPanelForReport(r){
  return `<div class="card" style="background:#f7fafc"><h3 style="margin:0">📊 ${esc(title)} の売上・FL</h3>${storeRows}
   <p class="muted" style="margin:8px 0 0;font-size:11px">この日報の日付（${fmtDate(r.report_date)}）を基準にした前日・当月累計です</p></div>`;
 }
-// v2.6.69 週報の対象期間は「火〜月」。含まれる日付から、直近に終わった（＝今日より前の）月曜を
-//   期間の最終日として計算する（例: 火曜に開く→前日の月曜で終わった先週火〜月／月曜に開いても
-//   その月曜はまだ終わっていないので、さらに1週間前の期間になる）
+// v2.6.69 週報の対象期間は「火〜月」。含まれる日付から、直近の月曜（dateStr自身が月曜ならその日）を
+//   期間の最終日として計算する（例: 火曜に開く→前日の月曜で終わった先週火〜月／月曜に開けば
+//   その日が最終日の今週火〜月＝提出期限は明日の火曜16:00でまだ間に合う期間）
+// B-9 バグ修正（2026-08-27）: 以前は「月曜はまだ終わっていない」という理由でdow===1のときだけ
+//   さらに1週間分（back=7）戻していたため、月曜に週報を書くと「今週」ではなく2週間前の期間が
+//   表示され、先週の週報で入力した「次週目標」（PA時間数等）の引き継ぎ先の期間もズレて
+//   見つからなくなっていた（fetchCarriedBudgetsの検索窓が丸ごと1週間ズレる）。back=0（＝今日が
+//   その週の最終日）はそのまま今日を最終日として扱うのが正しい
 function weekRangeFor(dateStr){
  const d=new Date(dateStr+"T00:00:00Z");
  const dow=d.getUTCDay(); // 0=日 1=月 2=火 … 6=土
- let back=(dow-1+7)%7;if(back===0)back=7; // 直近の「今日より前」の月曜まで何日前か
+ const back=(dow-1+7)%7; // 直近の月曜（今日を含む）まで何日前か
  const end=new Date(d);end.setUTCDate(d.getUTCDate()-back); // 対象期間の最終日（月曜）
  const start=new Date(end);start.setUTCDate(end.getUTCDate()-6); // その週の火曜（開始日）
  const f=x=>x.toISOString().slice(0,10);
@@ -1829,6 +1847,7 @@ async function fetchDashExtra(storeIds,ymList){
 const scoreKey=(base,storeId)=>`${base}__${storeId}`;
 // v2.6.76 予算欄のロックを一時的に外した項目（キー単位）。編集画面を開き直すとまた閉じる
 let unlockedScoreKeys={};
+let weeklyHasUnderachievement=false; // B-11(2026-08-27) weeklyDashPanelHtml()が書く画面を作るたびに更新。submitReport()の必須チェックで参照
 // v2.6.76 先週の「次週目標」を、今週の予算として引き継ぐ。既定では変更できない
 //   （社長・本部・チーム長・店長だけ変更できる。それ以外はいつも表示のみ）
 async function fetchCarriedBudgets(storeIds,weekStart,authorId){
@@ -1855,10 +1874,15 @@ async function fetchCarriedBudgets(storeIds,weekStart,authorId){
 }
 // v2.6.69 週報のスコアカード（項目／予算／実績／差異／予算比率）を1店舗ぶん作る
 // editable=true のときは、手入力の項目（PA時間数・Google口コミ数・ダイニー点数）を入力欄で出す
+// B-11(2026-08-27) 戻り値を{html,hasUnder}に変更（未達行が1つでもあればhasUnder=true）。
+//   呼び出し側は .html を使えばよいが、書く画面（weeklyDashPanelHtml）だけは
+//   .hasUnder を集計して「未達の理由・改善策」欄の要否を判定する
 function weeklyScorecardHtml(storeName,vals,editable){
  const yen=n=>"¥"+Math.round(n).toLocaleString("ja-JP");
  const num1=n=>(Math.round(n*10)/10).toLocaleString("ja-JP");
  const pct1=n=>(Math.round(n*10)/10)+"%";
+ let hasUnder=false;
+ const underStyle=rate=>(rate!=null&&rate<100)?' style="background:#fef2f2"':"";
  // B-5.2 バグ修正: 「予算比率」は今まで一律「実績÷予算×100」だった。原価率のように
  //   「低いほど良い」項目だとこの式のままでは、実績が予算より低い（＝良い結果）のに比率が100%未満になり、
  //   感覚と逆に見えていた。reverse=trueのときは「予算÷実績×100」にして、
@@ -1871,22 +1895,28 @@ function weeklyScorecardHtml(storeName,vals,editable){
   if(hasB&&hasA&&b!==0){
    rate=reverse?(a!==0?Math.round(b/a*1000)/10:null):Math.round(a/b*1000)/10;
   }
-  return `<tr><td style="padding:4px 6px">${esc(label)}</td>
+  if(rate!=null&&rate<100)hasUnder=true;
+  return `<tr${underStyle(rate)}><td style="padding:4px 6px">${esc(label)}</td>
    <td style="padding:4px 6px;text-align:right">${hasB?fmt(b):"—"}</td>
    <td style="padding:4px 6px;text-align:right">${hasA?fmt(a):"—"}</td>
    <td style="padding:4px 6px;text-align:right">${diff!=null?fmt(diff):"—"}</td>
-   <td style="padding:4px 6px;text-align:right">${rate!=null?rate+"%":"—"}</td></tr>`;
+   <td style="padding:4px 6px;text-align:right">${rate!=null?`<b style="color:${rate<100?"#c0392b":"inherit"}">${rate}%</b>`:"—"}</td></tr>`;
  };
  // v2.6.71 手入力の項目（黄色背景）。editableなら入力欄、そうでなければ入れた値をそのまま表示
  // v2.6.76 予算（bKey）は、先週の「次週目標」から引き継いだ値があれば既定でロック（opts.locked）。
  //   ロック中は数字だけ表示し、権限がある人（opts.canOverride）だけ✏️で編集を開ける。
  //   ロックを外して元と違う値にした場合は「当初の目標」を小さく残す（opts.orig）
+ // B-10(2026-08-27) opts.reverse=trueのときはautoRowと同じく「予算÷実績×100」に反転（少ないほど良い項目用）
  const manualRow=(label,opts)=>{
-  const{bKey,aKey,origKey,bVal,aVal,fmt,locked,orig,canOverride,changedBy,changedAt}=opts;
+  const{bKey,aKey,origKey,bVal,aVal,fmt,locked,orig,canOverride,changedBy,changedAt,reverse}=opts;
   const hasB=bVal!=null&&bVal!=="",hasA=aVal!=null&&aVal!=="";
   const b=hasB?Number(bVal):null,a=hasA?Number(aVal):null;
   const diff=(hasB&&hasA)?a-b:null;
-  const rate=(hasB&&b!==0&&hasA)?Math.round(a/b*1000)/10:null;
+  let rate=null;
+  if(hasB&&hasA&&b!==0){
+   rate=reverse?(a!==0?Math.round(b/a*1000)/10:null):Math.round(a/b*1000)/10;
+  }
+  if(rate!=null&&rate<100)hasUnder=true;
   let bCell;
   if(!editable){
    bCell=hasB?fmt(b):"—";
@@ -1903,22 +1933,24 @@ function weeklyScorecardHtml(storeName,vals,editable){
   const origHidden=(editable&&orig!=null&&origKey)?`<input type="hidden" data-fkd="${origKey}" value="${orig}">`:"";
   const changedNote=(changedBy&&changedAt)?`<br>${esc(changedBy)}が${new Date(changedAt).toLocaleDateString("ja-JP")}に変更`:"";
   const origNote=(orig!=null&&hasB&&Number(orig)!==b)?`<div class="muted" style="font-size:10px">当初の目標: ${fmt(Number(orig))}${changedNote}</div>`:"";
-  return `<tr><td style="padding:4px 6px">${esc(label)}${origHidden}</td>
+  return `<tr${underStyle(rate)}><td style="padding:4px 6px">${esc(label)}${origHidden}</td>
    <td style="padding:4px 6px;text-align:right">${bCell}${origNote}</td>
    <td style="padding:4px 6px;text-align:right">${aCell}</td>
    <td style="padding:4px 6px;text-align:right">${diff!=null?fmt(diff):"—"}</td>
-   <td style="padding:4px 6px;text-align:right">${rate!=null?rate+"%":"—"}</td></tr>`;
+   <td style="padding:4px 6px;text-align:right">${rate!=null?`<b style="color:${rate<100?"#c0392b":"inherit"}">${rate}%</b>`:"—"}</td></tr>`;
  };
- return `<div class="card" style="overflow-x:auto"><h3 style="margin:0 0 8px">🐔 ${esc(storeName)}</h3>
+ const html=`<div class="card" style="overflow-x:auto"><h3 style="margin:0 0 8px">🐔 ${esc(storeName)}</h3>
   <table style="width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap">
    <tr style="border-bottom:1px solid var(--line)"><th style="text-align:left;padding:4px 6px">項目</th><th style="text-align:right;padding:4px 6px">予算</th><th style="text-align:right;padding:4px 6px">実績</th><th style="text-align:right;padding:4px 6px">差異</th><th style="text-align:right;padding:4px 6px">予算比率</th></tr>
    ${autoRow("売上",vals.salesTgt,vals.salesAct,yen)}
-   ${manualRow("PA時間数",{bKey:vals.paBudgetKey,aKey:vals.paActualKey,origKey:vals.paOrigKey,bVal:vals.paBudget,aVal:vals.paActual,fmt:n=>num1(n)+"h",locked:vals.paLocked,orig:vals.paOrig,canOverride:vals.canOverride,changedBy:vals.paChangedBy,changedAt:vals.paChangedAt})}
+   ${manualRow("PA時間数（少ないほど◎）",{bKey:vals.paBudgetKey,aKey:vals.paActualKey,origKey:vals.paOrigKey,bVal:vals.paBudget,aVal:vals.paActual,fmt:n=>num1(n)+"h",locked:vals.paLocked,orig:vals.paOrig,canOverride:vals.canOverride,changedBy:vals.paChangedBy,changedAt:vals.paChangedAt,reverse:true})}
    ${autoRow("原価率（低いほど◎）",vals.costTgt,vals.costAct,pct1,true)}
    ${manualRow("Google口コミ数",{bKey:vals.reviewBudgetKey,aKey:vals.reviewActualKey,origKey:vals.reviewOrigKey,bVal:vals.reviewBudget,aVal:vals.reviewActual,fmt:num1,locked:vals.reviewLocked,orig:vals.reviewOrig,canOverride:vals.canOverride,changedBy:vals.reviewChangedBy,changedAt:vals.reviewChangedAt})}
    ${manualRow("ダイニー点数",{bKey:vals.diniiBudgetKey,aKey:vals.diniiActualKey,origKey:vals.diniiOrigKey,bVal:vals.diniiBudget,aVal:vals.diniiActual,fmt:num1,locked:vals.diniiLocked,orig:vals.diniiOrig,canOverride:vals.canOverride,changedBy:vals.diniiChangedBy,changedAt:vals.diniiChangedAt})}
   </table>
+  ${hasUnder?`<p style="margin:8px 0 0;font-size:11px;color:#c0392b">⚠️ 赤字の項目は未達です</p>`:""}
   ${editable?`<p class="muted" style="margin:8px 0 0;font-size:11px">黄色い欄（実績）は毎回手入力です。予算欄の🔒は先週の「次週目標」から引き継いだもので、勝手に変えられないよう基本ロックされています（変更すると元の目標も記録されます）</p>`:""}</div>`;
+ return {html,hasUnder};
 }
 // 週報を「書く」画面用。所属店舗ぶん（チーム長は担当店舗ぶん）をスコアカードで見せる
 async function weeklyDashPanelHtml(){
@@ -1932,7 +1964,7 @@ async function weeklyDashPanelHtml(){
   fetchCarriedBudgets(storeIds,weekStart,me.id) // v2.6.76
  ]);
  const canOverride=["TEAM","TENCHO","HQ","CEO"].includes(me.role)||me.is_master; // v2.6.76 予算のロックを外せる役職（マスター管理も含む）
- const cards=(me.stores||[]).map(s=>{
+ const cardResults=(me.stores||[]).map(s=>{
   const sAct=act.filter(x=>x.store_id===s.id),sTgt=tgt.filter(x=>x.store_id===s.id),sTm=tm.filter(x=>x.store_id===s.id);
   const sExtra=extra.filter(x=>x.store_id===s.id);
   const costAct=dashFlPct(dashSum(sAct,"cost"),0,dashSum(sAct,"sales")); // 原価率のみ（FLではなく原価だけ）
@@ -1948,10 +1980,21 @@ async function weeklyDashPanelHtml(){
    diniiBudgetKey:k("diniiBudget"),diniiActualKey:k("diniiActual"),diniiOrigKey:k("diniiBudgetOrig"),diniiBudget:diniiVal,diniiActual:form[k("diniiActual")],diniiLocked:diniiCarried!=null,diniiOrig:diniiCarried,
    canOverride,
   },true);
- }).join("");
+ });
+ const cards=cardResults.map(c=>c.html).join("");
+ // B-11(2026-08-27) 未達（赤字）の行が1つでもあれば「未達の理由・改善策」を必須で出す。
+ //   submitReport()側の必須チェックはここで立てたweeklyHasUnderachievementフラグを見る
+ weeklyHasUnderachievement=cardResults.some(c=>c.hasUnder);
+ const underBlock=weeklyHasUnderachievement?`<div class="card" style="border-color:#c0392b">
+  <h3 style="margin:0 0 8px;color:#c0392b">⚠️ 未達の理由・改善策 <span class="req">必須</span></h3>
+  <p class="muted" style="margin:0 0 8px">スコアカードに未達（赤字）の項目があります。理由と次週の改善策を記入してください。</p>
+  <p class="muted" style="margin:0 0 2px">未達の理由</p><textarea rows="3" data-fk="weeklyUnderReason" placeholder="例: PA時間が予算を超過した">${esc(form.weeklyUnderReason||"")}</textarea>
+  <p class="muted" style="margin:8px 0 2px">次週の改善策</p><textarea rows="3" data-fk="weeklyUnderImprovement" placeholder="例: シフトの人数配置を見直す">${esc(form.weeklyUnderImprovement||"")}</textarea>
+ </div>`:"";
  return `<h3 style="margin:14px 0 0">📊 週報スコアカード（${fmtDate(weekStart)}〜${fmtDate(weekEnd)}）</h3>
   <p style="margin:4px 0 10px"><button class="btn sm sub" id="dash-refetch" type="button">🔄 取り込む（最新の売上・目標を再取得）</button></p>
   ${cards}
+  ${underBlock}
   ${await nextWeekTargetHtml(weekEnd)}`;
 }
 // 週報の詳細画面用。その週報が対象にしている週（report_dateから逆算）でスコアカードを作る
@@ -1998,8 +2041,14 @@ async function weeklyDashPanelForReport(r){
    reviewChangedBy:ans[k("reviewBudgetChangedBy")], reviewChangedAt:ans[k("reviewBudgetChangedAt")],
    diniiBudget:ans[k("diniiBudget")], diniiActual:ans[k("diniiActual")], diniiOrig:ans[k("diniiBudgetOrig")],
    diniiChangedBy:ans[k("diniiBudgetChangedBy")], diniiChangedAt:ans[k("diniiBudgetChangedAt")],
-  },false);
+  },false).html;
  }).join("");
+ // B-11(2026-08-27) 提出済みの「未達の理由・改善策」があればそのまま表示（読み取り専用）
+ const underH=(ans.weeklyUnderReason||ans.weeklyUnderImprovement)?`<div class="card" style="border-color:#c0392b">
+  <h3 style="margin:0 0 8px;color:#c0392b">⚠️ 未達の理由・改善策</h3>
+  <p style="margin:0 0 8px;white-space:pre-wrap"><b>理由:</b> ${esc(ans.weeklyUnderReason||"—")}</p>
+  <p style="margin:0;white-space:pre-wrap"><b>次週の改善策:</b> ${esc(ans.weeklyUnderImprovement||"—")}</p>
+ </div>`:"";
  const nextRows=storeIds.map(sid=>{
   const k=b=>scoreKey(b,sid);
   const sname=storeIds.length>1?`${esc((stores.find(s=>s.id===sid)||{}).name)}: `:"";
@@ -2007,7 +2056,7 @@ async function weeklyDashPanelForReport(r){
   return `<p style="font-size:13px;line-height:1.9;margin:0">${sname}PA時間数: ${ans[k("nextPaTarget")]??"—"}h／Google口コミ数: ${ans[k("nextReviewTarget")]??"—"}／ダイニー点数: ${ans[k("nextDiniiTarget")]??"—"}</p>`;
  }).join("");
  const nextH=nextRows?`<div class="card"><h3 style="margin:0 0 8px">🎯 次週目標</h3>${nextRows}</div>`:"";
- return `<h3 style="margin:14px 0 0">📊 週報スコアカード（${fmtDate(weekStart)}〜${fmtDate(weekEnd)}）</h3>${cards}${nextH}`;
+ return `<h3 style="margin:14px 0 0">📊 週報スコアカード（${fmtDate(weekStart)}〜${fmtDate(weekEnd)}）</h3>${cards}${underH}${nextH}`;
 }
 // v2.6.71 次週目標（PA時間数・Google口コミ数・ダイニー点数は手入力）。書く画面でだけ出す
 // v2.6.76 店舗ごとに持たせ、来週の週報の予算欄にそのまま引き継がれるようにした
@@ -2028,6 +2077,46 @@ async function nextWeekTargetHtml(thisWeekEnd){
   <p class="muted" style="margin:0 0 8px;font-size:11px">来週（${fmtDate(nextEndStr)}を含む週）の目標です。ここで入れた数字が、来週の週報の予算欄にそのまま引き継がれます。<b>来週は基本的に変更できません</b>（社長・本部・チーム長・店長だけ変更でき、変更すると元の目標も記録されます）</p>
   ${rows}</div>`;
 }
+// B-14(2026-08-27) 明日の天気予報（日報の提出画面にだけ表示）。経営D app.js(WX_CODES/ensureWeather)と
+//   同じOpen-Meteo（無料・キー不要）＋stores.weather_lat/lonを使う。nippoでは「明日1日ぶん」だけなので
+//   経営Dの期間キャッシュ機構は持ち込まず、店舗ごとに軽く1回だけ取得する簡易版にしている
+const WX_ICON={0:"☀️",1:"🌤️",2:"⛅",3:"☁️",45:"🌫️",48:"🌫️",51:"🌦️",53:"🌦️",55:"🌧️",56:"🌧️",57:"🌧️",61:"🌦️",63:"🌧️",65:"🌧️",66:"🌧️",67:"🌧️",71:"🌨️",73:"🌨️",75:"❄️",77:"🌨️",80:"🌦️",81:"🌧️",82:"⛈️",85:"🌨️",86:"❄️",95:"⛈️",96:"🌩️",99:"🌩️"};
+const WX_LABEL={0:"快晴",1:"晴れ",2:"晴れ時々くもり",3:"くもり",45:"霧",48:"霧",51:"霧雨",53:"霧雨",55:"強い霧雨",56:"着氷性の霧雨",57:"着氷性の霧雨",61:"小雨",63:"雨",65:"大雨",66:"着氷性の雨",67:"着氷性の雨",71:"小雪",73:"雪",75:"大雪",77:"霧雪",80:"にわか雨",81:"強いにわか雨",82:"激しいにわか雨",85:"にわか雪",86:"強いにわか雪",95:"雷雨",96:"雷雨（ひょう）",99:"激しい雷雨（ひょう）"};
+let tomorrowWx=null,tomorrowWxLoading=false; // {storeId:{code,tmax,tmin,prec}}（取得後にrender()で反映）
+async function ensureTomorrowWeather(){
+ if(tomorrowWx||tomorrowWxLoading)return;
+ const storeIds=(me.stores||[]).map(s=>s.id);
+ if(!storeIds.length){tomorrowWx={};return}
+ tomorrowWxLoading=true;
+ const results={};
+ try{
+  const {data:rows}=await sb.from("stores").select("id,weather_lat,weather_lon").in("id",storeIds);
+  await Promise.all((rows||[]).filter(r=>r.weather_lat!=null&&r.weather_lon!=null).map(async r=>{
+   try{
+    const url=`https://api.open-meteo.com/v1/forecast?latitude=${r.weather_lat}&longitude=${r.weather_lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Asia%2FTokyo&forecast_days=2`;
+    const j=await (await fetch(url)).json();
+    const d=j&&j.daily;
+    if(d&&d.time&&d.time.length>1){
+     results[r.id]={code:Number(d.weather_code[1]),tmax:d.temperature_2m_max[1],tmin:d.temperature_2m_min[1],prec:Number(d.precipitation_sum[1])||0};
+    }
+   }catch(e){}
+  }));
+ }catch(e){}
+ tomorrowWx=results;tomorrowWxLoading=false;render();
+}
+function tomorrowWeatherHtml(){
+ const myStores=me.stores||[];
+ if(!myStores.length)return "";
+ if(!tomorrowWx)return `<p class="muted" style="margin:-6px 0 10px;font-size:12px">🌤 明日の天気を取得中…</p>`;
+ const rows=myStores.map(s=>{
+  const w=tomorrowWx[s.id];
+  if(!w)return "";
+  const label=WX_LABEL[w.code]||"";
+  return `${myStores.length>1?esc(s.name)+"　":""}${WX_ICON[w.code]||"🌡️"}${esc(label)}　${Math.round(w.tmax)}℃/${Math.round(w.tmin)}℃${w.prec>0?`　☔${w.prec}mm`:""}`;
+ }).filter(Boolean);
+ if(!rows.length)return "";
+ return `<p class="muted" style="margin:-6px 0 10px;font-size:12px">🌤 明日の天気: ${rows.join("　｜　")}</p>`;
+}
 // ===== 日報・週報 入力 =====
 async function writeView(kind){
  writeKind=kind;
@@ -2046,8 +2135,9 @@ async function writeView(kind){
   form=(d&&d.answers)||{};
  }
  let h=`<span class="back" data-nav="home">← ホーム</span><h2>${kind==="weekly"?"週報":"日報"} ${fmtDate(todayStr())}${er?"（修正）":""}</h2>`;
+ if(kind==="daily"){ensureTomorrowWeather();h+=tomorrowWeatherHtml()} // B-14(2026-08-27) 明日の天気予報（日付・曜日のすぐ下）
  if(isEarlyMorning())h+=`<div class="info" style="margin-top:-4px">🌙 深夜のご入力ありがとうございます。朝6時までは<b>前日（${fmtDate(todayStr())}）の日報</b>として受け付けます。</div>`;
- h+=kind==="weekly"?await weeklyDashPanelHtml():await dashPanelHtml(); // v2.6.57 所属店舗の売上・FL／v2.6.68 週報は期間合計
+ h+=kind==="weekly"?await weeklyDashPanelHtml():""; // v2.6.57 所属店舗の売上・FL／v2.6.68 週報は期間合計／B-8(2026-08-27) 日報側の前日売上・FL・当月累計の自動表示は廃止
  fmt.forEach(f=>{
   h+=`<div class="card"><h3>${esc(f.label)} ${f.req?'<span class="req">必須</span>':""}</h3>`;
   h+=hintLine(f.hint); // v2.6.26 記入例
@@ -2171,6 +2261,11 @@ async function submitReport(){
  const fmt=writeKind==="weekly"?weeklyFmt():fmtFor(me.role);
  for(const f of fmt){
   if(f.req){const v=form[f.k];if(v==null||v===""||(Array.isArray(v)&&!v.length)){toast(`「${f.label}」は必須です`,true);return}}
+ }
+ // B-11(2026-08-27) スコアカードに未達（赤字）があれば「未達の理由・改善策」を必須にする
+ if(writeKind==="weekly"&&weeklyHasUnderachievement){
+  if(!(form.weeklyUnderReason||"").trim()){toast("「未達の理由」は必須です",true);return}
+  if(!(form.weeklyUnderImprovement||"").trim()){toast("「次週の改善策」は必須です",true);return}
  }
  $("submitbtn").disabled=true;
  const rec={kind:writeKind,author_id:me.id,store_id:me.stores[0]?me.stores[0].id:null,report_date:todayStr(),answers:form};
@@ -3908,7 +4003,7 @@ async function detailView(){
  let h=`<span class="back" data-nav="list">← 一覧</span>
   <h2>${esc(r.author.name)}さんの${r.kind==="weekly"?"週報":"日報"} <span class="muted">${fmtDate(r.report_date)}</span>${r.overdue?' <span class="badge" style="background:#c0392b">⚠️ 期限超過</span>':""}</h2>
   ${r.submitted_at?`<p class="muted" style="margin:-8px 0 10px;font-size:12px">提出: ${fmtDue(r.submitted_at)}${editedD?`　修正: ${fmtDue(r.updated_at)}`:""}</p>`:""}`;
- h+=r.kind==="weekly"?await weeklyDashPanelForReport(r):await dashPanelForReport(r); // v2.6.68 この日報の売上・FL
+ h+=r.kind==="weekly"?await weeklyDashPanelForReport(r):""; // v2.6.68 この日報の売上・FL／B-8(2026-08-27) 日報側は廃止（週報は現状維持）
  const fmtList=r.kind==="weekly"?weeklyFmt(r.author.role):fmtAll(r.author.role); // v2.6.26 書いた人の役職で表示
  // v2.6.71 「担当店舗を複数選択」は、書いた人（チームなら担当店舗全て）の店舗一覧が選択肢になる
  const spOpts=fmtList.some(f=>f.type==="storepick")?await authorStoreNames(r.author.id,r.author.role,r.author.team_id):[];
@@ -4533,6 +4628,11 @@ function recruitDetailView(){
   if(a.interview_url)h+=`<p style="margin:6px 0 0;font-size:13px;word-break:break-all">🔗 <a href="${esc(a.interview_url)}" target="_blank" rel="noopener">${esc(a.interview_url)}</a></p>`;
   h+=`<p class="muted" style="margin:6px 0 0">${a.interview_sent_at?`📤 本人へ送信済み（${fmtDue(a.interview_sent_at)}）`:"⚠️ まだ本人へ送っていません"}</p>`;
  }
+ // B-12(2026-08-27) 面接の形式（オンライン/対面/どちらでも）の希望。apply_submitはこのキーを
+ //   専用列に写していないため、answersのまま読む（"_"始まりなので通常の回答一覧には出ない想定どおり）
+ const ivFmtWish=(a.answers||{})._面接形式希望;
+ const IV_FMT_LABEL={online:"💻 オンライン希望",onsite:"🏪 対面希望",either:"どちらでも"};
+ if(ivFmtWish)h+=`<p class="muted" style="margin:8px 0 0">本人の希望形式: <b>${esc(IV_FMT_LABEL[ivFmtWish]||ivFmtWish)}</b></p>`;
  const prefs=(a.interview_prefs||[]);
  if(prefs.length){
   h+=`<p class="muted" style="margin:8px 0 4px">本人の希望日時（タップすると、その日時で確定します）</p>`;
@@ -4561,9 +4661,9 @@ function recruitDetailView(){
    <input type="datetime-local" id="rc-ivat" class="inp" style="margin:0;max-width:220px" value="${a.interview_at?new Date(new Date(a.interview_at).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):""}">
    <button class="btn sm" id="rc-ivset" style="margin:0">この日時で確定</button></div>
   ${a.interview_at?`<p style="margin:8px 0 0"><button class="btn sm sub" id="rc-ivclear" style="margin:0;color:var(--red);border-color:var(--red)">🗑 面接日時を取り消す</button></p>`:""}
-  <p class="muted" style="margin:10px 0 2px">面接のやり方</p>
+  <p class="muted" style="margin:10px 0 2px">面接のやり方${(!a.interview_mode&&ivFmtWish)?`<span class="muted" style="font-size:11px">（本人の希望を初期値にしています）</span>`:""}</p>
   <div>${[["online","💻 オンライン（Meetを発行）"],["onsite","🏪 対面（住所を送る）"]]
-   .map(([v,l])=>`<span class="chip ivmodepick ${(a.interview_mode||"online")===v?"on":""}" data-mode="${v}">${l}</span>`).join("")}</div>
+   .map(([v,l])=>`<span class="chip ivmodepick ${(a.interview_mode||(ivFmtWish==="onsite"?"onsite":"online"))===v?"on":""}" data-mode="${v}">${l}</span>`).join("")}</div>
   <div id="rc-placewrap" style="display:${a.interview_mode==="onsite"?"":"none"};margin-top:6px">
    <select class="inp" id="rc-ivplace" style="margin:0;font-size:14px">
     <option value="">面接場所を選ぶ</option>
@@ -4608,13 +4708,12 @@ function recruitDetailView(){
   <p class="muted" style="margin:${a.indeed_url?"8px":"0"} 0 0">${a.indeed_url?"リンクを変えたい場合は貼り替えて保存してください":"Indeedの応募者ページのURLを貼り付けると、ここから直接開けるようになります"}</p>
   <input type="text" id="rc-url" value="${esc(a.indeed_url||"")}" placeholder="https://employers.indeed.com/candidates/view?id=..." style="font-size:12px">
   <button class="btn sm sub" id="rc-urlsave">リンクを保存</button></div>`;
- // v2.6.20 求人用LINEの連携
+ // v2.6.20 求人用LINEの連携／B-13(2026-08-27) 返信の入力欄は「💬 やりとり」カードへ統合したので、
+ //   ここは連携状態の表示・解除だけに絞る（返信欄が別の場所にあって返信しづらいという報告への対応）
  h+=`<div class="card"${a.line_user_id?' style="background:#f0fff4"':""}><h3>💚 求人用LINE</h3>`;
  if(a.line_user_id){
-  h+=`<p style="font-size:13px;margin:0">✅ 連携済み${a.line_linked_at?`（${fmtDue(a.line_linked_at)}）`:""}　この応募者にLINEを送れます</p>
-   <textarea rows="2" id="rc-linetext" placeholder="LINEで送る内容を入力"></textarea>
-   <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" id="rc-linesend" style="background:#06c755">💚 LINEで送る</button>
-   <button class="btn sm sub" id="rc-lineunlink">連携を解除する</button></div>`;
+  h+=`<p style="font-size:13px;margin:0">✅ 連携済み${a.line_linked_at?`（${fmtDue(a.line_linked_at)}）`:""}　返信は下の「💬 やりとり」から送れます</p>
+   <button class="btn sm sub" id="rc-lineunlink" style="margin-top:8px">連携を解除する</button>`;
  }else if(!a.line_code){
   h+=`<p class="muted" style="margin:0">合言葉を発行して本人に送ると、公式LINEに送ってもらうだけで自動でつながります</p>
    <button class="btn sm" id="rc-lineissue">合言葉を発行する</button>`;
@@ -4644,7 +4743,19 @@ function recruitDetailView(){
     <div style="font-size:13px;white-space:pre-wrap;word-break:break-word">${esc(m.body)}</div>
    </div></div>`;
  });
- h+=`<p class="muted" style="margin:8px 0 0">返信は上の「▶ Indeedページを開く」からIndeedの画面で行ってください${msgs.length?"<br>送り手が違っていたら「↔ …に直す」を押してください。<b>同じ相手のメッセージがまとめて直り、次からも自動で正しくなります</b>":""}</p></details></div>`;
+ h+=`<p class="muted" style="margin:8px 0 0">Indeedのメッセージへの返信は「▶ Indeedページを開く」から行ってください${msgs.length?"<br>送り手が違っていたら「↔ …に直す」を押してください。<b>同じ相手のメッセージがまとめて直り、次からも自動で正しくなります</b>":""}</p></details>`;
+ // B-13(2026-08-27) LINE返信の入力欄を「やりとり」表示の直下に統合（以前は別の場所にあり返信しづらいとの報告）。
+ //   会話履歴が3件超だと<details>は畳まれているが、返信欄はその外＝常に見える位置に置く
+ if(a.line_user_id){
+  h+=`<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
+   <p class="muted" style="margin:0 0 4px">💚 LINEで返信</p>
+   <textarea rows="2" id="rc-linetext" placeholder="LINEで送る内容を入力"></textarea>
+   <button class="btn sm" id="rc-linesend" style="background:#06c755;margin-top:6px">💚 LINEで送る</button>
+  </div>`;
+ }else{
+  h+=`<p class="muted" style="margin:10px 0 0;font-size:11px">LINEで返信するには、下の「💚 求人用LINE」から本人と連携してください</p>`;
+ }
+ h+=`</div>`;
  h+=`<div class="card"><h3>✏️ 基本情報（タップで編集できます）</h3>
   <input type="text" id="rc-ename" placeholder="氏名" value="${esc(a.name)}">
   <input type="tel" inputmode="tel" id="rc-ephone" placeholder="電話番号" value="${esc(a.phone||"")}">
@@ -5394,10 +5505,10 @@ async function settingsView(){
    <p class="muted" style="margin:0">日報・応募・入社登録など、<b>どの動きをどのグループに通知するか</b>を細かく設定できます</p>
    <button class="btn sm" id="lark-routes" style="margin-top:6px">🔔 通知先を設定する</button></div>`;
  }
- // v2.6.57 売上ダッシュボード連携（日報・週報に所属店舗の売上・FLを自動表示）
+ // v2.6.57 売上ダッシュボード連携（週報に所属店舗の売上・FLを自動表示）／B-8(2026-08-27) 日報側は表示廃止
  if(isAdmin()){
   h+=`<div class="card"><h3>📊 売上ダッシュボード連携</h3>
-   <p class="muted" style="margin:0 0 8px">日報・週報に、所属店舗の<b>前日の売上・FL</b>（原価＋人件費率）と<b>当月の累計</b>を、目標と並べて自動表示します。<b>社員以上にだけ表示され、アルバイトには出ません。</b><br>
+   <p class="muted" style="margin:0 0 8px">週報に、所属店舗の<b>期間中の売上・原価率</b>を、目標と並べて自動表示します（日報には表示しません）。<b>社員以上にだけ表示され、アルバイトには出ません。</b><br>
    売上ダッシュボードに<b>nippo連携用の専用アカウント</b>を作り、そのID・パスワードを入力してください。1日1回、自動で数字を取り込みます（貼り付けたID・パスワードはこの画面には出ません）。</p>
    <p class="muted" style="margin:8px 0 2px">ID</p>
    <input type="text" id="dash-id" placeholder="${dashId?"（設定済み。変えるときだけ入力）":"ダッシュボードのログインID"}" autocomplete="off">

@@ -429,6 +429,7 @@ let joinGender=null; // v2.6.7
 let cwToken=null,smUrlTpl=null; // v2.6.9 Chatwork・スマレジURL
 let ekispertKey=null,fareCache={}; // v2.6.66 交通費の自動計算（駅すぱあと）
 let lineToken=null,lineSecret=null,lineOa=null; // v2.6.20 求人用LINE
+let lineHealthChecked=false,lineHealthOk=null,lineHealthErr=""; // 2026-08-28 LINE接続の生存確認（応募者管理を開くたびに1回・ユーザー報告への対応）
 let lineLinkInfo=null; // v2.6.81 従業員本人のLINE連携（発行した合言葉・OA。応募者側のline_intakeとは独立）
 let dashId=null,dashPw=null,dashLog; // v2.6.57 売上ダッシュボード連携
 let teams=[],euTeam=null,lrList=null,lrEdit=null; // v2.6.2 チーム・日報Lark通知
@@ -4113,6 +4114,22 @@ async function adminView(){
 }
 
 // ===== v2.5 応募者管理（v2.5.2で独立タブ・フィルタ・CSV・費用対応） =====
+// 2026-08-28 ユーザー報告「LINE連携が外れても気づけるようにしてほしい」への対応。
+//   設定画面の「つながるか確認する」（line-webhook の action:"test"。既存・無変更で流用）を
+//   応募者管理を開いたときに自動で1回実行し、失敗していれば一覧の上に赤い警告を出す。
+//   新しいEdge Function・新しいLark定期チェックは作らず（ユーザー選択どおり「接続確認」のみ）、
+//   日常的に開く画面で自然に気づける形にした
+async function ensureLineHealthCheck(){
+ if(!isAdmin())return; // 設定を直せる役職（CEO/HQ）にだけ見せる。他の役職に無用の不安を与えない
+ if(lineHealthChecked)return; // 同じ画面滞在中に何度も叩かない（再読み込みすれば再チェックされる）
+ lineHealthChecked=true;
+ try{
+  const r=await lineFn({action:"test"});
+  lineHealthOk=!!r.ok;
+  lineHealthErr=r.ok?"":(r.error||"不明なエラー");
+ }catch(e){lineHealthOk=false;lineHealthErr="通信エラー"}
+ render();
+}
 // B-7 面接当日の朝、担当者へその日の面接一覧を通知（sfEnsureReminders と同じ「画面を開いたときにチェック」方式。
 //   アプリ内通知（notifications）＋ 既存のLarkルーティング（LARK_EVENTS.interview_todayを設定した宛先）に配信）
 async function rcEnsureInterviewNotify(){
@@ -4202,6 +4219,7 @@ async function recruitView(){
  if(error)return `<h2>📥 応募者管理</h2><div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
  rcList=as||[];
  rcEnsureInterviewNotify(); // B-7 awaitしない（表示をブロックしない・裏で試みるだけ）
+ ensureLineHealthCheck(); // 2026-08-28 LINE接続確認（同上・awaitしない）
  await chatEnsureUsers();
  // v2.6.31 自分が開いた記録を読む（人ごとに未読を管理する）
  try{
@@ -4259,8 +4277,10 @@ async function recruitView(){
  const closed=rcList.filter(a=>(a.status==="rejected"||a.status==="declined"||a.status==="noshow")&&match(a)).sort(sorter); // v2.6.17 バックレも「終了」側
  const fAll=rcList.filter(match); // v2.5.4 集計は絞り込み条件に連動
  const AREAS=(()=>{const base=["恵比寿","本店","川崎","新横浜","田町","三田","新橋","芝"];const found={};rcList.forEach(a=>{const v=rcAreaOf(a).split("、")[0].split(",")[0].trim();if(v&&v.length<=12)found[v]=(found[v]||0)+1});const extra=Object.keys(found).filter(v=>!base.includes(v)).sort((x,y)=>found[y]-found[x]).slice(0,8);return base.concat(extra)})();
- let h=`<h2>📥 応募者管理</h2>
- <div class="card" style="padding:10px 12px;display:flex;justify-content:flex-end"><button class="btn sm sub" id="rc-cal-open">📅 面接カレンダー</button></div>`;
+ let h=`<h2>📥 応募者管理</h2>`;
+ // 2026-08-28 LINE接続が切れていたら一覧の一番上で警告（設定画面を開かなくても気づけるように）
+ if(lineHealthOk===false)h+=`<div class="alert" style="background:#fef2f2;border-left:4px solid #c0392b">⚠️ <b>求人用LINEに接続できませんでした</b>（${esc(lineHealthErr)}）。応募者へのLINE送信ができない可能性があります。設定 →「💚 求人用LINEの連携」で確認してください。</div>`;
+ h+=`<div class="card" style="padding:10px 12px;display:flex;justify-content:flex-end"><button class="btn sm sub" id="rc-cal-open">📅 面接カレンダー</button></div>`;
  // v2.6.24 担当店舗だけの人には、その旨と全社共通の設定を出さない
  const rcAll=can("recruit_all");
  if(!rcAll)h+=`<div class="info" style="margin-top:-4px">🏪 <b>${esc((me.stores||[]).map(s=>s.name).join("・")||"所属店舗なし")}</b> の応募者のみ表示しています${(me.stores||[]).length?"":"（所属店舗が未設定のため何も表示されません。本部にご相談ください）"}</div>`;
@@ -7045,6 +7065,7 @@ function bindPage(){
   $("line-test").disabled=true;
   const r=await lineFn({action:"test"});
   $("line-test").disabled=false;
+  lineHealthChecked=true;lineHealthOk=!!r.ok;lineHealthErr=r.ok?"":(r.error||"不明"); // 2026-08-28 応募者管理の警告バナーにも即反映
   if(!r.ok){toast("確認できませんでした: "+(r.error||"不明"),true);return}
   if(r.basicId){await sb.from("app_secrets").upsert({key:"line_oa_id",value:r.basicId,updated_by:me.id,updated_at:new Date().toISOString()});lineOa=r.basicId}
   toast("つながりました: "+(r.name||"")+"（"+(r.basicId||"")+"）");render();

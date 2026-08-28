@@ -5077,7 +5077,18 @@ async function adminStoresView(){
  <div class="card" style="margin-top:20px">
   <h3>📮 配信グループ管理</h3>
   <p class="muted" style="margin-top:-4px;font-size:13px">経営ダッシュボードの日報・週報・月報の自動配信先（Lark／Chatwork）。店舗の所属は上の各店舗カードで設定します。Secret名はGitHub Secretsに登録した名前のみ（トークンやWebhook URLの値はここには置きません）。</p>
-  ${(chanList||[]).map((c,ci)=>`<div class="card" style="padding:10px;margin-bottom:8px">
+  ${(chanList||[]).map((c,ci)=>{
+   // 2026-08-28 ユーザー要望（担当D経由）: 「何がどこの誰に送られるか」がひと目で分かるように、
+   //   このグループに所属している店舗（各店舗カードのチップの現在状態＝stList[].channels）を要約表示する。
+   //   重複設定（同じ店舗が同種のグループに二重登録）にも気づきやすくする
+   const memberStores=(stList||[]).filter(s=>s.channels.includes(c.id));
+   const destText=c.kind==="chatwork"?(c.chatwork_room_id?`ルームID ${esc(c.chatwork_room_id)}`:"ルームID未設定"):(c.secret_name?esc(c.secret_name):"Secret名未設定");
+   const repText=c.report_kinds.length?c.report_kinds.map(k=>({daily:"日次",weekly:"週次",monthly:"月次"}[k]||k)).join("・"):"配信種別未選択";
+   const dupNote=memberStores.filter(s=>s.channels.filter(id=>(chanList.find(x=>x.id===id)||{}).kind===c.kind).length>1);
+   return `<div class="card" style="padding:10px;margin-bottom:8px">
+   <p style="margin:0 0 8px;font-size:12px;background:#f7f9fc;border-radius:6px;padding:6px 8px">${c.kind==="chatwork"?"💬":"📮"} <b>${destText}</b>　${esc(repText)}<br>
+    対象店舗: ${memberStores.length?memberStores.map(s=>esc(s.name)).join("・"):"（未設定）"}（計${memberStores.length}店）
+    ${dupNote.length?`<br><span style="color:#b03030">⚠️ ${dupNote.map(s=>esc(s.name)).join("・")}は同じ種別（${c.kind==="chatwork"?"Chatwork":"Lark"}）の別グループにも所属しています（重複配信の可能性）</span>`:""}</p>
    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     <input type="text" data-chname="${ci}" value="${esc(c.name)}" placeholder="グループ名（例: group1）" style="flex:1;min-width:120px;margin:0;font-size:13px">
     <select class="inp" data-chkind="${ci}" style="font-size:13px;margin:0"><option value="lark" ${c.kind==="lark"?"selected":""}>📮 Lark</option><option value="chatwork" ${c.kind==="chatwork"?"selected":""}>💬 Chatwork</option></select>
@@ -5091,7 +5102,7 @@ async function adminStoresView(){
     ${[["daily","日次"],["weekly","週次"],["monthly","月次"]].map(([k,label])=>`<span class="chip chrep ${c.report_kinds.includes(k)?"on":""}" data-ci="${ci}" data-k="${k}">${label}</span>`).join("")}
     <span class="chip" data-chdel="${ci}" style="margin-left:auto;color:#b03030">削除</span>
    </div>
-  </div>`).join("")}
+  </div>`}).join("")}
   <div style="display:flex;gap:6px;margin-top:8px"><input type="text" id="ch-newname" placeholder="新しいグループ名（例: group4）" style="flex:1;margin:0"><button class="btn sm sub" id="ch-add">追加する</button></div>
   <button class="btn sm" id="ch-save" style="margin-top:10px">配信グループを保存する</button>
  </div>`;

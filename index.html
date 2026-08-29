@@ -2847,12 +2847,14 @@ async function sfSubmitView(){
  const dates=sfDateList(p);
  const now=new Date();
  const isPastDeadline=now>p.deadline;
- const [{data:presets},{data:shifts},{data:changeReqs}]=await Promise.all([
+ const [{data:presets},{data:shifts},{data:changeReqs},{data:helpRows}]=await Promise.all([
   sb.from("sf_time_presets").select("*").eq("store_id",sfSubStore).eq("is_active",true).order("sort_order"),
   sb.from("sf_shifts").select("*").eq("user_id",me.id).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
-  sb.from("sf_change_requests").select("work_date,status").eq("user_id",me.id).eq("period_key",p.key) // B-2 ③
+  sb.from("sf_change_requests").select("work_date,status").eq("user_id",me.id).eq("period_key",p.key), // B-2 ③
+  sb.from("sf_help_availability").select("work_date").eq("user_id",me.id).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]) // A-6
  ]);
  const shMap={};(shifts||[]).forEach(s=>shMap[s.work_date]=s);
+ const helpSet=new Set((helpRows||[]).map(r=>r.work_date)); // A-6
  const crMap={};(changeReqs||[]).forEach(c=>crMap[c.work_date]=c);
  const anyPublished=(shifts||[]).some(s=>s.status==="published");
  const unconfirmedCount=(shifts||[]).filter(s=>s.status==="published"&&!s.confirmed_at).length; // B-2 ③
@@ -2870,15 +2872,16 @@ async function sfSubmitView(){
   const label=s?(s.is_off?"🌙 休み":`${sfFmtTime(s.start_time)}〜${sfFmtTime(s.end_time)}`):"未入力";
   const cr=crMap[ds];
   const crBadge=cr?`<br><span class="badge ${cr.status==="pending"?"":"g"}" style="font-size:9px">${cr.status==="pending"?"変更申請中":cr.status==="resolved"?"変更対応済み":"変更申請却下"}</span>`:"";
+  const helpBadge=helpSet.has(ds)?` <span class="muted" title="他店舗のヘルプにも入れます">🤝</span>`:""; // A-6
   h+=`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line,#eee)">
    <div style="width:64px;flex-shrink:0">${sfFmtDateShort(ds)}</div>
-   <div style="flex:1">${esc(label)}${crBadge}</div>
+   <div style="flex:1">${esc(label)}${helpBadge}${crBadge}</div>
    ${locked?(s&&s.status==="published"&&!cr?`<button class="btn sm sub" data-sfchange="${ds}">🔁変更希望</button>`:""):`<button class="btn sm sub" data-sfedit="${ds}">編集</button>`}
   </div>`;
  });
  h+=`</div>`;
  if(!isPastDeadline&&!anyPublished&&presets&&presets.length)h+=`<button class="btn" id="sf-submitall" style="margin-top:10px">✅ この内容で提出する</button>`;
- if(sfEditDate)h+=sfEditDayHtml(sfEditDate,presets||[],shMap[sfEditDate]);
+ if(sfEditDate)h+=sfEditDayHtml(sfEditDate,presets||[],shMap[sfEditDate],me.id,helpSet.has(sfEditDate));
  if(sfChangeDate)h+=sfChangeRequestHtml(sfChangeDate,shMap[sfChangeDate]);
  return h;
 }
@@ -2902,7 +2905,9 @@ function sfPeriodOptions(curIdx){
  }
  return h;
 }
-function sfEditDayHtml(ds,presets,cur){
+// A-6(2026-08-29) uid・helpAvailableを追加。ヘルプ可能チップは自分のシフトとは別テーブル
+//   （sf_help_availability）に即時保存する独立トグル（保存ボタンは押さなくてよい）
+function sfEditDayHtml(ds,presets,cur,uid,helpAvailable){
  return `<div class="card" style="border-color:var(--accent,#c8401f)">
   <h3>${sfFmtDateShort(ds)} の入力</h3>
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
@@ -2913,6 +2918,7 @@ function sfEditDayHtml(ds,presets,cur){
    <label class="muted" style="font-size:12px">開始</label><input type="time" id="sf-start" value="${cur&&!cur.is_off?sfFmtTime(cur.start_time):""}" step="900" style="width:auto;margin:0">
    <label class="muted" style="font-size:12px">終了</label><input type="time" id="sf-end" value="${cur&&!cur.is_off?sfFmtTime(cur.end_time):""}" step="900" style="width:auto;margin:0">
   </div>
+  ${uid?`<div style="margin-top:8px"><span class="chip ${helpAvailable?"on":""}" data-sfhelp="${uid}|${ds}">🤝 この日、他店舗のヘルプにも入れます</span></div>`:""}
   <div style="margin-top:10px;display:flex;gap:8px">
    <button class="btn sm" id="sf-daysave">この内容で保存</button>
    ${cur?`<button class="btn sm sub" id="sf-daydelete" style="color:#c0392b">🗑 削除する</button>`:""}
@@ -3012,17 +3018,24 @@ function sfRoleSummaryHtml(ds,people,shByUserDate,storeCountMap){
   <div class="sf-role-row"><b>合計</b><span>${entries.length}人</span></div>
  </div>`;
 }
-// v2.7注記: 「ヘルプ」判定はsf_help_availability（U2）未実装のため、複数店舗に所属する人を暫定的に「兼務」として代用表示している
-function sfRequestStepHtml(dates,people,shByUserDate,presets,reqs,storeCountMap){
+// A-6(2026-08-29) 「ヘルプ」判定はsf_help_availabilityを見るようにした（以前は複数店舗所属＝「兼務」で代用していた）。
+//   この日付の①希望確認パネルに限り、他店舗からヘルプ可能な人（このstoreの所属ではない人）を別枠で出す
+async function sfRequestStepHtml(dates,people,shByUserDate,presets,reqs,storeCountMap){
  if(!sfReqDate||!dates.includes(sfReqDate))sfReqDate=dates[0];
  const cards=dates.map(ds=>sfCalendarDayCard(ds,people,shByUserDate,presets,reqs,ds===sfReqDate)).join("");
  const need=sfDayNeedTotal(sfReqDate,presets,reqs),have=sfDayHaveTotal(sfReqDate,people,shByUserDate);
+ const myIds=new Set(people.map(u=>u.id));
+ const {data:helpRows}=await sb.from("sf_help_availability").select("user_id,users!sf_help_availability_user_id_fkey(id,name,role)").eq("work_date",sfReqDate);
+ const helpOthers=(helpRows||[]).filter(r=>r.users&&!myIds.has(r.user_id)).map(r=>r.users);
+ const helpBlock=helpOthers.length?`<div class="card" style="background:#f0fff4"><h3 style="margin:0 0 6px">🤝 他店舗からヘルプ可能（${helpOthers.length}人）</h3>
+  <p class="muted" style="margin:0">${helpOthers.map(u=>`${esc(u.name)}（${esc(ROLE_NAME[u.role]||u.role)}）`).join("・")}</p></div>`:"";
  return `<div class="card"><h3>①希望確認</h3><div class="muted" style="margin-bottom:8px">日付をタップすると、その日の希望者一覧・出勤希望を確認できます</div>
   <div class="sf-halfgrid">${cards}</div></div>
  <div class="card"><h3>${sfFmtDateShort(sfReqDate)}の希望シフト</h3>
   <div class="sf-mini-grid"><div class="sf-mini"><small>必要</small><b>${need===null?"未設定":need+"人"}</b></div><div class="sf-mini"><small>希望提出</small><b>${have}人</b></div></div>
   ${sfDayPeopleHtml(sfReqDate,people,shByUserDate,storeCountMap,presets)}
  </div>
+ ${helpBlock}
  <div class="card"><h3>出勤希望ガント（${sfFmtDateShort(sfReqDate)}）</h3>
   ${sfDayGanttHtml(sfReqDate,people,shByUserDate,storeCountMap)||'<p class="muted">この日の希望提出はまだありません。</p>'}
   ${sfRoleSummaryHtml(sfReqDate,people,shByUserDate,storeCountMap)}
@@ -3093,7 +3106,8 @@ function sfAdjustStepHtml(ctx){
  </div>`;
  if(unknownWage.size)h+=`<div class="sf-note">⚠️ ${unknownWage.size}名は勤怠実績がまだ無いため人件費の概算に含めていません（実績が貯まると自動的に反映されます）</div>`;
  if(needDays.length)h+=`<div class="card sf-reqbox"><b>調整が必要な日</b>${needDays.map(d=>`<div class="sf-reqday"><b>${sfFmtDateShort(d.ds)}</b><p>${esc(d.label)} ${d.short}名不足</p></div>`).join("")}</div>`;
- return {html:h,checkText:checkMsgs.length?checkMsgs.join("・"):"問題ありません"};
+ // A-1(2026-08-29) KPIカードから再利用できるよう、算出済みの数値も一緒に返す
+ return {html:h,checkText:checkMsgs.length?checkMsgs.join("・"):"問題ありません",totalCost,salesTotal,rateText,needCount:needDays.length};
 }
 // ③確定: 公開後の未確認者一覧・再通知・変更申請の受付一覧（実装指示書_担当B_シフトUIv5_2026-08-24.md B-2）
 function sfConfirmedStepHtml(ctx){
@@ -3327,12 +3341,35 @@ async function sfManageView(){
  const enteredCount=(shifts||[]).length; // v2.6.82 店長・本部の代理入力もdraftのまま止まるため「提出済み」ではなく「入力済み」で判定する
  const publishedCount=(shifts||[]).filter(s=>s.status==="published").length;
  const notSubmitted=people.filter(u=>!dates.some(ds=>shByUserDate[u.id+"|"+ds]));
+ // A-1(2026-08-29) KPIカード5枚ぶんの算出。以前は②調整タブを開いたときだけ計算していたが、
+ //   モックアップどおり常時表示するため冒頭で計算する（②調整タブ表示時はこの結果をそのまま使い回す）
+ const [{data:allUS},{data:targets},{data:profs},{data:helpRowsPeriod}]=await Promise.all([
+  sb.from("user_stores").select("user_id").in("user_id",idsForIn),
+  sb.from("dash_sales_target_daily").select("sales_target").eq("store_id",sfMgStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]),
+  sb.from("employee_profiles").select("user_id,smaregi_staff_id").in("user_id",idsForIn),
+  sb.from("sf_help_availability").select("user_id").gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]) // A-6
+ ]);
+ const storeCountMap={};(allUS||[]).forEach(r=>{storeCountMap[r.user_id]=(storeCountMap[r.user_id]||0)+1});
+ const salesTotal=(targets||[]).reduce((a,r)=>a+(r.sales_target||0),0);
+ const linkedSet=new Set((profs||[]).filter(pr=>pr.smaregi_staff_id).map(pr=>pr.user_id));
+ const unlinkedCount=people.filter(u=>!linkedSet.has(u.id)).length;
+ const wageRates=await sfComputeWageRates(sfMgStore,peopleIds);
+ const adj=sfAdjustStepHtml({dates,people,shByUserDate,presets:presets||[],reqs:reqs||[],storeCountMap,salesTotal,wageRates,unlinkedCount});
+ const helpCount=new Set((helpRowsPeriod||[]).map(r=>r.user_id)).size; // A-6 期間中にヘルプ可能を宣言した人数（他店舗含む＝全社共通のsf_help_availability）
  let h=`<div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
   <select class="inp" id="sfmg-store" style="flex:1;min-width:140px;margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===sfMgStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select>
   <select class="inp" id="sfmg-period" style="flex:1;min-width:140px;margin:0">${sfPeriodSelectHtml(sfMgPeriodIdx)}</select>
- </div>
- <div class="info">${esc(p.label)}｜入力済み ${enteredCount}件／公開済み ${publishedCount}件${publishedCount>0&&publishedCount===enteredCount?'　<span class="badge" style="background:#1e8e5a">全て公開済み</span>':""}</div>`;
- if(notSubmitted.length)h+=`<div class="card" style="border-color:#b58a00"><b>⚠️ 未提出（1日も入力なし）</b>: ${notSubmitted.map(u=>esc(u.name)+(u.line_user_id?"":"（⚠️LINE未連携）")).join("・")}</div>`;
+ </div>`;
+ // A-1: KPIカード5枚（提出済み／未提出／ヘルプ可能／不足時間帯／想定人件費率）。
+ //   「入力済み◯件／公開済み◯件」の文言はここに統合（情報の重複を避ける）
+ h+=`<div class="sf-finance">
+  <div class="card"><small>提出済み</small><b>${people.length-notSubmitted.length} / ${people.length}</b><div class="muted" style="font-size:11px">${people.length?Math.round((people.length-notSubmitted.length)/people.length*100):0}%・入力済み${enteredCount}件／公開済み${publishedCount}件</div></div>
+  <div class="card"><small>未提出</small><b style="color:${notSubmitted.length?"#c0392b":"inherit"}">${notSubmitted.length}</b>${notSubmitted.length?'<div class="muted" style="font-size:11px">要確認</div>':""}</div>
+  <div class="card"><small>ヘルプ可能</small><b>${helpCount}人</b><div class="muted" style="font-size:11px">他店舗含む</div></div>
+  <div class="card"><small>不足時間帯</small><b style="color:${adj.needCount?"#b58a00":"inherit"}">${adj.needCount}</b>${adj.needCount?'<div class="muted" style="font-size:11px">要調整</div>':""}</div>
+  <div class="card"><small>想定人件費率</small><b>${adj.rateText}</b></div>
+ </div>`;
+ if(notSubmitted.length)h+=`<div class="card" style="border-color:#b58a00"><b>⚠️ 未提出（1日も入力なし）</b>: ${notSubmitted.map(u=>esc(u.name)+(u.line_user_id?"":"（⚠️LINE未連携）")).join("・")}<button class="btn sm sub" id="sfmg-notify-unsubmitted" style="margin-top:6px">🔔 未提出者に通知</button></div>`;
  h+=`<div class="sf-stepnav">
   <button class="sf-stepbtn ${sfMgStep==="request"?"active":""}" data-sfstep="request"><b>①希望確認</b><small>半月・日別・出勤希望</small></button>
   <button class="sf-stepbtn ${sfMgStep==="adjust"?"active":""}" data-sfstep="adjust"><b>②調整</b><small>不足・人件費を見て調整</small></button>
@@ -3340,24 +3377,14 @@ async function sfManageView(){
  </div>
  <p class="muted" style="margin-top:-2px">叶え率・日別差分などの実績確認は「📊実績確認」タブに分けました。</p>`;
  if(sfMgStep==="adjust"){
-  const [{data:allUS},{data:targets},{data:profs}]=await Promise.all([
-   sb.from("user_stores").select("user_id").in("user_id",idsForIn),
-   sb.from("dash_sales_target_daily").select("sales_target").eq("store_id",sfMgStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]),
-   sb.from("employee_profiles").select("user_id,smaregi_staff_id").in("user_id",idsForIn)
-  ]);
-  const storeCountMap={};(allUS||[]).forEach(r=>{storeCountMap[r.user_id]=(storeCountMap[r.user_id]||0)+1});
-  const salesTotal=(targets||[]).reduce((a,r)=>a+(r.sales_target||0),0);
-  const linkedSet=new Set((profs||[]).filter(pr=>pr.smaregi_staff_id).map(pr=>pr.user_id));
-  const unlinkedCount=people.filter(u=>!linkedSet.has(u.id)).length;
-  const wageRates=await sfComputeWageRates(sfMgStore,peopleIds);
-  const adj=sfAdjustStepHtml({dates,people,shByUserDate,presets:presets||[],reqs:reqs||[],storeCountMap,salesTotal,wageRates,unlinkedCount});
   h+=adj.html;
   h+=sfHeadcountTableHtml(dates,presets||[],reqs||[],people,shByUserDate);
   h+=sfShiftTableHtml(dates,people,shByUserDate);
   if(sfEditDate){
    const [uid,ds]=sfEditDate.split("|");
    const u=people.find(x=>x.id===uid);
-   h+=`<div class="card" id="sfmg-editpanel" style="border-color:var(--accent,#c8401f)"><h3>${esc(u?u.name:"")}｜${sfFmtDateShort(ds)}</h3>`+sfEditDayHtml(ds,presets||[],shByUserDate[uid+"|"+ds]).replace('id="sf-daysave"','id="sfmg-daysave" data-sfmguid="'+uid+'"').replace('id="sf-daydelete"','id="sfmg-daydelete" data-sfmguid="'+uid+'"').replace('id="sf-dayclose"','id="sfmg-dayclose"');
+   const {data:helpRow}=await sb.from("sf_help_availability").select("work_date").eq("user_id",uid).eq("work_date",ds).maybeSingle(); // A-6
+   h+=`<div class="card" id="sfmg-editpanel" style="border-color:var(--accent,#c8401f)"><h3>${esc(u?u.name:"")}｜${sfFmtDateShort(ds)}</h3>`+sfEditDayHtml(ds,presets||[],shByUserDate[uid+"|"+ds],uid,!!helpRow).replace('id="sf-daysave"','id="sfmg-daysave" data-sfmguid="'+uid+'"').replace('id="sf-daydelete"','id="sfmg-daydelete" data-sfmguid="'+uid+'"').replace('id="sf-dayclose"','id="sfmg-dayclose"');
    h+=`</div>`;
   }
   h+=`<div class="sf-bottom-action"><div><b>公開前チェック（U8）</b><div class="muted">${esc(adj.checkText)}</div></div><div>
@@ -3368,9 +3395,7 @@ async function sfManageView(){
   h+=sfConfirmedStepHtml({dates,people,shByUserDate,changeReqs:changeReqs||[]});
   h+=sfShiftTableHtml(dates,people,shByUserDate); // 月間確定ビューとして既存のシフト表を流用
  }else{
-  const {data:allUS}=await sb.from("user_stores").select("user_id").in("user_id",idsForIn);
-  const storeCountMap={};(allUS||[]).forEach(r=>{storeCountMap[r.user_id]=(storeCountMap[r.user_id]||0)+1});
-  h+=sfRequestStepHtml(dates,people,shByUserDate,presets||[],reqs||[],storeCountMap);
+  h+=await sfRequestStepHtml(dates,people,shByUserDate,presets||[],reqs||[],storeCountMap);
  }
  return h;
 }
@@ -3447,6 +3472,21 @@ function bindShiftPage(){
  if($("sf-period"))$("sf-period").onchange=e=>{sfSubPeriodIdx=+e.target.value;render()};
  document.querySelectorAll("[data-sfedit]").forEach(b=>b.onclick=()=>{sfEditDate=b.dataset.sfedit;render()});
  if(sfMode==="submit"&&$("sf-dayclose"))$("sf-dayclose").onclick=()=>{sfEditDate=null;render()};
+ // A-6(2026-08-29) ヘルプ可能トグル（sf_shiftsとは別テーブルなので即時保存・シフト本体の保存とは独立）
+ document.querySelectorAll("[data-sfhelp]").forEach(c=>c.onclick=async()=>{
+  const [uid,ds]=c.dataset.sfhelp.split("|");
+  const willOn=!c.classList.contains("on");
+  c.style.pointerEvents="none";
+  if(willOn){
+   const {error}=await sb.from("sf_help_availability").upsert({user_id:uid,work_date:ds,created_by:me.id},{onConflict:"user_id,work_date"});
+   if(error){toast("保存エラー: "+error.message,true);c.style.pointerEvents="";return}
+  }else{
+   const {error}=await sb.from("sf_help_availability").delete().eq("user_id",uid).eq("work_date",ds);
+   if(error){toast("削除エラー: "+error.message,true);c.style.pointerEvents="";return}
+  }
+  c.classList.toggle("on",willOn);c.style.pointerEvents="";
+  toast(willOn?"ヘルプ可能にしました":"ヘルプ可能を解除しました");
+ });
  let sfPickedPreset=null,sfPickedOff=false;
  if(sfMode==="submit"){
   document.querySelectorAll("[data-sfpreset]").forEach(b=>b.onclick=()=>{
@@ -3588,6 +3628,29 @@ function bindShiftPage(){
   }catch(e){toast("同期に失敗しました",true)}
   $("sfmg-import").disabled=false;
   render();
+ };
+ // A-2(2026-08-29) 未提出者に通知（まだ1日も入力していない人へ・手動）。
+ //   sf_reminder_targets（自動リマインド）は「今日が締切日」限定なので、それとは別物として今すぐ送る
+ if($("sfmg-notify-unsubmitted"))$("sfmg-notify-unsubmitted").onclick=async()=>{
+  const b=$("sfmg-notify-unsubmitted");b.disabled=true;
+  const p=sfPeriodFromIdx(sfMgPeriodIdx);
+  const dates=sfDateList(p);
+  const [{data:members},{data:shifts}]=await Promise.all([
+   sb.from("user_stores").select("user_id,users(id,name,line_user_id,is_active)").eq("store_id",sfMgStore),
+   sb.from("sf_shifts").select("user_id,work_date").eq("store_id",sfMgStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1])
+  ]);
+  const submittedIds=new Set((shifts||[]).map(s=>s.user_id));
+  const targets=(members||[]).map(m=>m.users).filter(u=>u&&u.is_active&&!submittedIds.has(u.id));
+  if(!targets.length){toast("未提出の人はいません");b.disabled=false;return}
+  let sent=0,skipped=0;
+  for(const u of targets){
+   if(!u.line_user_id){skipped++;continue}
+   const text=`${u.name}さん\n\nシフト提出のリマインドです。\n「${p.label}」期間のシフトがまだ提出されていません。\nお手数ですが、日報アプリの📅シフトからご提出をお願いします。`;
+   const r=await lineFn({action:"push_user",user_id:u.id,text});
+   if(r&&r.ok)sent++;
+  }
+  b.disabled=false;
+  toast(`通知を送りました: ${sent}名${skipped?`（LINE未連携のため${skipped}名はスキップ）`:""}`);
  };
  // プリセット
  if($("sfps-store"))$("sfps-store").onchange=e=>{sfPsStore=e.target.value;render()};

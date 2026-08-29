@@ -4489,7 +4489,7 @@ function ageOf(uid){
  if(m<0||(m===0&&now.getDate()<d.getDate()))age--;
  return (age>=0&&age<120)?age:null;
 }
-let payMonth=null,payExtraStores={}; // 2026-08-30続き: 給与・インセンティブ配分の管理画面（マスターのみ・月単位に変更）
+let payMonth=null,payExtraStores={},payViewMode=null; // 2026-08-30続き: 給与・インセンティブ配分の管理画面（マスターのみ・月単位に変更・一覧/入力の2モード）
 let nuRole=null,nuStores=[],euRole=null,euStores=[],lastIssued=null;
 let ivRole=null,ivStores=[],lastInvite=null;
 const isAdmin=()=>me&&(me.role==="CEO"||me.role==="HQ");
@@ -4561,13 +4561,22 @@ async function adminView(){
 //   ③店舗プルダウンで絞り込むのではなく、人ごとに「どの店舗にいくら」を並べて合計が見えるようにする
 //   ④<input type=month>にして何ヶ月でも過去に遡れるようにする
 const PAY_TARGET_ROLES=["SHAIN","TENCHO","HQ","TEAM"]; // CEO(本人の給与をここで設定しない)・AL(時給)は対象外
+const PAY_KIND_LABEL={base:"基本給",commute:"交通費",incentive:"インセンティブ予定",bonus:"賞与予定"};
+// 2026-08-30続き2: 実機フィードバックで「一覧表示」モードを追加（ユーザー提供の社員人件費DB
+//   スプレッドシートに寄せた、従業員別1行＋店舗別集計の2枚のテーブル）。入力モードは店舗ブロックを
+//   <details>で開閉できるようにして縦に長くなりすぎないようにした
 async function adminPayrollView(){
  if(!me.is_master)return `<p class="muted">この画面はマスターのみ利用できます。</p>`;
  if(!payMonth){const t=new Date();payMonth=t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0")}
+ if(!payViewMode)payViewMode="table";
  let h=`<h2>💴 給与・インセンティブ配分</h2>
  <p class="muted">スマレジ給与明細から自動取得した固定給・通勤手当を参考に、月ごと・店舗ごとの内訳を確定させます。ここで保存した金額は、シフト調整画面の社員人件費で使われます（対象: 社員・店長・本部・チーム長。時給制のアルバイトは対象外）。</p>
  <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
   <input type="month" class="inp" id="pay-month" value="${payMonth}" style="flex:1;min-width:140px;margin:0">
+  <select class="inp" id="pay-viewmode" style="flex:1;min-width:140px;margin:0">
+   <option value="table" ${payViewMode==="table"?"selected":""}>📋 一覧表示</option>
+   <option value="edit" ${payViewMode==="edit"?"selected":""}>✏️ 入力する</option>
+  </select>
  </div>`;
  const {data:us}=await sb.from("users").select("id,name,role").in("role",PAY_TARGET_ROLES).eq("is_active",true);
  const roleOrder={SHAIN:0,TENCHO:1,TEAM:2,HQ:3};
@@ -4586,36 +4595,89 @@ async function adminPayrollView(){
  });
  const homeStoresByUser={};(usRows||[]).forEach(r=>{(homeStoresByUser[r.user_id]=homeStoresByUser[r.user_id]||new Set()).add(r.store_id)});
  const sname=id=>{const s=stores.find(x=>x.id===id);return s?s.name:"?"};
- const KIND_LABEL={base:"基本給",commute:"交通費",incentive:"インセンティブ予定",bonus:"賞与予定"};
- if(!people.length)h+=`<p class="muted">対象の従業員がいません。</p>`;
- people.forEach(u=>{
+ // 人ごとに共通の下ごしらえ（表示モード・入力モードの両方で使う）
+ const rows=people.map(u=>{
   const pr=payrollByUser[u.id];
   const byStore=allocByUserStore[u.id]||{};
   const storeIds=[...new Set([...Object.keys(byStore),...(homeStoresByUser[u.id]||[]),...(payExtraStores[u.id]||[])])];
-  let totalBaseCommute=0,totalIncentiveBonus=0;
-  storeIds.forEach(sid=>{
-   const a=byStore[sid]||{};
-   totalBaseCommute+=Number((a.base&&a.base.amount)||0)+Number((a.commute&&a.commute.amount)||0);
-   totalIncentiveBonus+=Number((a.incentive&&a.incentive.amount)||0)+Number((a.bonus&&a.bonus.amount)||0);
+  const kindTotal=k=>storeIds.reduce((a,sid)=>a+Number((byStore[sid]&&byStore[sid][k]&&byStore[sid][k].amount)||0),0);
+  const base=kindTotal("base"),commute=kindTotal("commute"),incentive=kindTotal("incentive"),bonus=kindTotal("bonus");
+  const autoTotal=pr?Number(pr.fixed_salary_amount||0)+Number(pr.commute_allowance||0):null;
+  const diff=autoTotal!=null?(base+commute)-autoTotal:null;
+  return {u,pr,byStore,storeIds,base,commute,incentive,bonus,autoTotal,diff};
+ });
+ if(!people.length)return h+`<p class="muted">対象の従業員がいません。</p>`;
+ h+= payViewMode==="table" ? payTableHtml(rows,payMonth,sname) : payEditHtml(rows,payMonth,sname);
+ return h;
+}
+// 一覧表示モード: 従業員別1行の表＋店舗別集計の表（ユーザー提供の社員人件費DBスプレッドシートに寄せた形）
+function payTableHtml(rows,payMonth,sname){
+ const diffBadge=(diff)=>diff==null?'<span class="muted">自動取得なし</span>':(Math.abs(diff)<=1?'<span class="badge g">一致</span>':`<span class="badge" style="background:#c0392b">差額${diff>0?"+":""}${Math.round(diff).toLocaleString()}</span>`);
+ let h=`<div class="card" style="overflow-x:auto"><h3 style="margin:0 0 8px">従業員別（${esc(payMonth)}分）</h3>
+ <table style="border-collapse:collapse;width:100%;font-size:12px;white-space:nowrap">
+  <tr><th style="text-align:left;padding:6px">氏名</th><th style="text-align:left;padding:6px">店舗</th><th style="padding:6px">基本給</th><th style="padding:6px">交通費</th><th style="padding:6px">インセンティブ</th><th style="padding:6px">賞与</th><th style="padding:6px">合計</th><th style="padding:6px">自動取得比較</th></tr>
+  ${rows.map(r=>{
+   const total=r.base+r.commute+r.incentive+r.bonus;
+   const storesLabel=r.storeIds.length?r.storeIds.map(sid=>esc(sname(sid))).join("・"):'<span class="muted">未設定</span>';
+   return `<tr style="border-top:1px solid var(--line,#eee)">
+    <td style="padding:6px"><b>${esc(r.u.name)}</b><div class="muted" style="font-size:10px">${ROLE_NAME[r.u.role]||r.u.role}</div></td>
+    <td style="padding:6px">${storesLabel}</td>
+    <td style="padding:6px;text-align:right">${Math.round(r.base).toLocaleString()}</td>
+    <td style="padding:6px;text-align:right">${Math.round(r.commute).toLocaleString()}</td>
+    <td style="padding:6px;text-align:right">${Math.round(r.incentive).toLocaleString()}</td>
+    <td style="padding:6px;text-align:right">${Math.round(r.bonus).toLocaleString()}</td>
+    <td style="padding:6px;text-align:right"><b>${Math.round(total).toLocaleString()}</b></td>
+    <td style="padding:6px">${diffBadge(r.diff)}</td>
+   </tr>`;
+  }).join("")}
+ </table></div>`;
+ const byStoreTotal={};
+ rows.forEach(r=>{
+  r.storeIds.forEach(sid=>{
+   const t=(byStoreTotal[sid]=byStoreTotal[sid]||{base:0,commute:0,incentive:0,bonus:0});
+   const a=r.byStore[sid]||{};
+   t.base+=Number((a.base&&a.base.amount)||0);t.commute+=Number((a.commute&&a.commute.amount)||0);
+   t.incentive+=Number((a.incentive&&a.incentive.amount)||0);t.bonus+=Number((a.bonus&&a.bonus.amount)||0);
   });
+ });
+ h+=`<div class="card" style="overflow-x:auto;margin-top:12px"><h3 style="margin:0 0 8px">店舗別集計（${esc(payMonth)}分）</h3>
+ <table style="border-collapse:collapse;width:100%;font-size:12px;white-space:nowrap">
+  <tr><th style="text-align:left;padding:6px">店舗</th><th style="padding:6px">基本給</th><th style="padding:6px">交通費</th><th style="padding:6px">インセンティブ</th><th style="padding:6px">賞与</th><th style="padding:6px">人件費合計</th></tr>
+  ${Object.keys(byStoreTotal).length?Object.entries(byStoreTotal).map(([sid,t])=>{
+   const total=t.base+t.commute+t.incentive+t.bonus;
+   return `<tr style="border-top:1px solid var(--line,#eee)"><td style="padding:6px"><b>${esc(sname(sid))}</b></td><td style="padding:6px;text-align:right">${Math.round(t.base).toLocaleString()}</td><td style="padding:6px;text-align:right">${Math.round(t.commute).toLocaleString()}</td><td style="padding:6px;text-align:right">${Math.round(t.incentive).toLocaleString()}</td><td style="padding:6px;text-align:right">${Math.round(t.bonus).toLocaleString()}</td><td style="padding:6px;text-align:right"><b>${Math.round(total).toLocaleString()}</b></td></tr>`;
+  }).join(""):'<tr><td colspan="6" class="muted" style="padding:6px">まだ配分がありません</td></tr>'}
+ </table></div>`;
+ return h;
+}
+// 入力モード: 人ごとのカード。店舗ブロックは<details>で開閉できるようにして縦の長さを抑える
+function payEditHtml(rows,payMonth,sname){
+ return rows.map(({u,pr,byStore,storeIds})=>{
+  const addableStores=stores.filter(s=>!storeIds.includes(s.id));
+  const storeTotal=sid=>{const a=byStore[sid]||{};return Number((a.base&&a.base.amount)||0)+Number((a.commute&&a.commute.amount)||0)+Number((a.incentive&&a.incentive.amount)||0)+Number((a.bonus&&a.bonus.amount)||0)};
+  const totalBaseCommute=storeIds.reduce((a,sid)=>{const x=byStore[sid]||{};return a+Number((x.base&&x.base.amount)||0)+Number((x.commute&&x.commute.amount)||0)},0);
+  const totalIncentiveBonus=storeIds.reduce((a,sid)=>{const x=byStore[sid]||{};return a+Number((x.incentive&&x.incentive.amount)||0)+Number((x.bonus&&x.bonus.amount)||0)},0);
   const autoTotal=pr?Number(pr.fixed_salary_amount||0)+Number(pr.commute_allowance||0):null;
   const diff=autoTotal!=null?totalBaseCommute-autoTotal:null;
-  const addableStores=stores.filter(s=>!storeIds.includes(s.id));
-  h+=`<div class="card">
+  return `<div class="card">
    <b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>
    <div class="muted" style="font-size:11px;margin-top:4px">${pr?`自動取得（${esc(payMonth)}分・全店舗合算）: 固定給${Math.round(pr.fixed_salary_amount||0).toLocaleString()}円／通勤手当${Math.round(pr.commute_allowance||0).toLocaleString()}円${pr.fixed_overtime_wage?`（固定給の内、固定残業代${Math.round(pr.fixed_overtime_wage).toLocaleString()}円）`:""}`:`${esc(payMonth)}分の自動取得データはまだありません`}</div>
    ${storeIds.length?storeIds.map(sid=>{
     const a=byStore[sid]||{};
-    return `<div style="border-top:1px solid var(--line,#eee);margin-top:10px;padding-top:8px">
-     <div style="display:flex;justify-content:space-between;align-items:center">
-      <b style="font-size:13px">🏪 ${esc(sname(sid))}</b>
-      <button class="btn sm sub" data-paydelstore="${u.id}|${sid}" style="color:#c0392b">この店舗を削除</button>
+    return `<details style="border-top:1px solid var(--line,#eee);margin-top:10px;padding-top:8px" ${storeIds.length===1?"open":""}>
+     <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;list-style:none">
+      <span><b style="font-size:13px">🏪 ${esc(sname(sid))}</b> <span class="muted" style="font-size:11px">合計${Math.round(storeTotal(sid)).toLocaleString()}円</span></span>
+     </summary>
+     <div style="margin-top:8px">
+      <div style="display:flex;justify-content:flex-end">
+       <button class="btn sm sub" data-paydelstore="${u.id}|${sid}" style="color:#c0392b">この店舗を削除</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px">
+       ${["base","commute","incentive","bonus"].map(k=>`<div><label class="muted" style="font-size:11px">${PAY_KIND_LABEL[k]}</label><input type="number" id="payamt-${u.id}-${sid}-${k}" value="${a[k]?a[k].amount:""}" placeholder="0" style="margin:0"></div>`).join("")}
+      </div>
+      <input type="text" id="paynote-${u.id}-${sid}" placeholder="メモ（任意）" value="${esc((a.base&&a.base.note)||"")}" style="margin-top:6px">
      </div>
-     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px">
-      ${["base","commute","incentive","bonus"].map(k=>`<div><label class="muted" style="font-size:11px">${KIND_LABEL[k]}</label><input type="number" id="payamt-${u.id}-${sid}-${k}" value="${a[k]?a[k].amount:""}" placeholder="0" style="margin:0"></div>`).join("")}
-     </div>
-     <input type="text" id="paynote-${u.id}-${sid}" placeholder="メモ（任意）" value="${esc((a.base&&a.base.note)||"")}" style="margin-top:6px">
-    </div>`;
+    </details>`;
    }).join(""):'<p class="muted" style="margin-top:8px">まだ店舗が設定されていません。下から追加してください</p>'}
    <div style="display:flex;gap:6px;margin-top:10px;align-items:center">
     <select class="inp" id="paynewstore-${u.id}" style="flex:1;margin:0">
@@ -4627,8 +4689,7 @@ async function adminPayrollView(){
    <div class="muted" style="font-size:12px;margin-top:8px">配分合計（基本給＋交通費）: <b>${Math.round(totalBaseCommute).toLocaleString()}円</b>${autoTotal!=null?`　自動取得: ${Math.round(autoTotal).toLocaleString()}円　${Math.abs(diff)<=1?'<span class="badge g">一致</span>':`<span class="badge" style="background:#c0392b">差額${diff>0?"+":""}${Math.round(diff).toLocaleString()}円</span>`}`:""}${totalIncentiveBonus?`<br>インセンティブ・賞与予定: ${Math.round(totalIncentiveBonus).toLocaleString()}円`:""}</div>
    ${storeIds.length?`<button class="btn sm" data-paysaveuser="${u.id}" data-paystores="${storeIds.join(",")}" style="margin-top:8px">この人の内容を保存</button>`:""}
   </div>`;
- });
- return h;
+ }).join("");
 }
 
 // ===== v2.5 応募者管理（v2.5.2で独立タブ・フィルタ・CSV・費用対応） =====
@@ -6918,6 +6979,7 @@ function bindPage(){
  // 2026-08-30続き: 給与・インセンティブ配分（月単位・人ごとに店舗を並べる方式に改訂）
  if($("adpayroll"))$("adpayroll").onclick=()=>{adminMode="payroll";payExtraStores={};render()};
  if($("pay-month"))$("pay-month").onchange=e=>{payMonth=e.target.value;payExtraStores={};render()};
+ if($("pay-viewmode"))$("pay-viewmode").onchange=e=>{payViewMode=e.target.value;render()};
  document.querySelectorAll("[data-payaddstore]").forEach(b=>b.onclick=()=>{
   const uid=b.dataset.payaddstore;
   const sel=$("paynewstore-"+uid);

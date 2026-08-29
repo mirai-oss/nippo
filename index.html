@@ -2920,8 +2920,9 @@ async function shiftView(){
   <button class="sf-stepbtn ${sfMgStep==="request"?"active":""}" data-sftile="request"><b>①希望確認</b><small>半月・日別・出勤希望</small></button>
   <button class="sf-stepbtn ${sfMgStep==="adjust"?"active":""}" data-sftile="adjust"><b>②調整</b><small>不足・人件費を見て調整</small></button>
   <button class="sf-stepbtn ${sfMgStep==="confirmed"?"active":""}" data-sftile="confirmed"><b>③確定</b><small>未確認・変更申請</small></button>
-  <button class="sf-stepbtn" data-nav="actual"><b>④実績・差分</b><small>叶え率・売上実績</small></button>
   <button class="sf-stepbtn ${sfMgStep==="presets"?"active":""}" data-sftile="presets"><b>⏱ 時間帯設定</b><small>ランチ/ディナー等</small></button>
+  <!-- 2026-08-29続き: 「④実績・差分」タイルは削除（ユーザー指摘: サイドバーの「実績確認」と重複するため）。
+       実績確認への導線は左ナビの「実績確認」（?page=actual）に一本化 -->
  </div>`;
  if(sfMgStep==="mysubmit")return `<div class="sf-theme">${h}${await sfSubmitView()}</div>`;
  if(sfMgStep==="presets")return `<div class="sf-theme">${h}${await sfPresetsView()}</div>`;

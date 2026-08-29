@@ -3237,7 +3237,7 @@ function sfAdjustStepHtml(ctx){
    if(alloc&&alloc.length){
     cost=alloc.reduce((a,r)=>a+Number(r.amount||0),0);
    }else if(pr){
-    cost=(Number(pr.taxable_amount||0)+Number(pr.commute_allowance||0))*0.5; // 半月ぶんの概算按分
+    cost=(Number(pr.fixed_salary_amount||0)+Number(pr.commute_allowance||0))*0.5; // 半月ぶんの概算按分（2026-08-29訂正: 固定給＝支給額合計−通勤手当）
     autoFallback.add(u.id);
    }else{
     cost=0;unknownWage.add(u.id);
@@ -3664,7 +3664,7 @@ async function sfManageView(){
   sb.from("dash_sales_target_daily").select("sales_target").eq("store_id",sfMgStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]),
   sb.from("employee_profiles").select("user_id,smaregi_staff_id").in("user_id",idsForIn),
   sb.from("sf_help_availability").select("user_id").gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]), // A-6
-  sb.from("sf_payroll_sync").select("user_id,taxable_amount,commute_allowance").eq("year_month",payrollYm).in("user_id",idsForIn), // 2026-08-29続き
+  sb.from("sf_payroll_sync").select("user_id,fixed_salary_amount,commute_allowance").eq("year_month",payrollYm).in("user_id",idsForIn), // 2026-08-29続き
   sb.from("sf_payroll_allocations").select("user_id,kind,amount").eq("store_id",sfMgStore).eq("period_key",p.key).in("user_id",idsForIn) // 2026-08-29続き
  ]);
  const storeCountMap={};(allUS||[]).forEach(r=>{storeCountMap[r.user_id]=(storeCountMap[r.user_id]||0)+1});
@@ -4585,7 +4585,7 @@ async function adminPayrollView(){
   const a=allocByUser[u.id]||{};
   h+=`<div class="card">
    <b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>
-   <div class="muted" style="font-size:11px;margin-top:4px">${pr?`自動取得（${esc(yearMonth)}分・全店舗合算）: 課税対象額${Math.round(pr.taxable_amount||0).toLocaleString()}円／通勤手当${Math.round(pr.commute_allowance||0).toLocaleString()}円${pr.fixed_overtime_wage?`（内、固定残業代${Math.round(pr.fixed_overtime_wage).toLocaleString()}円）`:""}`:`${esc(yearMonth)}分の自動取得データはまだありません`}</div>
+   <div class="muted" style="font-size:11px;margin-top:4px">${pr?`自動取得（${esc(yearMonth)}分・全店舗合算）: 固定給${Math.round(pr.fixed_salary_amount||0).toLocaleString()}円／通勤手当${Math.round(pr.commute_allowance||0).toLocaleString()}円${pr.fixed_overtime_wage?`（固定給の内、固定残業代${Math.round(pr.fixed_overtime_wage).toLocaleString()}円）`:""}`:`${esc(yearMonth)}分の自動取得データはまだありません`}</div>
    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
     ${["base","commute","incentive","bonus"].map(k=>`<div><label class="muted" style="font-size:11px">${KIND_LABEL[k]}</label><input type="number" id="payamt-${u.id}-${k}" value="${a[k]?a[k].amount:(k==="commute"&&pr?Math.round(pr.commute_allowance||0):"")}" placeholder="0" style="margin:0"></div>`).join("")}
    </div>

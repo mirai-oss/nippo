@@ -2812,6 +2812,7 @@ let sfMgStore=null,sfMgPeriodIdx=null;
 let sfPsStore=null;
 let sfMgStep="request",sfReqDate=null; // v2.7 ①希望確認 ②調整（担当BシフトUIv5）
 let sfSlotFilter="all"; // B-2(2026-08-29) "all"|"lunch"|"dinner"。①希望確認・②調整の絞り込み
+let sfCorrectionEditKey=null; // B-1(2026-08-29) "uid|ds|kind"。勤怠修正申請フォームの開閉
 let arStore=null,arMode="half",arMonth=null,arHalf=null,arDate=null,arFrom=null,arTo=null; // v2.7 実績確認（シフトから分離。日別/半月/月次/期間で自由に遡れる）
 
 // v2.6.81 未提出者へのLINEリマインド。hq_generate_today()と同じ「画面を開いたときにチェック」方式（外部cronなし）
@@ -3259,6 +3260,67 @@ function sfActualStepHtml(ctx){
  </div>
  <p class="muted" style="margin-top:6px">実績データはスマレジタイムカードの打刻実績(labor_cost_daily)・売上実績データ(dash_sales_daily)を読み取り専用で参照しています。PA予定・実績・削減・超過は今日（${esc(today)}）までに経過した日だけで集計しています。</p>`;
 }
+// B-1(2026-08-29) 遅刻・早退・欠勤の自動判定＋修正申請フロー
+//   自動判定: 公開済みシフト(sf_shifts status=published)×実績(labor_cost_daily)を突き合わせるだけ
+//   （tardy/early_leavingはスマレジ側で判定済みの値をそのまま使う。行が無ければ欠勤扱い）。
+//   実際のスマレジ側打刻データの書き換えは対象外（timecard.attendances:write未申請のため）。
+//   修正申請は受付・一覧・承認/却下までを実装し、承認後の反映は店長・本部が手動で行う運用
+const CORRECTION_KIND_LABEL={late:"遅刻",early_leave:"早退",absence:"欠勤",other:"その他"};
+function sfAttendanceIssuesHtml(dates,people,shByUserDate,laborByUserDate,storeId,corrections){
+ const today=todayStr();
+ const issues=[];
+ people.forEach(u=>{
+  dates.forEach(ds=>{
+   if(ds>=today)return; // 未来日・当日は判定しない（当日はまだ勤務中の可能性がある）
+   const s=shByUserDate[u.id+"|"+ds];
+   if(!s||s.is_off||s.status!=="published")return; // 公開済みの出勤予定がある日だけ判定
+   const lk=laborByUserDate[u.id+"|"+ds];
+   if(!lk||!lk.minutes){issues.push({u,ds,kind:"absence"});return}
+   if(lk.tardy)issues.push({u,ds,kind:"late"});
+   if(lk.early)issues.push({u,ds,kind:"early_leave"});
+  });
+ });
+ const canManage=sfCanManage(storeId);
+ const pending=(corrections||[]).filter(c=>c.status==="pending");
+ let h=`<div class="card"><h3 style="margin:0 0 8px">⏰ 遅刻・早退・欠勤（自動判定）</h3>`;
+ if(!issues.length){
+  h+=`<p class="muted" style="margin:0">対象期間・対象店舗で検知した遅刻・早退・欠勤はありません</p>`;
+ }else{
+  h+=issues.map(is=>{
+   const mine=is.u.id===me.id;
+   const already=(corrections||[]).find(c=>c.user_id===is.u.id&&c.work_date===is.ds&&c.kind===is.kind);
+   return `<div class="row" style="cursor:default"><span><b>${esc(is.u.name)}</b>　${sfFmtDateShort(is.ds)}　<span class="badge" style="background:${is.kind==="absence"?"#c0392b":"#d97706"}">${CORRECTION_KIND_LABEL[is.kind]}</span>${already?` <span class="muted" style="font-size:11px">（申請${already.status==="pending"?"中":already.status==="approved"?"承認済み":"却下"}）</span>`:""}</span>
+    ${mine&&!already?`<button class="btn sm sub" data-sfcorr-open="${is.u.id}|${is.ds}|${is.kind}" style="margin:0">修正申請</button>`:""}</div>`;
+  }).join("");
+ }
+ if(sfCorrectionEditKey){
+  const [,ds,kind]=sfCorrectionEditKey.split("|");
+  h+=`<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
+   <h3 style="margin:0 0 8px">${sfFmtDateShort(ds)}の修正申請</h3>
+   <select class="inp" id="sfcorr-kind">${Object.entries(CORRECTION_KIND_LABEL).map(([k,l])=>`<option value="${k}" ${k===kind?"selected":""}>${l}</option>`).join("")}</select>
+   <textarea id="sfcorr-reason" rows="3" placeholder="打刻がおかしい理由を書いてください（例: 12:00出勤だが打刻漏れで記録されていない）"></textarea>
+   <p class="muted" style="margin:6px 0 0;font-size:11px">承認後、実際のスマレジ側の打刻修正は店長・本部が手動で行います</p>
+   <div style="margin-top:8px;display:flex;gap:8px">
+    <button class="btn sm" id="sfcorr-send">送信する</button>
+    <button class="btn sm sub" id="sfcorr-close">閉じる</button>
+   </div>
+  </div>`;
+ }
+ h+=`</div>`;
+ if(canManage&&pending.length){
+  h+=`<div class="card"><h3 style="margin:0 0 8px">📋 勤怠修正申請（未対応 ${pending.length}件）</h3>`;
+  h+=pending.map(c=>{
+   const u=people.find(x=>x.id===c.user_id);
+   return `<div style="padding:8px 0;border-bottom:1px solid var(--line,#eee)">
+    <div><b>${esc(u?u.name:"?")}</b>　${sfFmtDateShort(c.work_date)}　<span class="badge" style="background:#d97706">${CORRECTION_KIND_LABEL[c.kind]||c.kind}</span></div>
+    <div class="muted" style="margin:3px 0">${esc(c.reason||"")}</div>
+    <div style="display:flex;gap:6px"><button class="btn sm" data-sfcorr-approve="${c.id}">承認</button><button class="btn sm sub" data-sfcorr-reject="${c.id}">却下</button></div>
+   </div>`;
+  }).join("");
+  h+=`</div>`;
+ }
+ return h;
+}
 
 // ===== 実績確認（シフトから独立・v2.7） =====
 // ユーザー要望: 「実績確認とシフトはページを分けたい」「過去分もさかのぼって見たい。日別・半月毎・1ヵ月毎・期間」
@@ -3312,24 +3374,29 @@ async function actualReportView(){
  const {data:members}=await sb.from("user_stores").select("user_id,users(id,name,role,is_active)").eq("store_id",arStore);
  const people=(members||[]).map(m=>m.users).filter(u=>u&&u.is_active).sort((a,b)=>a.name.localeCompare(b.name,"ja"));
  const peopleIds=people.map(u=>u.id);
- const [{data:shifts},{data:laborRows},{data:targets},{data:actualsRows},wageRates]=await Promise.all([
-  sb.from("sf_shifts").select("user_id,work_date,start_time,end_time,break_minutes,is_off").eq("store_id",arStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
-  sb.from("labor_cost_daily").select("user_id,work_date,worked_minutes,computed_cost,smaregi_estimate_cost").eq("store_id",arStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
+ const idsForIn=peopleIds.length?peopleIds:["00000000-0000-0000-0000-000000000000"];
+ const [{data:shifts},{data:laborRows},{data:targets},{data:actualsRows},wageRates,{data:corrections}]=await Promise.all([
+  sb.from("sf_shifts").select("user_id,work_date,start_time,end_time,break_minutes,is_off,status").eq("store_id",arStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
+  sb.from("labor_cost_daily").select("user_id,work_date,worked_minutes,computed_cost,smaregi_estimate_cost,tardy,early_leaving").eq("store_id",arStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]), // B-1(2026-08-29) tardy/early_leavingを追加
   sb.from("dash_sales_target_daily").select("biz_date,sales_target").eq("store_id",arStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]),
   sb.from("dash_sales_daily").select("biz_date,sales,cost,labor").eq("store_id",arStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]),
-  sfComputeWageRates(arStore,peopleIds)
+  sfComputeWageRates(arStore,peopleIds),
+  sb.from("sf_attendance_correction_requests").select("*").eq("store_id",arStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]).order("created_at",{ascending:false}) // B-1
  ]);
  const shByUserDate={};(shifts||[]).forEach(s=>{shByUserDate[s.user_id+"|"+s.work_date]=s});
  const laborByUserDate={};
  (laborRows||[]).forEach(r=>{
   const key=r.user_id+"|"+r.work_date;
-  const a=laborByUserDate[key]||(laborByUserDate[key]={minutes:0,cost:0});
+  const a=laborByUserDate[key]||(laborByUserDate[key]={minutes:0,cost:0,tardy:false,early:false});
   a.minutes+=r.worked_minutes||0;
   a.cost+=(r.computed_cost!=null?r.computed_cost:r.smaregi_estimate_cost)||0;
+  if(r.tardy)a.tardy=true;
+  if(r.early_leaving)a.early=true;
  });
  const salesTargetByDate={};(targets||[]).forEach(r=>{salesTargetByDate[r.biz_date]=r.sales_target||0});
  const salesActualByDate={};(actualsRows||[]).forEach(r=>{salesActualByDate[r.biz_date]={sales:r.sales||0,cost:r.cost||0,labor:r.labor||0}});
  h+=sfActualStepHtml({dates,people,shByUserDate,laborByUserDate,salesTargetByDate,salesActualByDate,wageRates});
+ h+=sfAttendanceIssuesHtml(dates,people,shByUserDate,laborByUserDate,arStore,corrections||[]); // B-1(2026-08-29)
  return h;
 }
 function bindActualPage(){
@@ -3341,6 +3408,29 @@ function bindActualPage(){
  document.querySelectorAll("#ar-half>div").forEach(d=>d.onclick=()=>{arHalf=d.dataset.h;render()});
  if($("ar-from"))$("ar-from").onchange=e=>{arFrom=e.target.value;render()};
  if($("ar-to"))$("ar-to").onchange=e=>{arTo=e.target.value;render()};
+ // B-1(2026-08-29) 勤怠修正申請
+ document.querySelectorAll("[data-sfcorr-open]").forEach(b=>b.onclick=()=>{sfCorrectionEditKey=b.dataset.sfcorrOpen;render()});
+ if($("sfcorr-close"))$("sfcorr-close").onclick=()=>{sfCorrectionEditKey=null;render()};
+ if($("sfcorr-send"))$("sfcorr-send").onclick=async()=>{
+  const [uid,ds]=sfCorrectionEditKey.split("|");
+  const kind=$("sfcorr-kind").value,reason=$("sfcorr-reason").value.trim();
+  if(!reason){toast("理由を入力してください",true);return}
+  $("sfcorr-send").disabled=true;
+  const {error}=await sb.from("sf_attendance_correction_requests").insert({user_id:uid,store_id:arStore,work_date:ds,kind,reason});
+  $("sfcorr-send").disabled=false;
+  if(error){toast("送信エラー: "+error.message,true);return}
+  sfCorrectionEditKey=null;toast("修正申請を送りました");render();
+ };
+ document.querySelectorAll("[data-sfcorr-approve]").forEach(b=>b.onclick=async()=>{
+  const {error}=await sb.from("sf_attendance_correction_requests").update({status:"approved",resolved_at:new Date().toISOString(),resolved_by:me.id}).eq("id",b.dataset.sfcorrApprove);
+  if(error){toast("エラー: "+error.message,true);return}
+  toast("承認しました");render();
+ });
+ document.querySelectorAll("[data-sfcorr-reject]").forEach(b=>b.onclick=async()=>{
+  const {error}=await sb.from("sf_attendance_correction_requests").update({status:"rejected",resolved_at:new Date().toISOString(),resolved_by:me.id}).eq("id",b.dataset.sfcorrReject);
+  if(error){toast("エラー: "+error.message,true);return}
+  toast("却下しました");render();
+ });
 }
 
 async function sfManageView(){

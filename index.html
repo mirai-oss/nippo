@@ -251,7 +251,8 @@ const FEATURES={
  recruit:"採用担当（応募者管理）",
  recruit_all:"応募者を全店舗ぶん見る（外すと担当店舗だけ）",
  evaluate:"評価者（従業員評価）※次バージョンから",
- kpi_config:"KPI・評価設定 ※次バージョンから"
+ kpi_config:"KPI・評価設定 ※次バージョンから",
+ labor_cost_view:"勤怠実績・人件費データの閲覧（実績確認・調整グリッド等）※担当DのRLS対応待ち。2026-08-29ユーザー要望で追加"
 };
 // ===== v2.5 応募者管理 =====
 const APPLICANT_STATUS={new:"新規",contacted:"連絡済み",interview_set:"面接設定",interviewed:"面接済み",hired:"採用",retired:"退職",noshow:"バックレ",rejected:"不採用",declined:"辞退"};
@@ -327,7 +328,8 @@ const FEATURE_DEFAULTS={ // DB未設定時のフォールバック（v2.3まで�
  recruit:["CEO","HQ"],
  recruit_all:["CEO","HQ"],
  evaluate:["CEO","HQ","TEAM","TENCHO"],
- kpi_config:["CEO","HQ"]
+ kpi_config:["CEO","HQ"],
+ labor_cost_view:["CEO","HQ","TEAM","TENCHO"] // 2026-08-29 現状のlabor_cost_daily RLS(CEO/HQ/TEAM)にTENCHOを加えた既定値
 };
 const ROLES_ALL=Object.keys(ROLE_NAME);
 const FMT_ROLES=["AL","SHAIN","TENCHO","TEAM","HQ","GAIHAN"]; // v2.6.26 フォーマットを作れる役職

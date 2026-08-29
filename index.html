@@ -4562,6 +4562,14 @@ async function adminView(){
 //   ④<input type=month>にして何ヶ月でも過去に遡れるようにする
 const PAY_TARGET_ROLES=["SHAIN","TENCHO","HQ","TEAM"]; // CEO(本人の給与をここで設定しない)・AL(時給)は対象外
 const PAY_KIND_LABEL={base:"基本給",commute:"交通費",incentive:"インセンティブ予定",bonus:"賞与予定"};
+// 2026-08-30続き3: <input type=month>だと選びにくいとの指摘で「○年○月」の2つのプルダウンに変更
+function payMonthSelectHtml(ym){
+ const [y,m]=ym.split("-").map(Number);
+ const nowY=new Date().getFullYear();
+ const years=[];for(let yy=nowY+1;yy>=nowY-5;yy--)years.push(yy); // 未来1年・過去5年ぶん選べる
+ return `<select class="inp" id="pay-year" style="flex:1;min-width:100px;margin:0">${years.map(yy=>`<option value="${yy}" ${yy===y?"selected":""}>${yy}年</option>`).join("")}</select>
+ <select class="inp" id="pay-monthsel" style="flex:1;min-width:90px;margin:0">${Array.from({length:12},(_,i)=>i+1).map(mm=>`<option value="${mm}" ${mm===m?"selected":""}>${mm}月</option>`).join("")}</select>`;
+}
 // 2026-08-30続き2: 実機フィードバックで「一覧表示」モードを追加（ユーザー提供の社員人件費DB
 //   スプレッドシートに寄せた、従業員別1行＋店舗別集計の2枚のテーブル）。入力モードは店舗ブロックを
 //   <details>で開閉できるようにして縦に長くなりすぎないようにした
@@ -4572,15 +4580,22 @@ async function adminPayrollView(){
  let h=`<h2>💴 給与・インセンティブ配分</h2>
  <p class="muted">スマレジ給与明細から自動取得した固定給・通勤手当を参考に、月ごと・店舗ごとの内訳を確定させます。ここで保存した金額は、シフト調整画面の社員人件費で使われます（対象: 社員・店長・本部・チーム長。時給制のアルバイトは対象外）。</p>
  <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-  <input type="month" class="inp" id="pay-month" value="${payMonth}" style="flex:1;min-width:140px;margin:0">
+  ${payMonthSelectHtml(payMonth)}
   <select class="inp" id="pay-viewmode" style="flex:1;min-width:140px;margin:0">
    <option value="table" ${payViewMode==="table"?"selected":""}>📋 一覧表示</option>
    <option value="edit" ${payViewMode==="edit"?"selected":""}>✏️ 入力する</option>
   </select>
  </div>`;
- const {data:us}=await sb.from("users").select("id,name,role").in("role",PAY_TARGET_ROLES).eq("is_active",true);
+ const {data:usAll}=await sb.from("users").select("id,name,role").in("role",PAY_TARGET_ROLES).eq("is_active",true);
  const roleOrder={SHAIN:0,TENCHO:1,TEAM:2,HQ:3};
- const people=(us||[]).sort((a,b)=>(roleOrder[a.role]??9)-(roleOrder[b.role]??9)||a.name.localeCompare(b.name,"ja"));
+ const allIdsForIn=(usAll&&usAll.length)?usAll.map(u=>u.id):["00000000-0000-0000-0000-000000000000"];
+ const {data:hiddenRows}=await sb.from("sf_payroll_hidden").select("user_id").eq("year_month",payMonth).in("user_id",allIdsForIn); // 2026-08-30続き3
+ const hiddenSet=new Set((hiddenRows||[]).map(r=>r.user_id));
+ const hiddenPeople=(usAll||[]).filter(u=>hiddenSet.has(u.id));
+ if(hiddenPeople.length)h+=`<details class="card"><summary style="cursor:pointer">🚫 この月は非表示にしている人（${hiddenPeople.length}名）</summary>
+  ${hiddenPeople.map(u=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--line,#eee)"><span>${esc(u.name)}　<span class="badge b">${ROLE_NAME[u.role]||u.role}</span></span><button class="btn sm sub" data-payshow="${u.id}">復活する</button></div>`).join("")}
+ </details>`;
+ const people=(usAll||[]).filter(u=>!hiddenSet.has(u.id)).sort((a,b)=>(roleOrder[a.role]??9)-(roleOrder[b.role]??9)||a.name.localeCompare(b.name,"ja"));
  const peopleIds=people.map(u=>u.id);
  const idsForIn=peopleIds.length?peopleIds:["00000000-0000-0000-0000-000000000000"];
  const [{data:payrollRows},{data:allocRows},{data:usRows}]=await Promise.all([
@@ -4660,7 +4675,10 @@ function payEditHtml(rows,payMonth,sname){
   const autoTotal=pr?Number(pr.fixed_salary_amount||0)+Number(pr.commute_allowance||0):null;
   const diff=autoTotal!=null?totalBaseCommute-autoTotal:null;
   return `<div class="card">
-   <b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>
+   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+    <div><b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span></div>
+    <button class="btn sm sub" data-payhide="${u.id}" style="flex-shrink:0;font-size:11px">🚫 この月は非表示</button>
+   </div>
    <div class="muted" style="font-size:11px;margin-top:4px">${pr?`自動取得（${esc(payMonth)}分・全店舗合算）: 固定給${Math.round(pr.fixed_salary_amount||0).toLocaleString()}円／通勤手当${Math.round(pr.commute_allowance||0).toLocaleString()}円${pr.fixed_overtime_wage?`（固定給の内、固定残業代${Math.round(pr.fixed_overtime_wage).toLocaleString()}円）`:""}`:`${esc(payMonth)}分の自動取得データはまだありません`}</div>
    ${storeIds.length?storeIds.map(sid=>{
     const a=byStore[sid]||{};
@@ -6978,8 +6996,26 @@ function bindPage(){
  if($("adstores"))$("adstores").onclick=()=>{adminMode="stores";stList=null;stSmaregi=undefined;lastIssued=null;lastInvite=null;render()};
  // 2026-08-30続き: 給与・インセンティブ配分（月単位・人ごとに店舗を並べる方式に改訂）
  if($("adpayroll"))$("adpayroll").onclick=()=>{adminMode="payroll";payExtraStores={};render()};
- if($("pay-month"))$("pay-month").onchange=e=>{payMonth=e.target.value;payExtraStores={};render()};
+ const payMonthPick=()=>{if(!$("pay-year")||!$("pay-monthsel"))return;payMonth=$("pay-year").value+"-"+String($("pay-monthsel").value).padStart(2,"0");payExtraStores={};render()};
+ if($("pay-year"))$("pay-year").onchange=payMonthPick;
+ if($("pay-monthsel"))$("pay-monthsel").onchange=payMonthPick;
  if($("pay-viewmode"))$("pay-viewmode").onchange=e=>{payViewMode=e.target.value;render()};
+ document.querySelectorAll("[data-payhide]").forEach(b=>b.onclick=async()=>{ // 2026-08-30続き3
+  const uid=b.dataset.payhide;
+  b.disabled=true;
+  const {error}=await sb.from("sf_payroll_hidden").upsert({user_id:uid,year_month:payMonth,hidden_by:me.id},{onConflict:"user_id,year_month"});
+  b.disabled=false;
+  if(error){toast("エラー: "+error.message,true);return}
+  toast("この月は非表示にしました");render();
+ });
+ document.querySelectorAll("[data-payshow]").forEach(b=>b.onclick=async()=>{
+  const uid=b.dataset.payshow;
+  b.disabled=true;
+  const {error}=await sb.from("sf_payroll_hidden").delete().eq("user_id",uid).eq("year_month",payMonth);
+  b.disabled=false;
+  if(error){toast("エラー: "+error.message,true);return}
+  toast("復活しました");render();
+ });
  document.querySelectorAll("[data-payaddstore]").forEach(b=>b.onclick=()=>{
   const uid=b.dataset.payaddstore;
   const sel=$("paynewstore-"+uid);

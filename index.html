@@ -2855,14 +2855,16 @@ async function sfSubmitView(){
  const dates=sfDateList(p);
  const now=new Date();
  const isPastDeadline=now>p.deadline;
- const [{data:presets},{data:shifts},{data:changeReqs},{data:helpRows}]=await Promise.all([
+ const [{data:presets},{data:shifts},{data:changeReqs},{data:helpRows},{data:boostRows}]=await Promise.all([
   sb.from("sf_time_presets").select("*").eq("store_id",sfSubStore).eq("is_active",true).order("sort_order"),
   sb.from("sf_shifts").select("*").eq("user_id",me.id).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
   sb.from("sf_change_requests").select("work_date,status").eq("user_id",me.id).eq("period_key",p.key), // B-2 ③
-  sb.from("sf_help_availability").select("work_date").eq("user_id",me.id).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]) // A-6
+  sb.from("sf_help_availability").select("work_date").eq("user_id",me.id).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]), // A-6
+  sb.from("sf_boost_days").select("*").eq("store_id",sfSubStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]) // B-3(2026-08-29)
  ]);
  const shMap={};(shifts||[]).forEach(s=>shMap[s.work_date]=s);
  const helpSet=new Set((helpRows||[]).map(r=>r.work_date)); // A-6
+ const boostByDate={};(boostRows||[]).forEach(b=>{boostByDate[b.work_date]=b}); // B-3
  const crMap={};(changeReqs||[]).forEach(c=>crMap[c.work_date]=c);
  const anyPublished=(shifts||[]).some(s=>s.status==="published");
  const unconfirmedCount=(shifts||[]).filter(s=>s.status==="published"&&!s.confirmed_at).length; // B-2 ③
@@ -2871,6 +2873,12 @@ async function sfSubmitView(){
   <select class="inp" id="sf-period" style="flex:1;min-width:140px;margin:0">${sfPeriodOptions(sfSubPeriodIdx)}</select>
  </div>
  <div class="info">対象期間: <b>${esc(p.label)}</b>｜提出期限: <b>${p.deadline.getMonth()+1}/${p.deadline.getDate()}</b>｜公開日: ${p.publish.getMonth()+1}/${p.publish.getDate()}${anyPublished?'　<span class="badge" style="background:#1e8e5a">公開済み</span>':""}</div>`;
+ // B-3(2026-08-29) 出勤強化日のバナー（対象期間に1件でもあれば、休みを選んでいてもまとめて出す）
+ const boostList=Object.values(boostByDate);
+ if(boostList.length)h+=`<div class="card sf-boost"><b>🔥 出勤強化日</b>${boostList.map(b=>{
+  const inc=b.incentive_type==="hourly"?`（時給+${b.incentive_amount||0}円）`:b.incentive_type==="shift"?`（1勤務+${b.incentive_amount||0}円）`:"";
+  return `<p style="margin:6px 0 0">${sfFmtDateShort(b.work_date)}${inc}: ${esc(b.message||"人手が足りないため、出られる方はぜひご協力ください")}</p>`;
+ }).join("")}</div>`;
  if(unconfirmedCount>0)h+=`<div class="card" style="border-color:var(--blue)"><b>✅ 確定シフトの確認</b><p class="muted" style="margin:6px 0 0">この期間の確定シフトを確認したら、下のボタンを押してください。</p><button class="btn sm" id="sf-confirm" style="margin-top:8px">確認しました</button></div>`;
  if(!presets||!presets.length)h+=`<p class="muted" style="margin-top:10px">この店舗の時間帯設定がまだありません。店長・本部が「⏱ 時間帯設定」から用意します。</p>`;
  h+=`<div class="card">`;
@@ -2881,8 +2889,9 @@ async function sfSubmitView(){
   const cr=crMap[ds];
   const crBadge=cr?`<br><span class="badge ${cr.status==="pending"?"":"g"}" style="font-size:9px">${cr.status==="pending"?"変更申請中":cr.status==="resolved"?"変更対応済み":"変更申請却下"}</span>`:"";
   const helpBadge=helpSet.has(ds)?` <span class="muted" title="他店舗のヘルプにも入れます">🤝</span>`:""; // A-6
-  h+=`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line,#eee)">
-   <div style="width:64px;flex-shrink:0">${sfFmtDateShort(ds)}</div>
+  const isBoost=!!boostByDate[ds]; // B-3
+  h+=`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line,#eee);${isBoost?"background:#fffbeb":""}">
+   <div style="width:64px;flex-shrink:0">${isBoost?"🔥 ":""}${sfFmtDateShort(ds)}</div>
    <div style="flex:1">${esc(label)}${helpBadge}${crBadge}</div>
    ${locked?(s&&s.status==="published"&&!cr?`<button class="btn sm sub" data-sfchange="${ds}">🔁変更希望</button>`:""):`<button class="btn sm sub" data-sfedit="${ds}">編集</button>`}
   </div>`;
@@ -2974,11 +2983,12 @@ async function sfComputeWageRates(storeId,peopleIds){ // labor_cost_daily（担�
  Object.keys(agg).forEach(uid=>{if(agg[uid].min>0)rates[uid]=agg[uid].cost/agg[uid].min});
  return rates;
 }
-function sfCalendarDayCard(ds,people,shByUserDate,presets,reqs,selected){
+// B-3(2026-08-29) isBoost引数を追加。出勤強化日は🔥バッジ＋オレンジ枠で常時目立たせる
+function sfCalendarDayCard(ds,people,shByUserDate,presets,reqs,selected,isBoost){
  const have=sfDayHaveTotal(ds,people,shByUserDate),need=sfDayNeedTotal(ds,presets,reqs);
  const short=need!==null&&have<need;
- return `<div class="sf-day ${selected?"active":""} ${short?"short":""}" data-sfreqday="${ds}">
-  <b>${sfFmtDateShort(ds)}</b>
+ return `<div class="sf-day ${selected?"active":""} ${short?"short":""} ${isBoost?"sf-boost":""}" data-sfreqday="${ds}">
+  <b>${isBoost?"🔥 ":""}${sfFmtDateShort(ds)}</b>
   <div class="sf-coverage"><strong>${have}${need!==null?` / ${need}人`:""}</strong>
    ${need===null?'<span class="sf-tag">未設定</span>':short?`<span class="sf-tag short">${need-have}人不足</span>`:'<span class="sf-tag ok">充足</span>'}</div>
  </div>`;
@@ -3030,24 +3040,49 @@ function sfRoleSummaryHtml(ds,people,shByUserDate,storeCountMap){
 //   この日付の①希望確認パネルに限り、他店舗からヘルプ可能な人（このstoreの所属ではない人）を別枠で出す
 async function sfRequestStepHtml(dates,people,shByUserDate,presets,reqs,storeCountMap){
  if(!sfReqDate||!dates.includes(sfReqDate))sfReqDate=dates[0];
- const cards=dates.map(ds=>sfCalendarDayCard(ds,people,shByUserDate,presets,reqs,ds===sfReqDate)).join("");
- const need=sfDayNeedTotal(sfReqDate,presets,reqs),have=sfDayHaveTotal(sfReqDate,people,shByUserDate);
  const myIds=new Set(people.map(u=>u.id));
- const {data:helpRows}=await sb.from("sf_help_availability").select("user_id,users!sf_help_availability_user_id_fkey(id,name,role)").eq("work_date",sfReqDate);
+ const [{data:helpRows},{data:boostRows}]=await Promise.all([
+  sb.from("sf_help_availability").select("user_id,users!sf_help_availability_user_id_fkey(id,name,role)").eq("work_date",sfReqDate),
+  sb.from("sf_boost_days").select("*").eq("store_id",sfMgStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]) // B-3(2026-08-29)
+ ]);
+ const boostByDate={};(boostRows||[]).forEach(b=>{boostByDate[b.work_date]=b});
+ const cards=dates.map(ds=>sfCalendarDayCard(ds,people,shByUserDate,presets,reqs,ds===sfReqDate,!!boostByDate[ds])).join("");
+ const need=sfDayNeedTotal(sfReqDate,presets,reqs),have=sfDayHaveTotal(sfReqDate,people,shByUserDate);
  const helpOthers=(helpRows||[]).filter(r=>r.users&&!myIds.has(r.user_id)).map(r=>r.users);
  const helpBlock=helpOthers.length?`<div class="card" style="background:#f0fff4"><h3 style="margin:0 0 6px">🤝 他店舗からヘルプ可能（${helpOthers.length}人）</h3>
   <p class="muted" style="margin:0">${helpOthers.map(u=>`${esc(u.name)}（${esc(ROLE_NAME[u.role]||u.role)}）`).join("・")}</p></div>`:"";
+ const boost=boostByDate[sfReqDate];
+ const boostBlock=sfCanManage(sfMgStore)?sfBoostEditHtml(sfReqDate,boost):(boost?`<div class="card sf-boost"><h3 style="margin:0 0 6px">🔥 出勤強化日</h3><p style="margin:0">${esc(boost.message||"")}</p></div>`:"");
  return `<div class="card"><h3>①希望確認</h3><div class="muted" style="margin-bottom:8px">日付をタップすると、その日の希望者一覧・出勤希望を確認できます</div>
   <div class="sf-halfgrid">${cards}</div></div>
  <div class="card"><h3>${sfFmtDateShort(sfReqDate)}の希望シフト</h3>
   <div class="sf-mini-grid"><div class="sf-mini"><small>必要</small><b>${need===null?"未設定":need+"人"}</b></div><div class="sf-mini"><small>希望提出</small><b>${have}人</b></div></div>
   ${sfDayPeopleHtml(sfReqDate,people,shByUserDate,storeCountMap,presets)}
  </div>
+ ${boostBlock}
  ${helpBlock}
  <div class="card"><h3>出勤希望ガント（${sfFmtDateShort(sfReqDate)}）</h3>
   ${sfDayGanttHtml(sfReqDate,people,shByUserDate,storeCountMap)||'<p class="muted">この日の希望提出はまだありません。</p>'}
   ${sfRoleSummaryHtml(sfReqDate,people,shByUserDate,storeCountMap)}
  </div>`;
+}
+// B-3(2026-08-29) 出勤強化日（U11）の作成・編集フォーム。管理者（sfCanManage）にだけ出す
+function sfBoostEditHtml(ds,boost){
+ return `<div class="card sf-boost"><h3 style="margin:0 0 8px">🔥 出勤強化日${boost?"（設定済み）":""}</h3>
+  <p class="muted" style="margin:0 0 6px">出てほしい日を目立たせ、対象日にひと言＋インセンティブを添えられます</p>
+  <textarea id="sfboost-msg" rows="2" placeholder="例: 土曜ディナーが繁忙予想。出られる人募集！">${esc(boost?boost.message||"":"")}</textarea>
+  <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;align-items:center">
+   <select class="inp" id="sfboost-type" style="width:auto;margin:0">
+    <option value="none" ${(!boost||boost.incentive_type==="none")?"selected":""}>インセンティブなし</option>
+    <option value="hourly" ${boost&&boost.incentive_type==="hourly"?"selected":""}>時給+○円</option>
+    <option value="shift" ${boost&&boost.incentive_type==="shift"?"selected":""}>1勤務+○円</option>
+   </select>
+   <input type="number" id="sfboost-amount" placeholder="金額" value="${boost&&boost.incentive_amount!=null?boost.incentive_amount:""}" style="width:100px;margin:0">円
+  </div>
+  <div style="margin-top:8px;display:flex;gap:8px">
+   <button class="btn sm" id="sfboost-save" data-ds="${ds}">${boost?"更新して通知":"設定して通知"}</button>
+   ${boost?`<button class="btn sm sub" id="sfboost-clear" data-ds="${ds}" style="color:#c0392b">解除する</button>`:""}
+  </div></div>`;
 }
 // 必要人数シミュレーション（sf_required_headcounts未設定なら「未設定」表示のみ）
 function sfHeadcountTableHtml(dates,presets,reqs,people,shByUserDate){
@@ -3776,6 +3811,34 @@ function bindShiftPage(){
   }
   b.disabled=false;
   toast(`通知を送りました: ${sent}名${skipped?`（LINE未連携のため${skipped}名はスキップ）`:""}`);
+ };
+ // B-3(2026-08-29) 出勤強化日の設定・解除（設定時は対象店舗の全員へLINE即時通知）
+ if($("sfboost-save"))$("sfboost-save").onclick=async()=>{
+  const b=$("sfboost-save"),ds=b.dataset.ds;
+  const message=$("sfboost-msg").value.trim(),type=$("sfboost-type").value,amountEl=$("sfboost-amount");
+  const amount=type!=="none"&&amountEl.value?Number(amountEl.value):null;
+  b.disabled=true;
+  const {error}=await sb.from("sf_boost_days").upsert({store_id:sfMgStore,work_date:ds,message:message||null,incentive_type:type,incentive_amount:amount,created_by:me.id,updated_at:new Date().toISOString()},{onConflict:"store_id,work_date"});
+  if(error){toast("保存エラー: "+error.message,true);b.disabled=false;return}
+  // 対象店舗の全員へLINE即時通知
+  const {data:members}=await sb.from("user_stores").select("users(id,name,line_user_id,is_active)").eq("store_id",sfMgStore);
+  const targets=(members||[]).map(m=>m.users).filter(u=>u&&u.is_active&&u.line_user_id);
+  const incentiveText=type==="hourly"?`（時給+${amount||0}円）`:type==="shift"?`（1勤務+${amount||0}円）`:"";
+  let sent=0;
+  for(const u of targets){
+   const text=`🔥 出勤強化日のお知らせ\n\n${sfFmtDateShort(ds)}は出勤強化日です${incentiveText}。\n${message||"人手が足りないため、出られる方はぜひご協力ください。"}\n\nシフト提出画面からご希望をお知らせください。`;
+   const r=await lineFn({action:"push_user",user_id:u.id,text});
+   if(r&&r.ok)sent++;
+  }
+  b.disabled=false;
+  toast(`出勤強化日を設定し、${sent}名へ通知しました`);render();
+ };
+ if($("sfboost-clear"))$("sfboost-clear").onclick=async()=>{
+  if(!confirm("出勤強化日の設定を解除しますか？（通知は送りません）"))return;
+  const ds=$("sfboost-clear").dataset.ds;
+  const {error}=await sb.from("sf_boost_days").delete().eq("store_id",sfMgStore).eq("work_date",ds);
+  if(error){toast("削除エラー: "+error.message,true);return}
+  toast("解除しました");render();
  };
  // プリセット
  if($("sfps-store"))$("sfps-store").onchange=e=>{sfPsStore=e.target.value;render()};

@@ -3220,14 +3220,29 @@ function sfShiftTableHtml(dates,people,shByUserDate){
 }
 // ②調整: 4カード＋想定人件費率（売上目標=dash_sales_target_daily、時給はlabor_cost_daily直近実績からの概算）＋調整が必要な日
 function sfAdjustStepHtml(ctx){
- const {dates,people,shByUserDate,presets,reqs,storeCountMap,salesTotal,wageRates,unlinkedCount}=ctx;
- let empCost=0,paCost=0;const unknownWage=new Set();
+ const {dates,people,shByUserDate,presets,reqs,storeCountMap,salesTotal,wageRates,unlinkedCount,payrollByUser,allocByUser}=ctx;
+ let empCost=0,paCost=0;const unknownWage=new Set(),autoFallback=new Set();
  people.forEach(u=>{
   let minutes=0;dates.forEach(ds=>{minutes+=sfShiftMinutes(shByUserDate[u.id+"|"+ds])});
   if(!minutes)return;
   const rate=wageRates[u.id];
-  if(rate==null)unknownWage.add(u.id);
-  const cost=rate!=null?minutes*rate:0;
+  let cost;
+  if(rate!=null){
+   cost=minutes*rate; // 時給が実績から出せる人（アルバイト等）は従来通り
+  }else{
+   // 2026-08-29続き: 時給が算出できない人（月給制など）はsf_payroll_allocations（マスター手動振り分け）
+   //   →無ければsf_payroll_sync（スマレジ給与明細APIの課税対象額を半月按分した自動概算）の順で使う
+   const alloc=(allocByUser||{})[u.id];
+   const pr=(payrollByUser||{})[u.id];
+   if(alloc&&alloc.length){
+    cost=alloc.reduce((a,r)=>a+Number(r.amount||0),0);
+   }else if(pr){
+    cost=(Number(pr.taxable_amount||0)+Number(pr.commute_allowance||0))*0.5; // 半月ぶんの概算按分
+    autoFallback.add(u.id);
+   }else{
+    cost=0;unknownWage.add(u.id);
+   }
+  }
   if(sfRoleTag(u).cls==="pa")paCost+=cost;else empCost+=cost;
  });
  const totalCost=empCost+paCost;
@@ -3252,7 +3267,8 @@ function sfAdjustStepHtml(ctx){
   <div class="card"><small>総人件費</small><b>${Math.round(totalCost).toLocaleString()}円</b></div>
   <div class="card"><small>想定人件費率</small><b>${rateText}</b></div>
  </div>`;
- if(unknownWage.size)h+=`<div class="sf-note">⚠️ ${unknownWage.size}名は勤怠実績がまだ無いため人件費の概算に含めていません（実績が貯まると自動的に反映されます）</div>`;
+ if(unknownWage.size)h+=`<div class="sf-note">⚠️ ${unknownWage.size}名は勤怠実績・給与データがまだ無いため人件費の概算に含めていません（実績が貯まる、またはスマレジ給与明細が同期されると自動的に反映されます）</div>`;
+ if(autoFallback.size)h+=`<div class="sf-note">🧮 ${autoFallback.size}名は店舗別の振り分けが未設定のため、スマレジ給与明細（課税対象額＋通勤手当）の半月分を自動概算で入れています。管理画面の「給与・インセンティブ配分」で店舗ごとに金額を設定すると、そちらが優先されます</div>`;
  // 2026-08-29続き: モックアップの「調整グリッド」レイアウト（シフト表＋右に調整が必要な日）
  const reqboxHtml=`<div class="card sf-reqbox"><b>調整が必要な日</b>${needDays.length?needDays.map(d=>`<div class="sf-reqday"><b>${sfFmtDateShort(d.ds)}</b><p>${esc(d.label)} ${d.short}名不足</p></div>`).join(""):'<p class="muted" style="margin-top:6px">現在、不足している時間帯はありません</p>'}</div>`;
  // A-1(2026-08-29) KPIカードから再利用できるよう、算出済みの数値も一緒に返す
@@ -3642,18 +3658,23 @@ async function sfManageView(){
  const notSubmitted=people.filter(u=>!dates.some(ds=>shByUserDate[u.id+"|"+ds]));
  // A-1(2026-08-29) KPIカード5枚ぶんの算出。以前は②調整タブを開いたときだけ計算していたが、
  //   モックアップどおり常時表示するため冒頭で計算する（②調整タブ表示時はこの結果をそのまま使い回す）
- const [{data:allUS},{data:targets},{data:profs},{data:helpRowsPeriod}]=await Promise.all([
+ const payrollYm=p.y+"-"+String(p.m+1).padStart(2,"0"); // 2026-08-29続き: sf_payroll_syncのyear_month形式に合わせる
+ const [{data:allUS},{data:targets},{data:profs},{data:helpRowsPeriod},{data:payrollRows},{data:allocRows}]=await Promise.all([
   sb.from("user_stores").select("user_id").in("user_id",idsForIn),
   sb.from("dash_sales_target_daily").select("sales_target").eq("store_id",sfMgStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]),
   sb.from("employee_profiles").select("user_id,smaregi_staff_id").in("user_id",idsForIn),
-  sb.from("sf_help_availability").select("user_id").gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]) // A-6
+  sb.from("sf_help_availability").select("user_id").gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]), // A-6
+  sb.from("sf_payroll_sync").select("user_id,taxable_amount,commute_allowance").eq("year_month",payrollYm).in("user_id",idsForIn), // 2026-08-29続き
+  sb.from("sf_payroll_allocations").select("user_id,kind,amount").eq("store_id",sfMgStore).eq("period_key",p.key).in("user_id",idsForIn) // 2026-08-29続き
  ]);
  const storeCountMap={};(allUS||[]).forEach(r=>{storeCountMap[r.user_id]=(storeCountMap[r.user_id]||0)+1});
  const salesTotal=(targets||[]).reduce((a,r)=>a+(r.sales_target||0),0);
  const linkedSet=new Set((profs||[]).filter(pr=>pr.smaregi_staff_id).map(pr=>pr.user_id));
  const unlinkedCount=people.filter(u=>!linkedSet.has(u.id)).length;
  const wageRates=await sfComputeWageRates(sfMgStore,peopleIds);
- const adj=sfAdjustStepHtml({dates,people,shByUserDate,presets:filteredPresets,reqs:reqs||[],storeCountMap,salesTotal,wageRates,unlinkedCount});
+ const payrollByUser={};(payrollRows||[]).forEach(r=>{payrollByUser[r.user_id]=r}); // 2026-08-29続き
+ const allocByUser={};(allocRows||[]).forEach(r=>{(allocByUser[r.user_id]=allocByUser[r.user_id]||[]).push(r)}); // 2026-08-29続き
+ const adj=sfAdjustStepHtml({dates,people,shByUserDate,presets:filteredPresets,reqs:reqs||[],storeCountMap,salesTotal,wageRates,unlinkedCount,payrollByUser,allocByUser});
  const helpCount=new Set((helpRowsPeriod||[]).map(r=>r.user_id)).size; // A-6 期間中にヘルプ可能を宣言した人数（他店舗含む＝全社共通のsf_help_availability）
  let h=`<div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
   <select class="inp" id="sfmg-store" style="flex:1;min-width:140px;margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===sfMgStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select>
@@ -4467,6 +4488,7 @@ function ageOf(uid){
  if(m<0||(m===0&&now.getDate()<d.getDate()))age--;
  return (age>=0&&age<120)?age:null;
 }
+let payStore=null,payPeriodIdx=null; // 2026-08-29続き: 給与・インセンティブ配分の管理画面（マスターのみ）
 let nuRole=null,nuStores=[],euRole=null,euStores=[],lastIssued=null;
 let ivRole=null,ivStores=[],lastInvite=null;
 const isAdmin=()=>me&&(me.role==="CEO"||me.role==="HQ");
@@ -4479,6 +4501,7 @@ async function adminView(){
  if(adminMode==="invite")return await adminInviteView();
  if(adminMode==="smaregi")return await adminSmaregiView();
  if(adminMode==="stores")return await adminStoresView();
+ if(adminMode==="payroll")return await adminPayrollView(); // 2026-08-29続き
  const [{data:us,error},{data:uss},{data:ntfs},{data:profs}]=await Promise.all([
   sb.from("users").select("*"),
   sb.from("user_stores").select("user_id,store_id"),
@@ -4503,6 +4526,8 @@ async function adminView(){
   <button class="btn sub" id="adnew">＋ 入社処理（本部が代理で発行）</button>
   <button class="btn sub" id="adsmaregi">📇 スマレジ登録スタッフ一覧</button>`;
  if(can("store_admin"))h+=`<button class="btn sub" id="adstores">🏪 店舗管理（追加・並び替え・スマレジ紐付け）</button>`;
+ // 2026-08-29続き: 給与・インセンティブ配分（ユーザー要望「マスターの人が振り分けられるように権限設定して」）
+ if(me.is_master)h+=`<button class="btn sub" id="adpayroll">💴 給与・インセンティブ配分</button>`;
  if(can("staff_admin")){
   const shown=adminUsers.filter(u=>{
    if(auRole&&u.role!==auRole)return false;
@@ -4524,6 +4549,50 @@ async function adminView(){
    h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b>${ageOf(u.id)!=null?`（${ageOf(u.id)}）`:""} <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">退職・無効</span>'}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}${(!u.is_active&&u.deactivated_at)?" ／ 退職 "+new Date(u.deactivated_at).toLocaleDateString("ja-JP"):""}</span></span><span class="muted">›</span></div>`;
   });
  }
+ return h;
+}
+
+// 2026-08-29続き: 給与・インセンティブ配分（マスターが店舗×半月ごとに手動入力する台帳）。
+//   自動取得（sf_payroll_sync＝スマレジ給与明細APIの課税対象額・通勤手当）を参考値として見せつつ、
+//   実際にシフト調整画面・将来的にPLで使う金額はここで確定させる。
+async function adminPayrollView(){
+ if(!me.is_master)return `<p class="muted">この画面はマスターのみ利用できます。</p>`;
+ if(!payStore||!stores.find(s=>s.id===payStore))payStore=(stores[0]||{}).id;
+ if(payPeriodIdx===null){const cp=sfCurrentPeriod();payPeriodIdx=sfPeriodIdx(cp.y,cp.m,cp.half)}
+ const p=sfPeriodFromIdx(payPeriodIdx);
+ const yearMonth=p.y+"-"+String(p.m+1).padStart(2,"0");
+ let h=`<h2>💴 給与・インセンティブ配分</h2>
+ <p class="muted">スマレジ給与明細から自動取得した金額（課税対象額・通勤手当）を参考に、店舗・半月ごとの内訳を確定させます。ここで保存した金額は、シフト調整画面の社員人件費で使われます。</p>
+ <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+  <select class="inp" id="pay-store" style="flex:1;min-width:140px;margin:0">${stores.map(s=>`<option value="${s.id}" ${s.id===payStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select>
+  <select class="inp" id="pay-period" style="flex:1;min-width:140px;margin:0">${sfPeriodSelectHtml(payPeriodIdx)}</select>
+ </div>`;
+ if(!payStore)return h+`<p class="muted">店舗がありません。</p>`;
+ const {data:members}=await sb.from("user_stores").select("user_id,users(id,name,role,is_active)").eq("store_id",payStore);
+ const people=(members||[]).map(m=>m.users).filter(u=>u&&u.is_active).sort((a,b)=>a.name.localeCompare(b.name,"ja"));
+ const peopleIds=people.map(u=>u.id);
+ const idsForIn=peopleIds.length?peopleIds:["00000000-0000-0000-0000-000000000000"];
+ const [{data:payrollRows},{data:allocRows}]=await Promise.all([
+  sb.from("sf_payroll_sync").select("*").eq("year_month",yearMonth).in("user_id",idsForIn),
+  sb.from("sf_payroll_allocations").select("*").eq("store_id",payStore).eq("period_key",p.key).in("user_id",idsForIn)
+ ]);
+ const payrollByUser={};(payrollRows||[]).forEach(r=>payrollByUser[r.user_id]=r);
+ const allocByUser={};(allocRows||[]).forEach(r=>{(allocByUser[r.user_id]=allocByUser[r.user_id]||{})[r.kind]=r});
+ if(!people.length)h+=`<p class="muted">この店舗に所属している従業員がいません。</p>`;
+ const KIND_LABEL={base:"基本給（この店舗ぶん）",commute:"交通費",incentive:"インセンティブ予定",bonus:"賞与予定"};
+ people.forEach(u=>{
+  const pr=payrollByUser[u.id];
+  const a=allocByUser[u.id]||{};
+  h+=`<div class="card">
+   <b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>
+   <div class="muted" style="font-size:11px;margin-top:4px">${pr?`自動取得（${esc(yearMonth)}分・全店舗合算）: 課税対象額${Math.round(pr.taxable_amount||0).toLocaleString()}円／通勤手当${Math.round(pr.commute_allowance||0).toLocaleString()}円${pr.fixed_overtime_wage?`（内、固定残業代${Math.round(pr.fixed_overtime_wage).toLocaleString()}円）`:""}`:`${esc(yearMonth)}分の自動取得データはまだありません`}</div>
+   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+    ${["base","commute","incentive","bonus"].map(k=>`<div><label class="muted" style="font-size:11px">${KIND_LABEL[k]}</label><input type="number" id="payamt-${u.id}-${k}" value="${a[k]?a[k].amount:(k==="commute"&&pr?Math.round(pr.commute_allowance||0):"")}" placeholder="0" style="margin:0"></div>`).join("")}
+   </div>
+   <input type="text" id="paynote-${u.id}" placeholder="メモ（任意）" value="${esc((a.base&&a.base.note)||"")}" style="margin-top:6px">
+   <button class="btn sm" data-paysave="${u.id}" style="margin-top:8px">この人の内容を保存</button>
+  </div>`;
+ });
  return h;
 }
 
@@ -6811,6 +6880,25 @@ function bindPage(){
  if($("adinvite"))$("adinvite").onclick=()=>{adminMode="invite";ivRole=null;ivStores=[];lastInvite=null;lastIssued=null;render()};
  if($("adsmaregi"))$("adsmaregi").onclick=()=>{adminMode="smaregi";lastIssued=null;lastInvite=null;smSel=null;smResult=null;smStaffsCache=null;render()};
  if($("adstores"))$("adstores").onclick=()=>{adminMode="stores";stList=null;stSmaregi=undefined;lastIssued=null;lastInvite=null;render()};
+ // 2026-08-29続き: 給与・インセンティブ配分
+ if($("adpayroll"))$("adpayroll").onclick=()=>{adminMode="payroll";render()};
+ if($("pay-store"))$("pay-store").onchange=e=>{payStore=e.target.value;render()};
+ if($("pay-period"))$("pay-period").onchange=e=>{payPeriodIdx=+e.target.value;render()};
+ document.querySelectorAll("[data-paysave]").forEach(b=>b.onclick=async()=>{
+  const uid=b.dataset.paysave;
+  const p=sfPeriodFromIdx(payPeriodIdx);
+  const note=$("paynote-"+uid)?$("paynote-"+uid).value.trim()||null:null;
+  const rows=["base","commute","incentive","bonus"].map(k=>{
+   const el=$("payamt-"+uid+"-"+k);
+   const amount=el&&el.value!==""?Number(el.value):0;
+   return {user_id:uid,store_id:payStore,period_key:p.key,kind:k,amount,note,created_by:me.id,updated_at:new Date().toISOString()};
+  });
+  b.disabled=true;
+  const {error}=await sb.from("sf_payroll_allocations").upsert(rows,{onConflict:"user_id,store_id,period_key,kind"});
+  b.disabled=false;
+  if(error){toast("保存エラー: "+error.message,true);return}
+  toast("保存しました");render();
+ });
  // v2.5 応募者管理
  if($("rcback"))$("rcback").onclick=()=>{rcDetail=null;rcMsgs=null;rcSimilar=[];rcPast=[];render()};
  // v2.6.64 応募者詳細のページへ直接飛べるリンク（社内の採用担当同士で共有する用。開くにはログインが必要）

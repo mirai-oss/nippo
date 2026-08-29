@@ -161,6 +161,12 @@
   .sf-bottom-action{display:flex;flex-direction:column;gap:8px;margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:#fff}
   .sf-pos{color:var(--green);font-weight:700}
   .sf-neg{color:var(--red);font-weight:700}
+  .sf-cday{padding:8px 0;border-bottom:1px solid #f0f2f5}
+  .sf-cday:last-child{border:0}
+  .sf-cday-head{font-weight:700;font-size:13px;margin-bottom:4px}
+  .sf-cday-pill{display:inline-block;padding:5px 10px;border-radius:8px;background:#eafaf0;border:1px solid #cdeedc;font-size:12px;margin:0 6px 6px 0}
+  .sf-cday-pill.help{background:#f1ebff;border:1px solid #d9cbf4}
+  .sf-boost{border:2px solid #f59e0b;background:#fffbeb}
   @media(min-width:900px){
    .sf-finance{grid-template-columns:repeat(5,1fr)}
    .sf-stepnav{grid-template-columns:repeat(3,1fr)}
@@ -2805,6 +2811,7 @@ let sfScrollPending=false; // ユーザー要望（2026-08-25）: 調整グリ�
 let sfMgStore=null,sfMgPeriodIdx=null;
 let sfPsStore=null;
 let sfMgStep="request",sfReqDate=null; // v2.7 ①希望確認 ②調整（担当BシフトUIv5）
+let sfSlotFilter="all"; // B-2(2026-08-29) "all"|"lunch"|"dinner"。①希望確認・②調整の絞り込み
 let arStore=null,arMode="half",arMonth=null,arHalf=null,arDate=null,arFrom=null,arTo=null; // v2.7 実績確認（シフトから分離。日別/半月/月次/期間で自由に遡れる）
 
 // v2.6.81 未提出者へのLINEリマインド。hq_generate_today()と同じ「画面を開いたときにチェック」方式（外部cronなし）
@@ -3110,6 +3117,21 @@ function sfAdjustStepHtml(ctx){
  return {html:h,checkText:checkMsgs.length?checkMsgs.join("・"):"問題ありません",totalCost,salesTotal,rateText,needCount:needDays.length};
 }
 // ③確定: 公開後の未確認者一覧・再通知・変更申請の受付一覧（実装指示書_担当B_シフトUIv5_2026-08-24.md B-2）
+// A-3(2026-08-29) ③確定シフトをモックアップ同様の日付プライマリ表示に変更
+//   （以前は氏名×日付のグリッド表を流用していたが、モックアップは日付ごとに勤務者を並べる形）。
+//   休みの人・未入力の人は出さず、勤務がある人だけを日付ごとにまとめる。
+//   storeCountMap>1（複数店舗所属）の人は暫定的に「兼務・ヘルプ」として色分け表示する
+//   （sf_help_availabilityは「入れるか」の事前申告であり実際の配置とは別物のため、ここでは使わない）
+function sfConfirmedCalendarHtml(dates,people,shByUserDate,storeCountMap){
+ const days=dates.map(ds=>{
+  const entries=people.filter(u=>{const s=shByUserDate[u.id+"|"+ds];return s&&!s.is_off}).map(u=>({u,s:shByUserDate[u.id+"|"+ds],isHelp:(storeCountMap[u.id]||0)>1}));
+  const pills=entries.length
+   ?entries.map(e=>`<span class="sf-cday-pill ${e.isHelp?"help":""}">${esc(e.u.name)}${e.isHelp?" 兼務・ヘルプ":""} ${sfFmtTime(e.s.start_time)}-${sfFmtTime(e.s.end_time)}</span>`).join("")
+   :`<span class="muted" style="font-size:12px">勤務者なし</span>`;
+  return `<div class="sf-cday"><div class="sf-cday-head">${sfFmtDateShort(ds)}</div>${pills}</div>`;
+ }).join("");
+ return `<div class="card">${days}</div>`;
+}
 function sfConfirmedStepHtml(ctx){
  const {dates,people,shByUserDate,changeReqs}=ctx;
  const unconfirmed=people.filter(u=>dates.some(ds=>{const s=shByUserDate[u.id+"|"+ds];return s&&s.status==="published"&&!s.confirmed_at}));
@@ -3338,6 +3360,9 @@ async function sfManageView(){
  const peopleIds=people.map(u=>u.id);
  const idsForIn=peopleIds.length?peopleIds:["00000000-0000-0000-0000-000000000000"]; // .in()の空配列対策
  const shByUserDate={};(shifts||[]).forEach(s=>{shByUserDate[s.user_id+"|"+s.work_date]=s});
+ // B-2(2026-08-29) ランチ/ディナー/一括の絞り込み。①希望確認・②調整の「必要人数」判定はこちらを使う
+ //   （自分のシフトを選ぶ側=sfEditDayHtmlの選択肢は絞り込まない。全時間帯から選べる必要があるため）
+ const filteredPresets=(presets||[]).filter(pr=>sfSlotFilter==="all"||pr.slot_kind===sfSlotFilter);
  const enteredCount=(shifts||[]).length; // v2.6.82 店長・本部の代理入力もdraftのまま止まるため「提出済み」ではなく「入力済み」で判定する
  const publishedCount=(shifts||[]).filter(s=>s.status==="published").length;
  const notSubmitted=people.filter(u=>!dates.some(ds=>shByUserDate[u.id+"|"+ds]));
@@ -3354,11 +3379,16 @@ async function sfManageView(){
  const linkedSet=new Set((profs||[]).filter(pr=>pr.smaregi_staff_id).map(pr=>pr.user_id));
  const unlinkedCount=people.filter(u=>!linkedSet.has(u.id)).length;
  const wageRates=await sfComputeWageRates(sfMgStore,peopleIds);
- const adj=sfAdjustStepHtml({dates,people,shByUserDate,presets:presets||[],reqs:reqs||[],storeCountMap,salesTotal,wageRates,unlinkedCount});
+ const adj=sfAdjustStepHtml({dates,people,shByUserDate,presets:filteredPresets,reqs:reqs||[],storeCountMap,salesTotal,wageRates,unlinkedCount});
  const helpCount=new Set((helpRowsPeriod||[]).map(r=>r.user_id)).size; // A-6 期間中にヘルプ可能を宣言した人数（他店舗含む＝全社共通のsf_help_availability）
  let h=`<div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
   <select class="inp" id="sfmg-store" style="flex:1;min-width:140px;margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===sfMgStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select>
   <select class="inp" id="sfmg-period" style="flex:1;min-width:140px;margin:0">${sfPeriodSelectHtml(sfMgPeriodIdx)}</select>
+  <select class="inp" id="sfmg-slot" style="flex:1;min-width:120px;margin:0">
+   <option value="all" ${sfSlotFilter==="all"?"selected":""}>一括</option>
+   <option value="lunch" ${sfSlotFilter==="lunch"?"selected":""}>🍽 ランチ</option>
+   <option value="dinner" ${sfSlotFilter==="dinner"?"selected":""}>🌙 ディナー</option>
+  </select>
  </div>`;
  // A-1: KPIカード5枚（提出済み／未提出／ヘルプ可能／不足時間帯／想定人件費率）。
  //   「入力済み◯件／公開済み◯件」の文言はここに統合（情報の重複を避ける）
@@ -3378,7 +3408,7 @@ async function sfManageView(){
  <p class="muted" style="margin-top:-2px">叶え率・日別差分などの実績確認は「📊実績確認」タブに分けました。</p>`;
  if(sfMgStep==="adjust"){
   h+=adj.html;
-  h+=sfHeadcountTableHtml(dates,presets||[],reqs||[],people,shByUserDate);
+  h+=sfHeadcountTableHtml(dates,filteredPresets,reqs||[],people,shByUserDate);
   h+=sfShiftTableHtml(dates,people,shByUserDate);
   if(sfEditDate){
    const [uid,ds]=sfEditDate.split("|");
@@ -3393,9 +3423,9 @@ async function sfManageView(){
  }else if(sfMgStep==="confirmed"){
   const {data:changeReqs}=await sb.from("sf_change_requests").select("*").eq("store_id",sfMgStore).eq("period_key",p.key).order("created_at",{ascending:false});
   h+=sfConfirmedStepHtml({dates,people,shByUserDate,changeReqs:changeReqs||[]});
-  h+=sfShiftTableHtml(dates,people,shByUserDate); // 月間確定ビューとして既存のシフト表を流用
+  h+=sfConfirmedCalendarHtml(dates,people,shByUserDate,storeCountMap); // A-3(2026-08-29) モックアップ同様の日付プライマリ表示に変更
  }else{
-  h+=await sfRequestStepHtml(dates,people,shByUserDate,presets||[],reqs||[],storeCountMap);
+  h+=await sfRequestStepHtml(dates,people,shByUserDate,filteredPresets,reqs||[],storeCountMap);
  }
  return h;
 }
@@ -3421,12 +3451,16 @@ async function sfPresetsView(){
    <input type="time" id="sfps-start" step="900" style="width:auto;margin:0">〜
    <input type="time" id="sfps-end" step="900" style="width:auto;margin:0">
    <label class="muted" style="font-size:12px">休憩(分)</label><input type="number" id="sfps-break" value="0" min="0" style="width:70px;margin:0">
+   <select class="inp" id="sfps-slot" style="width:auto;margin:0"><option value="">区分: なし（一括扱い）</option><option value="lunch">🍽 ランチ帯</option><option value="dinner">🌙 ディナー帯</option></select>
    <button class="btn sm" id="sfps-add">追加</button>
   </div></div>`;
  (presets||[]).forEach(pr=>{
-  h+=`<div class="card" style="${pr.is_active?"":"opacity:.55;"}display:flex;justify-content:space-between;align-items:center">
+  h+=`<div class="card" style="${pr.is_active?"":"opacity:.55;"}display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
    <div>${esc(pr.label)}｜${sfFmtTime(pr.start_time)}〜${sfFmtTime(pr.end_time)}（休憩${pr.break_minutes}分）${pr.is_active?"":' <span class="badge" style="background:#888">停止中</span>'}</div>
-   <button class="btn sm sub" data-sfpstoggle="${pr.id}" data-on="${pr.is_active?1:0}">${pr.is_active?"停止":"再開"}</button>
+   <div style="display:flex;gap:6px;align-items:center">
+    <select class="inp" data-sfpsslot="${pr.id}" style="width:auto;margin:0;font-size:12px"><option value="" ${!pr.slot_kind?"selected":""}>区分: なし</option><option value="lunch" ${pr.slot_kind==="lunch"?"selected":""}>🍽 ランチ</option><option value="dinner" ${pr.slot_kind==="dinner"?"selected":""}>🌙 ディナー</option></select>
+    <button class="btn sm sub" data-sfpstoggle="${pr.id}" data-on="${pr.is_active?1:0}">${pr.is_active?"停止":"再開"}</button>
+   </div>
   </div>`;
  });
  return h;
@@ -3537,6 +3571,7 @@ function bindShiftPage(){
  // 管理
  if($("sfmg-store"))$("sfmg-store").onchange=e=>{sfMgStore=e.target.value;sfEditDate=null;render()};
  if($("sfmg-period"))$("sfmg-period").onchange=e=>{sfMgPeriodIdx=+e.target.value;sfEditDate=null;render()};
+ if($("sfmg-slot"))$("sfmg-slot").onchange=e=>{sfSlotFilter=e.target.value;render()}; // B-2(2026-08-29)
  document.querySelectorAll("[data-sfstep]").forEach(b=>b.onclick=()=>{sfMgStep=b.dataset.sfstep;sfEditDate=null;render()});
  document.querySelectorAll("[data-sfreqday]").forEach(b=>b.onclick=()=>{sfReqDate=b.dataset.sfreqday;render()});
  // B-2 ③ 未確認者への再通知・変更申請の対応済み処理（店長・本部）
@@ -3656,8 +3691,9 @@ function bindShiftPage(){
  if($("sfps-store"))$("sfps-store").onchange=e=>{sfPsStore=e.target.value;render()};
  if($("sfps-add"))$("sfps-add").onclick=async()=>{
   const label=$("sfps-label").value.trim(),start=$("sfps-start").value,end=$("sfps-end").value,brk=+$("sfps-break").value||0;
+  const slot=$("sfps-slot").value||null; // B-2(2026-08-29)
   if(!label||!start||!end){toast("項目名・開始・終了を入力してください",true);return}
-  const {error}=await sb.from("sf_time_presets").insert({store_id:sfPsStore,label,start_time:start,end_time:end,break_minutes:brk});
+  const {error}=await sb.from("sf_time_presets").insert({store_id:sfPsStore,label,start_time:start,end_time:end,break_minutes:brk,slot_kind:slot});
   if(error){toast("追加エラー: "+error.message,true);return}
   toast("追加しました");render();
  };
@@ -3665,6 +3701,12 @@ function bindShiftPage(){
   const {error}=await sb.from("sf_time_presets").update({is_active:b.dataset.on!=="1"}).eq("id",b.dataset.sfpstoggle);
   if(error){toast("変更エラー: "+error.message,true);return}
   render();
+ });
+ // B-2(2026-08-29) 既存プリセットのランチ/ディナー区分を変更
+ document.querySelectorAll("[data-sfpsslot]").forEach(s=>s.onchange=async()=>{
+  const {error}=await sb.from("sf_time_presets").update({slot_kind:s.value||null}).eq("id",s.dataset.sfpsslot);
+  if(error){toast("変更エラー: "+error.message,true);return}
+  toast("区分を変更しました");render();
  });
 }
 async function tasksView(){

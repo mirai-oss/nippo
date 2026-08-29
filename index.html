@@ -3231,11 +3231,12 @@ function sfAdjustStepHtml(ctx){
    cost=minutes*rate; // 時給が実績から出せる人（アルバイト等）は従来通り
   }else{
    // 2026-08-29続き: 時給が算出できない人（月給制など）はsf_payroll_allocations（マスター手動振り分け）
-   //   →無ければsf_payroll_sync（スマレジ給与明細APIの課税対象額を半月按分した自動概算）の順で使う
+   //   →無ければsf_payroll_sync（スマレジ給与明細APIの固定給を半月按分した自動概算）の順で使う。
+   //   2026-08-30続き: 配分は月単位（半月ではない）で入力するため、半月ぶんは0.5を掛けて按分する
    const alloc=(allocByUser||{})[u.id];
    const pr=(payrollByUser||{})[u.id];
    if(alloc&&alloc.length){
-    cost=alloc.reduce((a,r)=>a+Number(r.amount||0),0);
+    cost=alloc.reduce((a,r)=>a+Number(r.amount||0),0)*0.5;
    }else if(pr){
     cost=(Number(pr.fixed_salary_amount||0)+Number(pr.commute_allowance||0))*0.5; // 半月ぶんの概算按分（2026-08-29訂正: 固定給＝支給額合計−通勤手当）
     autoFallback.add(u.id);
@@ -3665,7 +3666,7 @@ async function sfManageView(){
   sb.from("employee_profiles").select("user_id,smaregi_staff_id").in("user_id",idsForIn),
   sb.from("sf_help_availability").select("user_id").gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]), // A-6
   sb.from("sf_payroll_sync").select("user_id,fixed_salary_amount,commute_allowance").eq("year_month",payrollYm).in("user_id",idsForIn), // 2026-08-29続き
-  sb.from("sf_payroll_allocations").select("user_id,kind,amount").eq("store_id",sfMgStore).eq("period_key",p.key).in("user_id",idsForIn) // 2026-08-29続き
+  sb.from("sf_payroll_allocations").select("user_id,kind,amount").eq("store_id",sfMgStore).eq("period_key",payrollYm).in("user_id",idsForIn) // 2026-08-30続き: 配分は月単位（半月ではない）で保存されている
  ]);
  const storeCountMap={};(allUS||[]).forEach(r=>{storeCountMap[r.user_id]=(storeCountMap[r.user_id]||0)+1});
  const salesTotal=(targets||[]).reduce((a,r)=>a+(r.sales_target||0),0);
@@ -4488,7 +4489,7 @@ function ageOf(uid){
  if(m<0||(m===0&&now.getDate()<d.getDate()))age--;
  return (age>=0&&age<120)?age:null;
 }
-let payStore=null,payPeriodIdx=null; // 2026-08-29続き: 給与・インセンティブ配分の管理画面（マスターのみ）
+let payMonth=null,payExtraStores={}; // 2026-08-30続き: 給与・インセンティブ配分の管理画面（マスターのみ・月単位に変更）
 let nuRole=null,nuStores=[],euRole=null,euStores=[],lastIssued=null;
 let ivRole=null,ivStores=[],lastInvite=null;
 const isAdmin=()=>me&&(me.role==="CEO"||me.role==="HQ");
@@ -4555,42 +4556,76 @@ async function adminView(){
 // 2026-08-29続き: 給与・インセンティブ配分（マスターが店舗×半月ごとに手動入力する台帳）。
 //   自動取得（sf_payroll_sync＝スマレジ給与明細APIの課税対象額・通勤手当）を参考値として見せつつ、
 //   実際にシフト調整画面・将来的にPLで使う金額はここで確定させる。
+// 2026-08-30続き ユーザーフィードバックで全面改訂:
+//   ①社員は月給なので半月ではなく月単位に②対象は社員/店長/本部/チーム長のみ（アルバイト除く）
+//   ③店舗プルダウンで絞り込むのではなく、人ごとに「どの店舗にいくら」を並べて合計が見えるようにする
+//   ④<input type=month>にして何ヶ月でも過去に遡れるようにする
+const PAY_TARGET_ROLES=["SHAIN","TENCHO","HQ","TEAM"]; // CEO(本人の給与をここで設定しない)・AL(時給)は対象外
 async function adminPayrollView(){
  if(!me.is_master)return `<p class="muted">この画面はマスターのみ利用できます。</p>`;
- if(!payStore||!stores.find(s=>s.id===payStore))payStore=(stores[0]||{}).id;
- if(payPeriodIdx===null){const cp=sfCurrentPeriod();payPeriodIdx=sfPeriodIdx(cp.y,cp.m,cp.half)}
- const p=sfPeriodFromIdx(payPeriodIdx);
- const yearMonth=p.y+"-"+String(p.m+1).padStart(2,"0");
+ if(!payMonth){const t=new Date();payMonth=t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0")}
  let h=`<h2>💴 給与・インセンティブ配分</h2>
- <p class="muted">スマレジ給与明細から自動取得した金額（課税対象額・通勤手当）を参考に、店舗・半月ごとの内訳を確定させます。ここで保存した金額は、シフト調整画面の社員人件費で使われます。</p>
+ <p class="muted">スマレジ給与明細から自動取得した固定給・通勤手当を参考に、月ごと・店舗ごとの内訳を確定させます。ここで保存した金額は、シフト調整画面の社員人件費で使われます（対象: 社員・店長・本部・チーム長。時給制のアルバイトは対象外）。</p>
  <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-  <select class="inp" id="pay-store" style="flex:1;min-width:140px;margin:0">${stores.map(s=>`<option value="${s.id}" ${s.id===payStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select>
-  <select class="inp" id="pay-period" style="flex:1;min-width:140px;margin:0">${sfPeriodSelectHtml(payPeriodIdx)}</select>
+  <input type="month" class="inp" id="pay-month" value="${payMonth}" style="flex:1;min-width:140px;margin:0">
  </div>`;
- if(!payStore)return h+`<p class="muted">店舗がありません。</p>`;
- const {data:members}=await sb.from("user_stores").select("user_id,users(id,name,role,is_active)").eq("store_id",payStore);
- const people=(members||[]).map(m=>m.users).filter(u=>u&&u.is_active).sort((a,b)=>a.name.localeCompare(b.name,"ja"));
+ const {data:us}=await sb.from("users").select("id,name,role").in("role",PAY_TARGET_ROLES).eq("is_active",true);
+ const roleOrder={SHAIN:0,TENCHO:1,TEAM:2,HQ:3};
+ const people=(us||[]).sort((a,b)=>(roleOrder[a.role]??9)-(roleOrder[b.role]??9)||a.name.localeCompare(b.name,"ja"));
  const peopleIds=people.map(u=>u.id);
  const idsForIn=peopleIds.length?peopleIds:["00000000-0000-0000-0000-000000000000"];
- const [{data:payrollRows},{data:allocRows}]=await Promise.all([
-  sb.from("sf_payroll_sync").select("*").eq("year_month",yearMonth).in("user_id",idsForIn),
-  sb.from("sf_payroll_allocations").select("*").eq("store_id",payStore).eq("period_key",p.key).in("user_id",idsForIn)
+ const [{data:payrollRows},{data:allocRows},{data:usRows}]=await Promise.all([
+  sb.from("sf_payroll_sync").select("*").eq("year_month",payMonth).in("user_id",idsForIn),
+  sb.from("sf_payroll_allocations").select("*").eq("period_key",payMonth).in("user_id",idsForIn),
+  sb.from("user_stores").select("user_id,store_id").in("user_id",idsForIn)
  ]);
  const payrollByUser={};(payrollRows||[]).forEach(r=>payrollByUser[r.user_id]=r);
- const allocByUser={};(allocRows||[]).forEach(r=>{(allocByUser[r.user_id]=allocByUser[r.user_id]||{})[r.kind]=r});
- if(!people.length)h+=`<p class="muted">この店舗に所属している従業員がいません。</p>`;
- const KIND_LABEL={base:"基本給（この店舗ぶん）",commute:"交通費",incentive:"インセンティブ予定",bonus:"賞与予定"};
+ const allocByUserStore={};(allocRows||[]).forEach(r=>{
+  const byStore=allocByUserStore[r.user_id]=allocByUserStore[r.user_id]||{};
+  (byStore[r.store_id]=byStore[r.store_id]||{})[r.kind]=r;
+ });
+ const homeStoresByUser={};(usRows||[]).forEach(r=>{(homeStoresByUser[r.user_id]=homeStoresByUser[r.user_id]||new Set()).add(r.store_id)});
+ const sname=id=>{const s=stores.find(x=>x.id===id);return s?s.name:"?"};
+ const KIND_LABEL={base:"基本給",commute:"交通費",incentive:"インセンティブ予定",bonus:"賞与予定"};
+ if(!people.length)h+=`<p class="muted">対象の従業員がいません。</p>`;
  people.forEach(u=>{
   const pr=payrollByUser[u.id];
-  const a=allocByUser[u.id]||{};
+  const byStore=allocByUserStore[u.id]||{};
+  const storeIds=[...new Set([...Object.keys(byStore),...(homeStoresByUser[u.id]||[]),...(payExtraStores[u.id]||[])])];
+  let totalBaseCommute=0,totalIncentiveBonus=0;
+  storeIds.forEach(sid=>{
+   const a=byStore[sid]||{};
+   totalBaseCommute+=Number((a.base&&a.base.amount)||0)+Number((a.commute&&a.commute.amount)||0);
+   totalIncentiveBonus+=Number((a.incentive&&a.incentive.amount)||0)+Number((a.bonus&&a.bonus.amount)||0);
+  });
+  const autoTotal=pr?Number(pr.fixed_salary_amount||0)+Number(pr.commute_allowance||0):null;
+  const diff=autoTotal!=null?totalBaseCommute-autoTotal:null;
+  const addableStores=stores.filter(s=>!storeIds.includes(s.id));
   h+=`<div class="card">
    <b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>
-   <div class="muted" style="font-size:11px;margin-top:4px">${pr?`自動取得（${esc(yearMonth)}分・全店舗合算）: 固定給${Math.round(pr.fixed_salary_amount||0).toLocaleString()}円／通勤手当${Math.round(pr.commute_allowance||0).toLocaleString()}円${pr.fixed_overtime_wage?`（固定給の内、固定残業代${Math.round(pr.fixed_overtime_wage).toLocaleString()}円）`:""}`:`${esc(yearMonth)}分の自動取得データはまだありません`}</div>
-   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
-    ${["base","commute","incentive","bonus"].map(k=>`<div><label class="muted" style="font-size:11px">${KIND_LABEL[k]}</label><input type="number" id="payamt-${u.id}-${k}" value="${a[k]?a[k].amount:(k==="commute"&&pr?Math.round(pr.commute_allowance||0):"")}" placeholder="0" style="margin:0"></div>`).join("")}
+   <div class="muted" style="font-size:11px;margin-top:4px">${pr?`自動取得（${esc(payMonth)}分・全店舗合算）: 固定給${Math.round(pr.fixed_salary_amount||0).toLocaleString()}円／通勤手当${Math.round(pr.commute_allowance||0).toLocaleString()}円${pr.fixed_overtime_wage?`（固定給の内、固定残業代${Math.round(pr.fixed_overtime_wage).toLocaleString()}円）`:""}`:`${esc(payMonth)}分の自動取得データはまだありません`}</div>
+   ${storeIds.length?storeIds.map(sid=>{
+    const a=byStore[sid]||{};
+    return `<div style="border-top:1px solid var(--line,#eee);margin-top:10px;padding-top:8px">
+     <div style="display:flex;justify-content:space-between;align-items:center">
+      <b style="font-size:13px">🏪 ${esc(sname(sid))}</b>
+      <button class="btn sm sub" data-paydelstore="${u.id}|${sid}" style="color:#c0392b">この店舗を削除</button>
+     </div>
+     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px">
+      ${["base","commute","incentive","bonus"].map(k=>`<div><label class="muted" style="font-size:11px">${KIND_LABEL[k]}</label><input type="number" id="payamt-${u.id}-${sid}-${k}" value="${a[k]?a[k].amount:""}" placeholder="0" style="margin:0"></div>`).join("")}
+     </div>
+     <input type="text" id="paynote-${u.id}-${sid}" placeholder="メモ（任意）" value="${esc((a.base&&a.base.note)||"")}" style="margin-top:6px">
+    </div>`;
+   }).join(""):'<p class="muted" style="margin-top:8px">まだ店舗が設定されていません。下から追加してください</p>'}
+   <div style="display:flex;gap:6px;margin-top:10px;align-items:center">
+    <select class="inp" id="paynewstore-${u.id}" style="flex:1;margin:0">
+     <option value="">＋ 店舗を追加...</option>
+     ${addableStores.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join("")}
+    </select>
+    <button class="btn sm sub" data-payaddstore="${u.id}">追加</button>
    </div>
-   <input type="text" id="paynote-${u.id}" placeholder="メモ（任意）" value="${esc((a.base&&a.base.note)||"")}" style="margin-top:6px">
-   <button class="btn sm" data-paysave="${u.id}" style="margin-top:8px">この人の内容を保存</button>
+   <div class="muted" style="font-size:12px;margin-top:8px">配分合計（基本給＋交通費）: <b>${Math.round(totalBaseCommute).toLocaleString()}円</b>${autoTotal!=null?`　自動取得: ${Math.round(autoTotal).toLocaleString()}円　${Math.abs(diff)<=1?'<span class="badge g">一致</span>':`<span class="badge" style="background:#c0392b">差額${diff>0?"+":""}${Math.round(diff).toLocaleString()}円</span>`}`:""}${totalIncentiveBonus?`<br>インセンティブ・賞与予定: ${Math.round(totalIncentiveBonus).toLocaleString()}円`:""}</div>
+   ${storeIds.length?`<button class="btn sm" data-paysaveuser="${u.id}" data-paystores="${storeIds.join(",")}" style="margin-top:8px">この人の内容を保存</button>`:""}
   </div>`;
  });
  return h;
@@ -6880,23 +6915,44 @@ function bindPage(){
  if($("adinvite"))$("adinvite").onclick=()=>{adminMode="invite";ivRole=null;ivStores=[];lastInvite=null;lastIssued=null;render()};
  if($("adsmaregi"))$("adsmaregi").onclick=()=>{adminMode="smaregi";lastIssued=null;lastInvite=null;smSel=null;smResult=null;smStaffsCache=null;render()};
  if($("adstores"))$("adstores").onclick=()=>{adminMode="stores";stList=null;stSmaregi=undefined;lastIssued=null;lastInvite=null;render()};
- // 2026-08-29続き: 給与・インセンティブ配分
- if($("adpayroll"))$("adpayroll").onclick=()=>{adminMode="payroll";render()};
- if($("pay-store"))$("pay-store").onchange=e=>{payStore=e.target.value;render()};
- if($("pay-period"))$("pay-period").onchange=e=>{payPeriodIdx=+e.target.value;render()};
- document.querySelectorAll("[data-paysave]").forEach(b=>b.onclick=async()=>{
-  const uid=b.dataset.paysave;
-  const p=sfPeriodFromIdx(payPeriodIdx);
-  const note=$("paynote-"+uid)?$("paynote-"+uid).value.trim()||null:null;
-  const rows=["base","commute","incentive","bonus"].map(k=>{
-   const el=$("payamt-"+uid+"-"+k);
-   const amount=el&&el.value!==""?Number(el.value):0;
-   return {user_id:uid,store_id:payStore,period_key:p.key,kind:k,amount,note,created_by:me.id,updated_at:new Date().toISOString()};
+ // 2026-08-30続き: 給与・インセンティブ配分（月単位・人ごとに店舗を並べる方式に改訂）
+ if($("adpayroll"))$("adpayroll").onclick=()=>{adminMode="payroll";payExtraStores={};render()};
+ if($("pay-month"))$("pay-month").onchange=e=>{payMonth=e.target.value;payExtraStores={};render()};
+ document.querySelectorAll("[data-payaddstore]").forEach(b=>b.onclick=()=>{
+  const uid=b.dataset.payaddstore;
+  const sel=$("paynewstore-"+uid);
+  const sid=sel&&sel.value;
+  if(!sid)return;
+  payExtraStores[uid]=(payExtraStores[uid]||[]).concat(sid);
+  render();
+ });
+ document.querySelectorAll("[data-paydelstore]").forEach(b=>b.onclick=async()=>{
+  const [uid,sid]=b.dataset.paydelstore.split("|");
+  if(!confirm("この店舗ぶんの配分を削除しますか？"))return;
+  b.disabled=true;
+  const {error}=await sb.from("sf_payroll_allocations").delete().eq("user_id",uid).eq("store_id",sid).eq("period_key",payMonth);
+  b.disabled=false;
+  if(error){toast("削除エラー: "+error.message,true);return}
+  if(payExtraStores[uid])payExtraStores[uid]=payExtraStores[uid].filter(x=>x!==sid);
+  toast("削除しました");render();
+ });
+ document.querySelectorAll("[data-paysaveuser]").forEach(b=>b.onclick=async()=>{
+  const uid=b.dataset.paysaveuser;
+  const storeIds=(b.dataset.paystores||"").split(",").filter(Boolean);
+  const rows=[];
+  storeIds.forEach(sid=>{
+   const note=$("paynote-"+uid+"-"+sid)?$("paynote-"+uid+"-"+sid).value.trim()||null:null;
+   ["base","commute","incentive","bonus"].forEach(k=>{
+    const el=$("payamt-"+uid+"-"+sid+"-"+k);
+    const amount=el&&el.value!==""?Number(el.value):0;
+    rows.push({user_id:uid,store_id:sid,period_key:payMonth,kind:k,amount,note,created_by:me.id,updated_at:new Date().toISOString()});
+   });
   });
   b.disabled=true;
   const {error}=await sb.from("sf_payroll_allocations").upsert(rows,{onConflict:"user_id,store_id,period_key,kind"});
   b.disabled=false;
   if(error){toast("保存エラー: "+error.message,true);return}
+  payExtraStores[uid]=[];
   toast("保存しました");render();
  });
  // v2.5 応募者管理

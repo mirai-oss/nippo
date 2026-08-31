@@ -321,7 +321,8 @@ const FEATURES={
  evaluate:"評価者（従業員評価）※次バージョンから",
  kpi_config:"KPI・評価設定 ※次バージョンから",
  labor_cost_view:"勤怠実績・人件費データの閲覧（実績確認・調整グリッド等）※担当DのRLS対応待ち。2026-08-29ユーザー要望で追加",
- paid_leave_balance_view:"有給残日数を本人に表示する（B-17・2026-08-31追加。既定はOFF＝現状どおり非表示）"
+ paid_leave_balance_view:"有給残日数を本人に表示する（B-17・2026-08-31追加。既定はOFF＝現状どおり非表示）",
+ paid_leave_apply:"有給を申請できる（2026-08-31追加。既定は社員・店長・本部・チーム長。人ごとに追加/除外できる）"
 };
 // ===== v2.5 応募者管理 =====
 const APPLICANT_STATUS={new:"新規",contacted:"連絡済み",interview_set:"面接設定",interviewed:"面接済み",hired:"採用",retired:"退職",noshow:"バックレ",rejected:"不採用",declined:"辞退"};
@@ -399,7 +400,8 @@ const FEATURE_DEFAULTS={ // DB未設定時のフォールバック（v2.3まで�
  evaluate:["CEO","HQ","TEAM","TENCHO"],
  kpi_config:["CEO","HQ"],
  labor_cost_view:["CEO","HQ","TEAM","TENCHO"], // 2026-08-29 現状のlabor_cost_daily RLS(CEO/HQ/TEAM)にTENCHOを加えた既定値
- paid_leave_balance_view:[] // 2026-08-31 既定は誰にも見せない（現状どおり）。個人ごとの例外設定でON/OFFする
+ paid_leave_balance_view:[], // 2026-08-31 既定は誰にも見せない（現状どおり）。個人ごとの例外設定でON/OFFする
+ paid_leave_apply:["SHAIN","TENCHO","TEAM","HQ"] // 2026-08-31 既定は「社員」中心（ユーザー指示）。AL/GAIHANは既定オフ・個人ごとに追加可
 };
 const ROLES_ALL=Object.keys(ROLE_NAME);
 const FMT_ROLES=["AL","SHAIN","TENCHO","TEAM","HQ","GAIHAN"]; // v2.6.26 フォーマットを作れる役職
@@ -2916,14 +2918,17 @@ async function shiftView(){
  sfEnsureReminders(); // await しない（表示をブロックしない・裏で試みるだけ）
  const isManager=sfPickableStores().length>0; // sfManageView自身が使う判定とそろえる
  let h=`<h2>📅 シフト</h2>`;
- // 2026-08-31追加(B-17): 「🌴 有給申請」は管理者かどうかに関わらず全員が使えるタイルにする
- const leaveTile=`<button class="sf-stepbtn ${sfMgStep==="leave"?"active":""}" data-sftile="leave"><b>🌴 有給申請</b><small>申請・残日数確認</small></button>`;
- if(!isManager){ // 一般従業員: 自分の提出＋有給申請の2タイル
+ // 2026-08-31追加(B-17): 「🌴 有給申請」タイルは、①自分が申請できる人（paid_leave_apply）
+ //   ②承認できる立場の人（チーム長/本部/社長/マスター）のどちらかであれば表示する
+ const isLeaveApprover=me.is_master||["CEO","HQ","TEAM","TENCHO"].includes(me.role);
+ const canSeeLeaveTile=can("paid_leave_apply")||isLeaveApprover;
+ const leaveTile=canSeeLeaveTile?`<button class="sf-stepbtn ${sfMgStep==="leave"?"active":""}" data-sftile="leave"><b>🌴 有給申請</b><small>申請・残日数確認</small></button>`:"";
+ if(!isManager){ // 一般従業員: 自分の提出＋（使えれば）有給申請
   h+=`<div class="sf-stepnav" style="grid-template-columns:repeat(2,1fr)">
    <button class="sf-stepbtn ${sfMgStep!=="leave"?"active":""}" data-sftile="mysubmit"><b>📝 自分の提出</b><small>自分のシフト希望</small></button>
    ${leaveTile}
   </div>`;
-  if(sfMgStep==="leave")return `<div class="sf-theme">${h}${await sfLeaveView()}</div>`;
+  if(sfMgStep==="leave"&&canSeeLeaveTile)return `<div class="sf-theme">${h}${await sfLeaveView()}</div>`;
   return `<div class="sf-theme">${h}${await sfSubmitView()}</div>`;
  }
  h+=`<div class="sf-stepnav" style="grid-template-columns:repeat(2,1fr)">
@@ -2938,7 +2943,7 @@ async function shiftView(){
  </div>`;
  if(sfMgStep==="mysubmit")return `<div class="sf-theme">${h}${await sfSubmitView()}</div>`;
  if(sfMgStep==="presets")return `<div class="sf-theme">${h}${await sfPresetsView()}</div>`;
- if(sfMgStep==="leave")return `<div class="sf-theme">${h}${await sfLeaveView()}</div>`;
+ if(sfMgStep==="leave"&&canSeeLeaveTile)return `<div class="sf-theme">${h}${await sfLeaveView()}</div>`;
  return `<div class="sf-theme">${h}${await sfManageView()}</div>`; // request/adjust/confirmedはsfManageView内部で分岐（KPIカードも共通で出す）
 }
 
@@ -3799,6 +3804,7 @@ async function sfPresetsView(){
 const LEAVE_STATUS_LABEL={pending:'<span class="badge b">承認待ち</span>',approved:'<span class="badge g">承認済み</span>',rejected:'<span class="badge">却下</span>'};
 async function sfLeaveView(){
  const isApprover=me.is_master||["CEO","HQ","TEAM","TENCHO"].includes(me.role);
+ const canApply=can("paid_leave_apply"); // 2026-08-31追加: 有給を申請できる人かどうか（人ごとに設定可）
  const [{data:grants},{data:myReqs}]=await Promise.all([
   sb.from("sf_paid_leave_grants").select("granted_days,granted_on,note").eq("user_id",me.id).order("granted_on",{ascending:false}),
   sb.from("sf_paid_leave_requests").select("*").eq("user_id",me.id).order("created_at",{ascending:false})
@@ -3816,25 +3822,28 @@ async function sfLeaveView(){
  }
  h+=`</div>`;
 
- h+=`<div class="card"><h3 style="margin:0 0 8px">有給を申請する</h3>
-  <div style="display:flex;gap:8px;flex-wrap:wrap">
-   <div style="flex:1;min-width:130px"><label class="muted" style="font-size:11px">開始日</label><input type="date" id="lv-from" style="margin:0"></div>
-   <div style="flex:1;min-width:130px"><label class="muted" style="font-size:11px">終了日</label><input type="date" id="lv-to" style="margin:0"></div>
-   <div style="flex:1;min-width:80px"><label class="muted" style="font-size:11px">日数</label><input type="number" id="lv-days" step="0.5" min="0.5" style="margin:0"></div>
-  </div>
-  <textarea id="lv-reason" rows="2" placeholder="理由（任意）" style="margin-top:8px"></textarea>
-  <button class="btn sm" id="lv-submit" style="margin-top:8px">申請する</button>
- </div>`;
-
- h+=`<div class="card"><h3 style="margin:0 0 8px">自分の申請履歴</h3>`;
- h+=(!myReqs||!myReqs.length)?`<p class="muted" style="margin:0">まだ申請はありません</p>`:myReqs.map(r=>`
-  <div style="padding:8px 0;border-bottom:1px solid var(--line,#eee)">
-   <div><b>${sfFmtDateShort(r.date_from)}〜${sfFmtDateShort(r.date_to)}</b>（${r.days}日） ${LEAVE_STATUS_LABEL[r.status]||""}</div>
-   ${r.reason?`<div class="muted" style="font-size:11px;margin-top:2px">${esc(r.reason)}</div>`:""}
-   ${r.status==="rejected"&&r.reject_reason?`<div class="muted" style="font-size:11px;margin-top:2px">却下理由: ${esc(r.reject_reason)}</div>`:""}
-   ${r.status==="pending"?`<button class="btn sm sub" data-lvcancel="${r.id}" style="margin-top:4px">取り下げる</button>`:""}
-  </div>`).join("");
- h+=`</div>`;
+ if(canApply){
+  h+=`<div class="card"><h3 style="margin:0 0 8px">有給を申請する</h3>
+   <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <div style="flex:1;min-width:130px"><label class="muted" style="font-size:11px">開始日</label><input type="date" id="lv-from" style="margin:0"></div>
+    <div style="flex:1;min-width:130px"><label class="muted" style="font-size:11px">終了日</label><input type="date" id="lv-to" style="margin:0"></div>
+    <div style="flex:1;min-width:80px"><label class="muted" style="font-size:11px">日数</label><input type="number" id="lv-days" step="0.5" min="0.5" style="margin:0"></div>
+   </div>
+   <textarea id="lv-reason" rows="2" placeholder="理由（任意）" style="margin-top:8px"></textarea>
+   <button class="btn sm" id="lv-submit" style="margin-top:8px">申請する</button>
+  </div>`;
+  h+=`<div class="card"><h3 style="margin:0 0 8px">自分の申請履歴</h3>`;
+  h+=(!myReqs||!myReqs.length)?`<p class="muted" style="margin:0">まだ申請はありません</p>`:myReqs.map(r=>`
+   <div style="padding:8px 0;border-bottom:1px solid var(--line,#eee)">
+    <div><b>${sfFmtDateShort(r.date_from)}〜${sfFmtDateShort(r.date_to)}</b>（${r.days}日） ${LEAVE_STATUS_LABEL[r.status]||""}</div>
+    ${r.reason?`<div class="muted" style="font-size:11px;margin-top:2px">${esc(r.reason)}</div>`:""}
+    ${r.status==="rejected"&&r.reject_reason?`<div class="muted" style="font-size:11px;margin-top:2px">却下理由: ${esc(r.reject_reason)}</div>`:""}
+    ${r.status==="pending"?`<button class="btn sm sub" data-lvcancel="${r.id}" style="margin-top:4px">取り下げる</button>`:""}
+   </div>`).join("");
+  h+=`</div>`;
+ }else if(!isApprover){
+  h+=`<div class="card"><p class="muted" style="margin:0">この方は現在、有給申請の対象になっていません。必要であれば本部・マスターにご相談ください。</p></div>`;
+ }
 
  if(isApprover){
   const {data:pending}=await sb.from("sf_paid_leave_requests").select("*,users!sf_paid_leave_requests_user_id_fkey(name,role)").eq("status","pending").order("created_at");
@@ -4818,6 +4827,11 @@ function payEditHtml(rows,payMonth,sname){
     <button class="btn sm sub" data-payhide="${u.id}" style="flex-shrink:0;font-size:11px">🚫 この月は非表示</button>
    </div>
    <div class="muted" style="font-size:11px;margin-top:4px">${pr?`自動取得（${esc(payMonth)}分・全店舗合算）: 固定給${Math.round(pr.fixed_salary_amount||0).toLocaleString()}円／通勤手当${Math.round(pr.commute_allowance||0).toLocaleString()}円${pr.fixed_overtime_wage?`（固定給の内、固定残業代${Math.round(pr.fixed_overtime_wage).toLocaleString()}円）`:""}`:`${esc(payMonth)}分の自動取得データはまだありません`}</div>
+   <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+    <input type="file" accept="application/pdf" id="paypdf-${u.id}" style="flex:1;font-size:11px">
+    <button class="btn sm sub" data-paypdfupload="${u.id}" style="flex-shrink:0">📎 給与明細PDFを添付</button>
+   </div>
+   <p class="muted" style="font-size:10px;margin:2px 0 0">スマレジの一括ダウンロード（ZIP）を解凍したPDFを、この人・この月のぶんだけ選んでアップロードしてください</p>
    ${storeIds.length?storeIds.map(sid=>{
     const a=byStore[sid]||{};
     return `<details style="border-top:1px solid var(--line,#eee);margin-top:10px;padding-top:8px" ${storeIds.length===1?"open":""}>
@@ -7185,6 +7199,20 @@ function bindPage(){
   if(error){toast("削除エラー: "+error.message,true);return}
   if(payExtraStores[uid])payExtraStores[uid]=payExtraStores[uid].filter(x=>x!==sid);
   toast("削除しました");render();
+ });
+ document.querySelectorAll("[data-paypdfupload]").forEach(b=>b.onclick=async()=>{ // 2026-08-31追加: 給与明細PDFの手動添付
+  const uid=b.dataset.paypdfupload;
+  const inp=$("paypdf-"+uid);
+  const file=inp&&inp.files&&inp.files[0];
+  if(!file){toast("PDFファイルを選んでください",true);return}
+  if(file.type!=="application/pdf"){toast("PDFファイルを選んでください",true);return}
+  b.disabled=true;
+  const path=`${uid}/${payMonth}.pdf`;
+  const {error}=await sb.storage.from("payroll-pdfs").upload(path,file,{upsert:true,contentType:"application/pdf"});
+  b.disabled=false;
+  if(error){toast("アップロードエラー: "+error.message,true);return}
+  if(inp)inp.value="";
+  toast("給与明細PDFを添付しました");
  });
  document.querySelectorAll("[data-paysaveuser]").forEach(b=>b.onclick=async()=>{
   const uid=b.dataset.paysaveuser;

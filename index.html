@@ -320,7 +320,8 @@ const FEATURES={
  recruit_all:"応募者を全店舗ぶん見る（外すと担当店舗だけ）",
  evaluate:"評価者（従業員評価）※次バージョンから",
  kpi_config:"KPI・評価設定 ※次バージョンから",
- labor_cost_view:"勤怠実績・人件費データの閲覧（実績確認・調整グリッド等）※担当DのRLS対応待ち。2026-08-29ユーザー要望で追加"
+ labor_cost_view:"勤怠実績・人件費データの閲覧（実績確認・調整グリッド等）※担当DのRLS対応待ち。2026-08-29ユーザー要望で追加",
+ paid_leave_balance_view:"有給残日数を本人に表示する（B-17・2026-08-31追加。既定はOFF＝現状どおり非表示）"
 };
 // ===== v2.5 応募者管理 =====
 const APPLICANT_STATUS={new:"新規",contacted:"連絡済み",interview_set:"面接設定",interviewed:"面接済み",hired:"採用",retired:"退職",noshow:"バックレ",rejected:"不採用",declined:"辞退"};
@@ -397,7 +398,8 @@ const FEATURE_DEFAULTS={ // DB未設定時のフォールバック（v2.3まで�
  recruit_all:["CEO","HQ"],
  evaluate:["CEO","HQ","TEAM","TENCHO"],
  kpi_config:["CEO","HQ"],
- labor_cost_view:["CEO","HQ","TEAM","TENCHO"] // 2026-08-29 現状のlabor_cost_daily RLS(CEO/HQ/TEAM)にTENCHOを加えた既定値
+ labor_cost_view:["CEO","HQ","TEAM","TENCHO"], // 2026-08-29 現状のlabor_cost_daily RLS(CEO/HQ/TEAM)にTENCHOを加えた既定値
+ paid_leave_balance_view:[] // 2026-08-31 既定は誰にも見せない（現状どおり）。個人ごとの例外設定でON/OFFする
 };
 const ROLES_ALL=Object.keys(ROLE_NAME);
 const FMT_ROLES=["AL","SHAIN","TENCHO","TEAM","HQ","GAIHAN"]; // v2.6.26 フォーマットを作れる役職
@@ -2914,18 +2916,29 @@ async function shiftView(){
  sfEnsureReminders(); // await しない（表示をブロックしない・裏で試みるだけ）
  const isManager=sfPickableStores().length>0; // sfManageView自身が使う判定とそろえる
  let h=`<h2>📅 シフト</h2>`;
- if(!isManager)return `<div class="sf-theme">${h}${await sfSubmitView()}</div>`; // 一般従業員: 提出画面のみ
+ // 2026-08-31追加(B-17): 「🌴 有給申請」は管理者かどうかに関わらず全員が使えるタイルにする
+ const leaveTile=`<button class="sf-stepbtn ${sfMgStep==="leave"?"active":""}" data-sftile="leave"><b>🌴 有給申請</b><small>申請・残日数確認</small></button>`;
+ if(!isManager){ // 一般従業員: 自分の提出＋有給申請の2タイル
+  h+=`<div class="sf-stepnav" style="grid-template-columns:repeat(2,1fr)">
+   <button class="sf-stepbtn ${sfMgStep!=="leave"?"active":""}" data-sftile="mysubmit"><b>📝 自分の提出</b><small>自分のシフト希望</small></button>
+   ${leaveTile}
+  </div>`;
+  if(sfMgStep==="leave")return `<div class="sf-theme">${h}${await sfLeaveView()}</div>`;
+  return `<div class="sf-theme">${h}${await sfSubmitView()}</div>`;
+ }
  h+=`<div class="sf-stepnav" style="grid-template-columns:repeat(2,1fr)">
   <button class="sf-stepbtn ${sfMgStep==="mysubmit"?"active":""}" data-sftile="mysubmit"><b>📝 自分の提出</b><small>自分のシフト希望</small></button>
   <button class="sf-stepbtn ${sfMgStep==="request"?"active":""}" data-sftile="request"><b>①希望確認</b><small>半月・日別・出勤希望</small></button>
   <button class="sf-stepbtn ${sfMgStep==="adjust"?"active":""}" data-sftile="adjust"><b>②調整</b><small>不足・人件費を見て調整</small></button>
   <button class="sf-stepbtn ${sfMgStep==="confirmed"?"active":""}" data-sftile="confirmed"><b>③確定</b><small>未確認・変更申請</small></button>
   <button class="sf-stepbtn ${sfMgStep==="presets"?"active":""}" data-sftile="presets"><b>⏱ 時間帯設定</b><small>ランチ/ディナー等</small></button>
+  ${leaveTile}
   <!-- 2026-08-29続き: 「④実績・差分」タイルは削除（ユーザー指摘: サイドバーの「実績確認」と重複するため）。
        実績確認への導線は左ナビの「実績確認」（?page=actual）に一本化 -->
  </div>`;
  if(sfMgStep==="mysubmit")return `<div class="sf-theme">${h}${await sfSubmitView()}</div>`;
  if(sfMgStep==="presets")return `<div class="sf-theme">${h}${await sfPresetsView()}</div>`;
+ if(sfMgStep==="leave")return `<div class="sf-theme">${h}${await sfLeaveView()}</div>`;
  return `<div class="sf-theme">${h}${await sfManageView()}</div>`; // request/adjust/confirmedはsfManageView内部で分岐（KPIカードも共通で出す）
 }
 
@@ -3779,6 +3792,80 @@ async function sfPresetsView(){
  return h;
 }
 
+// ---- 有給申請（B-17・2026-08-31追加） ----
+// 本人が申請→チーム長/本部/社長/マスターが承認。残日数は、スマレジAPIの値が信用できなかった
+// （B-16調査結果）ため、手入力の付与実績台帳（sf_paid_leave_grants）から計算する。
+// 残日数を本人に見せるかどうかはFEATURES.paid_leave_balance_view（既定OFF・個人ごとに例外設定可）
+const LEAVE_STATUS_LABEL={pending:'<span class="badge b">承認待ち</span>',approved:'<span class="badge g">承認済み</span>',rejected:'<span class="badge">却下</span>'};
+async function sfLeaveView(){
+ const isApprover=me.is_master||["CEO","HQ","TEAM","TENCHO"].includes(me.role);
+ const [{data:grants},{data:myReqs}]=await Promise.all([
+  sb.from("sf_paid_leave_grants").select("granted_days,granted_on,note").eq("user_id",me.id).order("granted_on",{ascending:false}),
+  sb.from("sf_paid_leave_requests").select("*").eq("user_id",me.id).order("created_at",{ascending:false})
+ ]);
+ const grantedTotal=(grants||[]).reduce((a,g)=>a+Number(g.granted_days||0),0);
+ const usedTotal=(myReqs||[]).filter(r=>r.status==="approved").reduce((a,r)=>a+Number(r.days||0),0);
+ const remaining=grantedTotal-usedTotal;
+ const canSeeBalance=can("paid_leave_balance_view");
+
+ let h=`<div class="card"><h3 style="margin:0 0 8px">🌴 有給休暇</h3>`;
+ if(canSeeBalance){
+  h+=`<div class="sf-mini-grid"><div class="sf-mini"><small>付与日数（累計）</small><b>${grantedTotal}日</b></div><div class="sf-mini"><small>残日数</small><b>${remaining}日</b></div></div>`;
+ }else{
+  h+=`<p class="muted" style="margin:0">残日数の表示は現在オフになっています。知りたい場合は本部・店長にご確認ください。</p>`;
+ }
+ h+=`</div>`;
+
+ h+=`<div class="card"><h3 style="margin:0 0 8px">有給を申請する</h3>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+   <div style="flex:1;min-width:130px"><label class="muted" style="font-size:11px">開始日</label><input type="date" id="lv-from" style="margin:0"></div>
+   <div style="flex:1;min-width:130px"><label class="muted" style="font-size:11px">終了日</label><input type="date" id="lv-to" style="margin:0"></div>
+   <div style="flex:1;min-width:80px"><label class="muted" style="font-size:11px">日数</label><input type="number" id="lv-days" step="0.5" min="0.5" style="margin:0"></div>
+  </div>
+  <textarea id="lv-reason" rows="2" placeholder="理由（任意）" style="margin-top:8px"></textarea>
+  <button class="btn sm" id="lv-submit" style="margin-top:8px">申請する</button>
+ </div>`;
+
+ h+=`<div class="card"><h3 style="margin:0 0 8px">自分の申請履歴</h3>`;
+ h+=(!myReqs||!myReqs.length)?`<p class="muted" style="margin:0">まだ申請はありません</p>`:myReqs.map(r=>`
+  <div style="padding:8px 0;border-bottom:1px solid var(--line,#eee)">
+   <div><b>${sfFmtDateShort(r.date_from)}〜${sfFmtDateShort(r.date_to)}</b>（${r.days}日） ${LEAVE_STATUS_LABEL[r.status]||""}</div>
+   ${r.reason?`<div class="muted" style="font-size:11px;margin-top:2px">${esc(r.reason)}</div>`:""}
+   ${r.status==="rejected"&&r.reject_reason?`<div class="muted" style="font-size:11px;margin-top:2px">却下理由: ${esc(r.reject_reason)}</div>`:""}
+   ${r.status==="pending"?`<button class="btn sm sub" data-lvcancel="${r.id}" style="margin-top:4px">取り下げる</button>`:""}
+  </div>`).join("");
+ h+=`</div>`;
+
+ if(isApprover){
+  const {data:pending}=await sb.from("sf_paid_leave_requests").select("*,users!sf_paid_leave_requests_user_id_fkey(name,role)").eq("status","pending").order("created_at");
+  h+=`<div class="card"><h3 style="margin:0 0 8px">📋 承認待ちの有給申請（${(pending||[]).length}件）</h3>`;
+  h+=(!pending||!pending.length)?`<p class="muted" style="margin:0">承認待ちの申請はありません</p>`:pending.map(r=>`
+   <div style="padding:8px 0;border-bottom:1px solid var(--line,#eee)">
+    <div><b>${esc(r.users?r.users.name:"?")}</b>（${ROLE_NAME[r.users&&r.users.role]||""}）　${sfFmtDateShort(r.date_from)}〜${sfFmtDateShort(r.date_to)}（${r.days}日）</div>
+    ${r.reason?`<div class="muted" style="font-size:11px;margin:3px 0">${esc(r.reason)}</div>`:""}
+    <div style="display:flex;gap:6px;margin-top:4px">
+     <button class="btn sm" data-lvapprove="${r.id}">承認</button>
+     <button class="btn sm sub" data-lvreject="${r.id}" style="color:#c0392b">却下</button>
+    </div>
+   </div>`).join("");
+  h+=`</div>`;
+ }
+
+ if(me.is_master||me.role==="HQ"){
+  const {data:activeUsers}=await sb.from("users").select("id,name,role").eq("is_active",true).order("name");
+  h+=`<div class="card"><h3 style="margin:0 0 8px">👥 有給の付与を追加（マスター・本部）</h3>
+   <select class="inp" id="lv-grantuser"><option value="">従業員を選択</option>${(activeUsers||[]).map(u=>`<option value="${u.id}">${esc(u.name)}（${ROLE_NAME[u.role]||u.role}）</option>`).join("")}</select>
+   <div style="display:flex;gap:8px;margin-top:6px">
+    <input type="number" id="lv-grantdays" placeholder="付与日数" step="0.5" style="margin:0">
+    <input type="date" id="lv-grantdate" value="${todayStr()}" style="margin:0">
+   </div>
+   <input type="text" id="lv-grantnote" placeholder="メモ（任意。例: 2026年度定期付与）" style="margin-top:6px">
+   <button class="btn sm" id="lv-grantsave" style="margin-top:8px">付与する</button>
+  </div>`;
+ }
+ return h;
+}
+
 // ---- 保存処理（共通） ----
 async function sfSaveDay(uid,storeId,ds,periodKey,presetId,isOff,startT,endT,presets){
  let start=startT,end=endT,breakMin=0,pid=presetId||null;
@@ -3817,6 +3904,55 @@ function bindShiftPage(){
  // 2026-08-29続き（モックアップ準拠）: ②調整の「自動配置案」「ヘルプ候補」
  if($("sfmg-autoassign"))$("sfmg-autoassign").onclick=()=>toast("自動配置案は準備中の機能です。今は手動でセルを選んで調整してください");
  if($("sfmg-helpcandidates"))$("sfmg-helpcandidates").onclick=()=>{sfHelpCandidatesOpen=!sfHelpCandidatesOpen;render()};
+ // 2026-08-31追加（B-17）: 有給申請
+ (()=>{ // 開始日・終了日から日数を自動計算（半休等は手で上書きしてよい）
+  const recalc=()=>{
+   const f=$("lv-from"),t=$("lv-to"),d=$("lv-days");
+   if(!f||!t||!d||!f.value||!t.value)return;
+   const diff=Math.round((new Date(t.value)-new Date(f.value))/86400000)+1;
+   if(diff>0)d.value=diff;
+  };
+  if($("lv-from"))$("lv-from").onchange=recalc;
+  if($("lv-to"))$("lv-to").onchange=recalc;
+ })();
+ if($("lv-submit"))$("lv-submit").onclick=async()=>{
+  const from=$("lv-from").value,to=$("lv-to").value,days=+$("lv-days").value,reason=$("lv-reason").value.trim();
+  if(!from||!to){toast("開始日・終了日を入力してください",true);return}
+  if(!(days>0)){toast("日数を入力してください",true);return}
+  if(to<from){toast("終了日は開始日より後にしてください",true);return}
+  $("lv-submit").disabled=true;
+  const {error}=await sb.from("sf_paid_leave_requests").insert({user_id:me.id,date_from:from,date_to:to,days,reason:reason||null});
+  $("lv-submit").disabled=false;
+  if(error){toast("申請エラー: "+error.message,true);return}
+  toast("有給を申請しました");render();
+ };
+ document.querySelectorAll("[data-lvcancel]").forEach(b=>b.onclick=async()=>{
+  if(!confirm("この申請を取り下げますか？"))return;
+  const {error}=await sb.from("sf_paid_leave_requests").update({status:"rejected",reject_reason:"本人による取り下げ",updated_at:new Date().toISOString()}).eq("id",b.dataset.lvcancel);
+  if(error){toast("エラー: "+error.message,true);return}
+  toast("取り下げました");render();
+ });
+ document.querySelectorAll("[data-lvapprove]").forEach(b=>b.onclick=async()=>{
+  const {error}=await sb.from("sf_paid_leave_requests").update({status:"approved",approved_by:me.id,approved_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq("id",b.dataset.lvapprove);
+  if(error){toast("エラー: "+error.message,true);return}
+  toast("承認しました");render();
+ });
+ document.querySelectorAll("[data-lvreject]").forEach(b=>b.onclick=async()=>{
+  const reason=prompt("却下理由（任意）")||null;
+  const {error}=await sb.from("sf_paid_leave_requests").update({status:"rejected",approved_by:me.id,approved_at:new Date().toISOString(),reject_reason:reason,updated_at:new Date().toISOString()}).eq("id",b.dataset.lvreject);
+  if(error){toast("エラー: "+error.message,true);return}
+  toast("却下しました");render();
+ });
+ if($("lv-grantsave"))$("lv-grantsave").onclick=async()=>{
+  const uid=$("lv-grantuser").value,days=+$("lv-grantdays").value,on=$("lv-grantdate").value,note=$("lv-grantnote").value.trim();
+  if(!uid){toast("従業員を選んでください",true);return}
+  if(!(days>0)){toast("付与日数を入力してください",true);return}
+  $("lv-grantsave").disabled=true;
+  const {error}=await sb.from("sf_paid_leave_grants").insert({user_id:uid,granted_days:days,granted_on:on||todayStr(),note:note||null,created_by:me.id});
+  $("lv-grantsave").disabled=false;
+  if(error){toast("エラー: "+error.message,true);return}
+  toast("付与しました");render();
+ };
  // 提出
  if($("sf-store"))$("sf-store").onchange=e=>{sfSubStore=e.target.value;render()};
  if($("sf-period"))$("sf-period").onchange=e=>{sfSubPeriodIdx=+e.target.value;render()};

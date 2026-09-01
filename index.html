@@ -515,6 +515,7 @@ let ekispertKey=null,fareCache={}; // v2.6.66 交通費の自動計算（駅す�
 let lineToken=null,lineSecret=null,lineOa=null; // v2.6.20 求人用LINE
 let lineHealthChecked=false,lineHealthOk=null,lineHealthErr=""; // 2026-08-28 LINE接続の生存確認（応募者管理を開くたびに1回・ユーザー報告への対応）
 let lineLinkInfo=null; // v2.6.81 従業員本人のLINE連携（発行した合言葉・OA。応募者側のline_intakeとは独立）
+let showLineJoinPrompt=false; // 2026-09-01追加: 入社登録直後、LINE未連携ならその場で連携を促す画面を出すフラグ
 let dashId=null,dashPw=null,dashLog; // v2.6.57 売上ダッシュボード連携
 let teams=[],euTeam=null,lrList=null,lrEdit=null; // v2.6.2 チーム・日報Lark通知
 // v2.6.3 Lark通知のイベント（この動きがあったら通知する）
@@ -1489,7 +1490,7 @@ async function doJoin(){
  else if(!linked)try{await sb.rpc("set_my_smaregi_skip")}catch(e){}
  try{await sb.rpc("notify_join_complete")}catch(e){}
  hqNotifyOnboarding(data.user.id,name,email); // 2026-09-01追加(B-18): 本部タスク自動作成フック（await不要・失敗しても登録自体は継続）
- await loadMe(data.user.id);
+ await loadMe(data.user.id,{afterJoin:true}); // 2026-09-01追加: LINE未連携ならその場で連携画面を出す
 }
 // ===== B-18（2026-09-01）入社登録完了→本部タスク自動作成フック =====
 // 実装指示書_ラウンド5_2026-08-31.md §6.1「E-6＋B-18」。E-6（担当E）が
@@ -1597,7 +1598,7 @@ function isUnread(r,read){
  if(!r.updated_at)return false;
  return new Date(r.updated_at).getTime()>new Date(read).getTime();
 }
-async function loadMe(uid){
+async function loadMe(uid,opts){
  $("app").innerHTML='<div class="spin">読み込み中...</div>';
  let u=null,st=null;
  for(let i=0;i<3;i++){ // ログイン直後はトークン反映前で空になることがあるためリトライ
@@ -1611,6 +1612,9 @@ async function loadMe(uid){
  }
  if(!u){renderLogin("ユーザー情報を取得できませんでした。管理者にお問い合わせください。");await sb.auth.signOut();return}
  if(!u.is_active){renderLogin("このアカウントは無効化されています。本部までお問い合わせください。");await sb.auth.signOut();return}
+ // 2026-09-01追加: 入社登録直後にLINEが未連携なら、ホーム画面の前にその場で連携を促す
+ // （応募者としてLINE連携済みなら register_via_invite 側で既に引き継がれているのでここには来ない）
+ if(opts&&opts.afterJoin&&!u.line_user_id)showLineJoinPrompt=true;
  stores=st||[];
  { // v2.7 バグ修正: 本部(hq_pseudo_store)等の疑似店舗を、店舗の所属選択肢（従業員編集・招待・シフト管理等）に含める
   const {data:sh}=await sb.from("stores").select("id,name").eq("is_active",false).not("smaregi_store_id","is",null).order("sort_order");
@@ -1689,7 +1693,8 @@ async function render(){
  document.getElementById("navactual").style.display=(sfCanManage(null)||me.role==="TENCHO")?"":"none"; // v2.7 実績確認（シフトから分離）
  updateDots();
  let body="";
- if(page==="home")body=await homeView();
+ if(showLineJoinPrompt)body=await lineJoinPromptView(); // 2026-09-01追加: 入社登録直後のLINE連携案内（他画面より優先）
+ else if(page==="home")body=await homeView();
  else if(page==="write")body=await writeView("daily");
  else if(page==="weekly")body=await writeView("weekly");
  else if(page==="list")body=detail?await detailView():await listView();
@@ -6197,6 +6202,25 @@ async function adminToggle(){
 
 // ===== 設定 =====
 let gasSaved=null,gasCalNow=""; // v2.6.38 面接Meetの接続先が登録済みか／v2.6.42 いまのカレンダーID
+// 2026-09-01追加: 入社登録直後、LINE未連携ならその場で連携してもらう画面。
+// 「LINEと連携する」の実体は settings画面と同じ user_issue_line_code（bindPage()側のハンドラを共用）
+async function lineJoinPromptView(){
+ return `<div class="card"><h3>💚 最後にLINE連携をお願いします</h3>
+  <p class="muted" style="margin:0">今後、シフト提出の締切が近いときなどのお知らせはLINEで届きます。入社登録の完了案内もこちらに届きますので、いま連携をお願いします。</p>
+  ${lineLinkInfo&&lineLinkInfo.oa?`
+   <div style="background:#f0fff4;border:2px solid #06c755;border-radius:8px;padding:14px;margin-top:14px">
+    <p style="margin:0 0 10px;font-size:14px">下のボタンを押すとLINEが開き、文字が入った状態になりますので、<b>そのまま送信してください。</b></p>
+    <a href="https://line.me/R/oaMessage/${encodeURIComponent(lineLinkInfo.oa)}/?${encodeURIComponent(lineLinkInfo.code)}" class="btn" style="background:#06c755;display:block;text-align:center;text-decoration:none;color:#fff;padding:12px">💚 LINEで連携する</a>
+    <p class="muted" style="margin:10px 0 0;font-size:12px;text-align:center">うまく開かない場合は、LINEで下の合言葉を送ってください</p>
+    <p style="font-size:22px;font-weight:700;letter-spacing:4px;margin:4px 0 0;text-align:center">${esc(lineLinkInfo.code)}</p>
+    <button class="btn sm" id="line-join-check" style="margin-top:14px;width:100%">🔄 LINEで送信した／連携できたか確認する</button>
+   </div>
+  `:`
+   <button class="btn sm" id="line-link-start" style="margin-top:14px">💚 LINEと連携する</button>
+  `}
+  <p style="margin-top:14px"><button class="btn sm sub" id="line-join-skip" style="width:100%">あとで連携する（スキップ）</button></p>
+ </div>`;
+}
 async function settingsView(){
  if(setMode==="join")return settingsJoinView();
  if(setMode==="fmt")return settingsFmtView();
@@ -8225,6 +8249,19 @@ function bindPage(){
   const {error}=await sb.rpc("user_unlink_line");
   if(error){toast("解除エラー: "+error.message,true);return}
   me.line_user_id=null;me.line_linked_at=null;lineLinkInfo=null;toast("LINE連携を解除しました");render();
+ };
+ // 2026-09-01追加: 入社登録直後のLINE連携案内画面
+ if($("line-join-skip"))$("line-join-skip").onclick=()=>{showLineJoinPrompt=false;lineLinkInfo=null;render()};
+ if($("line-join-check"))$("line-join-check").onclick=async()=>{
+  $("line-join-check").disabled=true;$("line-join-check").textContent="確認中...";
+  const {data:u}=await sb.from("users").select("line_user_id,line_linked_at").eq("id",me.id).maybeSingle();
+  if(u&&u.line_user_id){
+   me.line_user_id=u.line_user_id;me.line_linked_at=u.line_linked_at;
+   showLineJoinPrompt=false;lineLinkInfo=null;toast("LINE連携が確認できました！");render();
+  }else{
+   toast("まだ確認できませんでした。LINEでメッセージを送信してから、もう一度お試しください。",true);
+   $("line-join-check").disabled=false;$("line-join-check").textContent="🔄 LINEで送信した／連携できたか確認する";
+  }
  };
  if($("editthis"))$("editthis").onclick=async()=>{
   const {data:r}=await sb.from("reports").select("kind").eq("id",detail).single();

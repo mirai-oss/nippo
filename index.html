@@ -1488,7 +1488,26 @@ async function doJoin(){
  if(!linked&&smWanted)try{await smaregiSync(data.user.id)}catch(e){}
  else if(!linked)try{await sb.rpc("set_my_smaregi_skip")}catch(e){}
  try{await sb.rpc("notify_join_complete")}catch(e){}
+ hqNotifyOnboarding(data.user.id,name,email); // 2026-09-01追加(B-18): 本部タスク自動作成フック（await不要・失敗しても登録自体は継続）
  await loadMe(data.user.id);
+}
+// ===== B-18（2026-09-01）入社登録完了→本部タスク自動作成フック =====
+// 実装指示書_ラウンド5_2026-08-31.md §6.1「E-6＋B-18」。E-6（担当E・hq_側の受け皿RPC）と
+// セットの機能。契約（WORKLOG宣言済み）:
+//   hq_create_onboarding_task(p_user_id uuid, p_name text, p_email text,
+//     p_store_id uuid, p_store_name text, p_hire_date date default null) returns uuid
+// E-6未実装の間はRPCが無くエラーになるが、既存のnotify_join_complete等と同じ「失敗しても
+// 登録自体をブロックしない」方針でtry/catchのみ（呼び出し元でawaitせず投げっぱなしにする）
+async function hqNotifyOnboarding(uid,name,email){
+ try{
+  const {data:us}=await sb.from("user_stores").select("store_id,stores(name)").eq("user_id",uid).limit(1);
+  const storeId=us&&us[0]?us[0].store_id:null;
+  const storeName=us&&us[0]&&us[0].stores?us[0].stores.name:null;
+  const {error}=await sb.rpc("hq_create_onboarding_task",{
+   p_user_id:uid,p_name:name,p_email:email,p_store_id:storeId,p_store_name:storeName,p_hire_date:todayStr()
+  });
+  if(error)console.warn("入社タスク自動作成:",error.message);
+ }catch(e){console.warn("入社タスク自動作成:",e)}
 }
 async function smaregiSync(uid){ // スマレジ・タイムカードにスタッフ登録するEdge Functionを呼ぶ
  try{
@@ -6075,6 +6094,7 @@ async function adminCreate(){
  const {data:newId,error}=await sb.rpc("admin_create_user",{p_email:email,p_password:pw,p_name:name,p_role:nuRole,p_store_ids:nuStores});
  if(error){toast("発行エラー: "+error.message,true);$("nu-submit").disabled=false;return}
  lastIssued={name,email,pw,id:newId||""}; // v2.6.64 idも控えて、あとでタップで詳細を開けるようにする
+ if(newId)hqNotifyOnboarding(newId,name,email); // 2026-09-01追加(B-18): 本部タスク自動作成フック（代理登録side）
  adminMode="list";render();
 }
 

@@ -4783,7 +4783,7 @@ async function adminPayrollView(){
   (byStore[r.store_id]=byStore[r.store_id]||{})[r.kind]=r;
  });
  const homeStoresByUser={};(usRows||[]).forEach(r=>{(homeStoresByUser[r.user_id]=homeStoresByUser[r.user_id]||new Set()).add(r.store_id)});
- const sname=id=>{const s=stores.find(x=>x.id===id);return s?s.name:"?"};
+ const sname=id=>{const s=stores.find(x=>x.id===id)||storesHidden.find(x=>x.id===id);return s?s.name:"?"}; // 2026-09-02修正: 本部等の疑似店舗(storesHidden)が「?」表示になっていた不具合
  // 人ごとに共通の下ごしらえ（表示モード・入力モードの両方で使う）
  const rows=people.map(u=>{
   const pr=payrollByUser[u.id];

@@ -478,6 +478,7 @@ let searchQ="",fRole="",fStore="";                       // v1.7 検索
 let joinPhotos={},joinSmStaffs=null,joinInfoCur=null;    // v1.7 入社フォーム写真＋スマレジ選択
 let smStaffsCache=null,smSel=null,smRole=null,smStores=[],smResult=null; // v1.7 スマレジ連携招待
 let smBulkSel=new Set(),smBulkPanel=false,smBulkRole=null,smBulkStores=[],smBulkDays="14",smBulkRunning=false,smBulkResults=null; // 2026-09-02 一括招待（担当D依頼・121人未連携対応）
+let smStoreFilter=""; // 2026-09-02 スマレジ上の事業所（店舗）で絞り込み・一括招待の店舗選びを楽にする
 let tskSeg="open",tskEdit=null,tskFiles=[],tskCmtFiles={},tskUsers=null; // v1.8 タスク
 let chatRoom=null,chatNew=null,chatSeg="all",chatFiles=[],chatGm=[],chatDraft="",chatTimer=null,chatDescEdit=false,chatRename=false,chatMsgCount=0; // v1.9 チャット
 let dashPeriod="d7",dashMetric="rate"; // v2.0 ダッシュボード
@@ -6007,7 +6008,12 @@ async function adminSmaregiView(){
  const linked={};profs.forEach(p=>{linked[String(p.smaregi_staff_id)]=p.user_id});
  const uname=id=>{const u=us.find(x=>x.id===id);return u?u.name:""};
  const linkedCount=staffs.filter(s=>linked[String(s.staffId)]).length;
- const unlinkedStaffs=staffs.filter(s=>!linked[String(s.staffId)]);
+ // 2026-09-02追加: スマレジ・タイムカード上の事業所（店舗）で絞り込み。「所属店舗をどう選べばいいか
+ // 分からない」というユーザー要望に対応（staffs取得時にsmaregi-syncがstoreIdsを付けてくる）
+ const allStoreOpts=[...stores,...storesHidden];
+ const storeNamesOf=s=>(s.storeIds&&s.storeIds.length)?s.storeIds.map(id=>{const x=allStoreOpts.find(o=>o.id===id);return x?x.name:null}).filter(Boolean).join("・"):"";
+ const filteredStaffs=smStoreFilter?staffs.filter(s=>smStoreFilter==="__none__"?!(s.storeIds&&s.storeIds.length):(s.storeIds||[]).includes(smStoreFilter)):staffs;
+ const unlinkedStaffs=filteredStaffs.filter(s=>!linked[String(s.staffId)]);
  if(smResult){h+=`<div class="info">✅ ${esc(smResult.msg)}${smResult.url?`<br><input type="text" id="sm-url" value="${esc(smResult.url)}" readonly style="font-size:12px"><button class="btn sm" id="sm-copy">📋 リンクをコピー</button>`:""}</div>`}
  if(smSel){ // v1.7 連携パネル（1人ずつ）
   h+=`<div class="card" style="border-color:var(--blue)"><h3>🔗 ${esc(smSel.name)} さんをアプリに招待</h3>
@@ -6043,20 +6049,33 @@ async function adminSmaregiView(){
    </div>`).join("")}
    </div></div>`;
  }
- h+=`<p class="muted">${staffs.length}名が登録・うち${linkedCount}名がアプリ連携済み（未連携${unlinkedStaffs.length}名）</p>
-  <input type="text" id="smq" placeholder="🔍 名前で絞り込み" style="margin:4px 0 8px">
+ const storeOptCounts={};staffs.forEach(s=>{if(s.storeIds&&s.storeIds.length)s.storeIds.forEach(id=>storeOptCounts[id]=(storeOptCounts[id]||0)+1);});
+ const noneCount=staffs.filter(s=>!(s.storeIds&&s.storeIds.length)).length;
+ h+=`<p class="muted">${staffs.length}名が登録・うち${linkedCount}名がアプリ連携済み（未連携${staffs.filter(s=>!linked[String(s.staffId)]).length}名）</p>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 8px">
+   <input type="text" id="smq" placeholder="🔍 名前で絞り込み" style="flex:1;min-width:160px;margin:0">
+   <select class="inp" id="sm-storefilter" style="flex:1;min-width:180px;margin:0">
+    <option value="">🏪 事業所で絞り込み（全店舗）</option>
+    ${allStoreOpts.filter(o=>storeOptCounts[o.id]).map(o=>`<option value="${o.id}" ${smStoreFilter===o.id?"selected":""}>${esc(o.name)}（${storeOptCounts[o.id]}名）</option>`).join("")}
+    ${noneCount?`<option value="__none__" ${smStoreFilter==="__none__"?"selected":""}>事業所不明（${noneCount}名）</option>`:""}
+   </select>
+  </div>
+  <p class="muted" style="font-size:11px;margin-top:-4px">事業所はスマレジ・タイムカード側の設定から取得しています。絞り込むと、その事業所の人だけを選んで招待できます</p>
   ${unlinkedStaffs.length?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
-   <button class="btn sm sub" id="smb-all">未連携を全て選択</button>
+   <button class="btn sm sub" id="smb-all">${smStoreFilter?"表示中の":"未連携を"}全て選択</button>
    <button class="btn sm sub" id="smb-none">選択解除</button>
    <span id="smb-bar" style="${smBulkSel.size?"":"display:none"};font-size:12px" class="badge b">${smBulkSel.size}人選択中</span>
    <button class="btn sm" id="smb-open" style="${smBulkSel.size?"":"display:none"}">📨 まとめて招待する</button>
   </div>`:""}`;
- staffs.forEach((s,i)=>{
+ filteredStaffs.forEach(s=>{
+  const i=staffs.indexOf(s); // data-smlinkはsmStaffsCache.staffs全体でのindexを使う（1人ずつ連携ボタン用）
   const lk=linked[String(s.staffId)];
   const cb=lk?"":`<input type="checkbox" class="smbchk" data-id="${esc(s.staffId)}" ${smBulkSel.has(String(s.staffId))?"checked":""} style="margin-right:8px">`;
-  h+=`<div class="row" data-smrow="${esc((s.name||"")+(s.kana||""))}" style="cursor:default">${cb?`<label style="display:flex;align-items:center;flex:1;cursor:pointer">${cb}<span><b>${esc(s.name)}</b>${s.classification?` <span class="badge b">${esc(s.classification)}</span>`:""}<br><span class="muted">スタッフID: ${esc(s.staffId)}${s.kana?" ／ "+esc(s.kana):""}${s.mail?" ／ 📧":""}</span></span></label>`:`<span><b>${esc(s.name)}</b>${s.classification?` <span class="badge b">${esc(s.classification)}</span>`:""}<br><span class="muted">スタッフID: ${esc(s.staffId)}${s.kana?" ／ "+esc(s.kana):""}${s.mail?" ／ 📧":""}${lk?" ／ "+esc(uname(lk)):""}</span></span>`}<span>${lk?'<span class="badge g">アプリ連携済</span>':`<button class="btn sm" data-smlink="${i}" style="margin:0">連携する</button>`}</span></div>`;
+  const storeLabel=storeNamesOf(s);
+  h+=`<div class="row" data-smrow="${esc((s.name||"")+(s.kana||""))}" style="cursor:default">${cb?`<label style="display:flex;align-items:center;flex:1;cursor:pointer">${cb}<span><b>${esc(s.name)}</b>${s.classification?` <span class="badge b">${esc(s.classification)}</span>`:""}<br><span class="muted">スタッフID: ${esc(s.staffId)}${s.kana?" ／ "+esc(s.kana):""}${s.mail?" ／ 📧":""}${storeLabel?" ／ 🏪"+esc(storeLabel):""}</span></span></label>`:`<span><b>${esc(s.name)}</b>${s.classification?` <span class="badge b">${esc(s.classification)}</span>`:""}<br><span class="muted">スタッフID: ${esc(s.staffId)}${s.kana?" ／ "+esc(s.kana):""}${s.mail?" ／ 📧":""}${storeLabel?" ／ 🏪"+esc(storeLabel):""}${lk?" ／ "+esc(uname(lk)):""}</span></span>`}<span>${lk?'<span class="badge g">アプリ連携済</span>':`<button class="btn sm" data-smlink="${i}" style="margin:0">連携する</button>`}</span></div>`;
  });
  if(!staffs.length)h+=`<p class="muted">まだスタッフが登録されていません</p>`;
+ else if(!filteredStaffs.length)h+=`<p class="muted">この事業所には該当者がいません</p>`;
  return h;
 }
 // v1.7: スマレジスタッフへの招待発行（メール送信 or リンクコピー）
@@ -6949,7 +6968,7 @@ async function resetFmt(){
 
 // ===== イベント =====
 // トップレベルのページ切替（nav・統合ポータルシェルからのpostMessageで共用）。各種モーダル的な状態をリセットしてから移動する
-function goToPage(p){page=p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;smBulkSel=new Set();smBulkPanel=false;smBulkResults=null;tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";chatReply=null;chatInvite=false;chatInviteSel=[];rcDetail=null;rcJobs=false;rcMsgs=null;rcDup=false;rcSimilar=[];rcPast=[];rcCal=false;rcCalDay=null;unlockedScoreKeys={};render()} // v2.6.76 予算ロック解除の状態もリセット
+function goToPage(p){page=p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;smBulkSel=new Set();smBulkPanel=false;smBulkResults=null;smStoreFilter="";tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";chatReply=null;chatInvite=false;chatInviteSel=[];rcDetail=null;rcJobs=false;rcMsgs=null;rcDup=false;rcSimilar=[];rcPast=[];rcCal=false;rcCalDay=null;unlockedScoreKeys={};render()} // v2.6.76 予算ロック解除の状態もリセット
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>goToPage(b.dataset.p));
 // 統合ポータルシェル(portal.html)からのタブ切替メッセージを受け取り、iframeをリロードせず画面だけ切り替える。
 // tori-dashboard向けに担当Fが用意したpostMessage({type:'nsPortalSetTab', tab:...})と同じ契約に合わせてある
@@ -7267,7 +7286,7 @@ function bindPage(){
  // 管理画面
  if($("adnew"))$("adnew").onclick=()=>{adminMode="new";nuRole=null;nuStores=[];lastIssued=null;render()};
  if($("adinvite"))$("adinvite").onclick=()=>{adminMode="invite";ivRole=null;ivStores=[];lastInvite=null;lastIssued=null;render()};
- if($("adsmaregi"))$("adsmaregi").onclick=()=>{adminMode="smaregi";lastIssued=null;lastInvite=null;smSel=null;smResult=null;smStaffsCache=null;smBulkSel=new Set();smBulkPanel=false;smBulkResults=null;render()};
+ if($("adsmaregi"))$("adsmaregi").onclick=()=>{adminMode="smaregi";lastIssued=null;lastInvite=null;smSel=null;smResult=null;smStaffsCache=null;smBulkSel=new Set();smBulkPanel=false;smBulkResults=null;smStoreFilter="";render()};
  if($("adstores"))$("adstores").onclick=()=>{adminMode="stores";stList=null;stSmaregi=undefined;lastIssued=null;lastInvite=null;render()};
  // 2026-08-30続き: 給与・インセンティブ配分（月単位・人ごとに店舗を並べる方式に改訂）
  if($("adpayroll"))$("adpayroll").onclick=()=>{adminMode="payroll";payExtraStores={};render()};
@@ -7902,6 +7921,7 @@ function bindPage(){
   const q=$("smq").value.trim().toLowerCase();
   document.querySelectorAll("[data-smrow]").forEach(rw=>{rw.style.display=!q||(rw.dataset.smrow+rw.textContent).toLowerCase().includes(q)?"":"none"});
  };
+ if($("sm-storefilter"))$("sm-storefilter").onchange=()=>{smStoreFilter=$("sm-storefilter").value;smBulkSel=new Set();render()}; // 2026-09-02追加
  document.querySelectorAll("[data-smlink]").forEach(b=>b.onclick=()=>{
   smSel=smStaffsCache.staffs[+b.dataset.smlink];smResult=null;
   const c=smSel.classification||"";
@@ -7921,10 +7941,12 @@ function bindPage(){
  });
  if($("smb-all"))$("smb-all").onclick=()=>{
   const {staffs,profs}=smStaffsCache;const linked={};profs.forEach(p=>linked[String(p.smaregi_staff_id)]=p.user_id);
-  smBulkSel=new Set(staffs.filter(s=>!linked[String(s.staffId)]).map(s=>String(s.staffId)));render();
+  // 2026-09-02追加: 事業所で絞り込み中なら、その事業所の未連携者だけを選ぶ
+  const inFilter=s=>!smStoreFilter||(smStoreFilter==="__none__"?!(s.storeIds&&s.storeIds.length):(s.storeIds||[]).includes(smStoreFilter));
+  smBulkSel=new Set(staffs.filter(s=>!linked[String(s.staffId)]&&inFilter(s)).map(s=>String(s.staffId)));render();
  };
  if($("smb-none"))$("smb-none").onclick=()=>{smBulkSel=new Set();render()};
- if($("smb-open"))$("smb-open").onclick=()=>{smBulkPanel=true;smBulkRole=null;smBulkStores=[];smBulkResults=null;render()};
+ if($("smb-open"))$("smb-open").onclick=()=>{smBulkPanel=true;smBulkRole=null;smBulkStores=smStoreFilter&&smStoreFilter!=="__none__"?[smStoreFilter]:[];smBulkResults=null;render()}; // 2026-09-02: 絞り込み中の事業所を初期値にする
  if($("smb-cancel"))$("smb-cancel").onclick=()=>{smBulkPanel=false;render()};
  document.querySelectorAll(".chip.smbrole").forEach(c=>c.onclick=()=>{smBulkRole=c.dataset.r;document.querySelectorAll(".chip.smbrole").forEach(x=>x.classList.remove("on"));c.classList.add("on")});
  document.querySelectorAll(".chip.smbstore").forEach(c=>c.onclick=()=>{const s=c.dataset.s;smBulkStores=smBulkStores.includes(s)?smBulkStores.filter(x=>x!==s):smBulkStores.concat([s]);c.classList.toggle("on")});

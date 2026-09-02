@@ -4750,6 +4750,7 @@ async function adminPayrollView(){
  if(!payViewMode)payViewMode="table";
  let h=`<h2>💴 給与・インセンティブ配分</h2>
  <p class="muted">スマレジ給与明細から自動取得した固定給・通勤手当を参考に、月ごと・店舗ごとの内訳を確定させます。ここで保存した金額は、シフト調整画面の社員人件費で使われます（対象: 社員・店長・本部・チーム長。時給制のアルバイトは対象外）。</p>
+ <p class="muted" style="font-size:11px">⚠️ この画面・経営ダッシュボードの人件費は「<b>支給額合計</b>（会社が負担する額。控除前）」を使っています。給与仕訳・銀行振込・スマレジタイムカードの一覧画面などで見える「振込額」は控除（社会保険料・所得税等）を差し引いた「<b>差引支給額</b>」なので、この2つは別の数字として一致しません（計算間違いではありません）。各人の内訳は下の「自動取得」欄に両方表示しています。</p>
  <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
   ${payMonthSelectHtml(payMonth)}
   <select class="inp" id="pay-viewmode" style="flex:1;min-width:140px;margin:0">
@@ -4852,7 +4853,7 @@ function payEditHtml(rows,payMonth,sname){
     <div><b>${esc(u.name)}</b> <span class="badge b">${ROLE_NAME[u.role]||u.role}</span></div>
     <button class="btn sm sub" data-payhide="${u.id}" style="flex-shrink:0;font-size:11px">🚫 この月は非表示</button>
    </div>
-   <div class="muted" style="font-size:11px;margin-top:4px">${pr?`自動取得（${esc(payMonth)}分・全店舗合算）: 固定給${Math.round(pr.fixed_salary_amount||0).toLocaleString()}円／通勤手当${Math.round(pr.commute_allowance||0).toLocaleString()}円${pr.fixed_overtime_wage?`（固定給の内、固定残業代${Math.round(pr.fixed_overtime_wage).toLocaleString()}円）`:""}`:`${esc(payMonth)}分の自動取得データはまだありません`}</div>
+   <div class="muted" style="font-size:11px;margin-top:4px">${pr?`自動取得（${esc(payMonth)}分・全店舗合算）: 支給額合計${Math.round(pr.total_allowance||0).toLocaleString()}円（固定給${Math.round(pr.fixed_salary_amount||0).toLocaleString()}円＋通勤手当${Math.round(pr.commute_allowance||0).toLocaleString()}円${pr.fixed_overtime_wage?`／内、固定残業代${Math.round(pr.fixed_overtime_wage).toLocaleString()}円`:""}）　控除合計${Math.round(pr.deduction_total||0).toLocaleString()}円　→　<b>差引支給額（振込額）${Math.round(pr.net_pay||0).toLocaleString()}円</b>`:`${esc(payMonth)}分の自動取得データはまだありません`}</div>
    <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
     <input type="file" accept="application/pdf" id="paypdf-${u.id}" style="flex:1;font-size:11px">
     <button class="btn sm sub" data-paypdfupload="${u.id}" style="flex-shrink:0">📎 給与明細PDFを添付</button>

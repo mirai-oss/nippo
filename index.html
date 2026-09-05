@@ -519,7 +519,7 @@ let rcCostEdit=null; // v2.7 B-3(C7): 求人費用の「入力済み」項目を
 let rcFStatus=""; // v2.5.6 選考ステータス絞り込み
 let csvRows=null,csvBusy=false; // v2.6.5 CSV取り込み
 let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8
-let myProf=null,auRole="",auState="",auStore="",auMissing=[]; // v2.6.0／auMissingは2026-09-05追加（LINE未連携・提出物なし等の複数選択絞り込み）
+let myProf=null,auRole="",auState="",auStore="",auMissing=[],auMissingOpen=false; // v2.6.0／auMissingは2026-09-05追加（LINE未連携・提出物なし等の複数選択絞り込み）
 let ivSkipSm=false; // v2.6.1
 let joinGender=null; // v2.6.7
 let cwToken=null,smUrlTpl=null; // v2.6.9 Chatwork・スマレジURL
@@ -4704,13 +4704,15 @@ function exportEmployeeCsv(){
  });
  if(!list.length){toast("出力する行がありません",true);return}
  const qc=v=>'"'+String(v??"").replace(/"/g,'""')+'"';
- const head=["氏名","フリガナ","役職","メール","電話","所属店舗","状態","生年月日","入社日","LINE連携","提出物件数"];
+ // 2026-09-05追加: ユーザー指摘「スマレジではスタッフIDで名前が定義付けされているはずなので、
+ // CSVにスタッフIDを必ず紐付けてほしい」に対応（employee_profiles.smaregi_staff_id）
+ const head=["氏名","フリガナ","スマレジスタッフID","役職","メール","電話","所属店舗","状態","生年月日","入社日","LINE連携","提出物件数"];
  if(bankAllowed)head.push("振込口座");
  const rows=list.map(u=>{
   const p=adminProfs[u.id]||{};
   const storeNames=(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし";
   const bank=adminBankMap[u.id];
-  const row=[u.name,p.name_kana||"",ROLE_NAME[u.role]||u.role,u.email,p.phone||"",storeNames,u.is_active?"在籍中":"退職・無効",p.birth_date||"",p.hire_date||"",u.line_user_id?"連携済み":"未連携",submitCountOf(u.id)];
+  const row=[u.name,p.name_kana||"",p.smaregi_staff_id||"",ROLE_NAME[u.role]||u.role,u.email,p.phone||"",storeNames,u.is_active?"在籍中":"退職・無効",p.birth_date||"",p.hire_date||"",u.line_user_id?"連携済み":"未連携",submitCountOf(u.id)];
   if(bankAllowed)row.push(bank?(bank.payment_method==="cash"?"現金手渡し":"登録済み"):"未登録");
   return row;
  });
@@ -4791,12 +4793,12 @@ async function adminView(){
    <select class="inp" id="au-store" style="flex:1;min-width:110px;margin:0;font-size:13px;padding:8px"><option value="">店舗: 全て</option>${stores.map(s=>`<option value="${s.id}"${auStore===s.id?" selected":""}>${esc(s.name)}</option>`).join("")}</select>
    ${(auRole||auState||auStore||auMissing.length)?`<span class="chip" id="au-clear" style="font-size:11px;padding:4px 10px">✕ 解除</span>`:""}
   </div>
-  <p class="muted" style="margin:0 0 4px;font-size:12px">未連携・未提出の人だけ探す（複数選択可・Ctrl/Cmdキーを押しながらクリックで複数選択できます）</p>
-  <select class="inp" id="au-missing" multiple size="${bankAllowed?3:2}" style="margin:0 0 8px;font-size:13px">
-   <option value="line" ${auMissing.includes("line")?"selected":""}>💚 LINE未連携のみ</option>
-   <option value="doc" ${auMissing.includes("doc")?"selected":""}>📎 提出物（身分証明書等）未提出のみ</option>
-   ${bankAllowed?`<option value="bank" ${auMissing.includes("bank")?"selected":""}>🏦 振込口座未登録のみ</option>`:""}
-  </select>`;
+  <details class="card" id="au-missing-details" style="margin:0 0 8px" ${auMissingOpen?"open":""}>
+   <summary style="cursor:pointer">未連携・未提出だけ探す${auMissing.length?`（${auMissing.length}件選択中）`:""} <span class="muted" style="font-size:11px">（複数選択可）</span></summary>
+   <label class="radio-row"><input type="checkbox" class="au-missing-cb" value="line" ${auMissing.includes("line")?"checked":""}> 💚 LINE未連携のみ</label>
+   <label class="radio-row"><input type="checkbox" class="au-missing-cb" value="doc" ${auMissing.includes("doc")?"checked":""}> 📎 提出物（身分証明書等）未提出のみ</label>
+   ${bankAllowed?`<label class="radio-row"><input type="checkbox" class="au-missing-cb" value="bank" ${auMissing.includes("bank")?"checked":""}> 🏦 振込口座未登録のみ</label>`:""}
+  </details>`;
   if(!shown.length)h+=`<p class="muted center" style="margin-top:16px">該当する従業員はいません</p>`;
   // 2026-09-05追加: 「LINE連携されてるか・身分証明書等アップロードしたか・何が提出されてるか」を
   // 一覧で一発で見えるようにしてほしいというユーザー要望に対応
@@ -8554,7 +8556,14 @@ function bindPage(){
  };
  // v2.6.0 従業員の絞り込み
  ["au-role","au-state","au-store"].forEach(id=>{if($(id))$(id).onchange=()=>{auRole=$("au-role").value;auState=$("au-state").value;auStore=$("au-store").value;render()}});
- if($("au-missing"))$("au-missing").onchange=()=>{auMissing=[...$("au-missing").selectedOptions].map(o=>o.value);render()}; // 2026-09-05追加
+ // 2026-09-05追加: 本部タスクの「担当（複数選択可）」と同じ、チェックボックスを縦に並べる方式に変更
+ // （<select multiple>はCtrl/Cmdクリックが必要で選びにくいとの指摘のため）
+ document.querySelectorAll(".au-missing-cb").forEach(cb=>cb.onchange=()=>{
+  auMissing=[...document.querySelectorAll(".au-missing-cb:checked")].map(c=>c.value);
+  auMissingOpen=true; // チェックするたびに閉じてしまわないよう、開いた状態を保つ
+  render();
+ });
+ if($("au-missing-details"))$("au-missing-details").ontoggle=()=>{auMissingOpen=$("au-missing-details").open};
  if($("au-clear"))$("au-clear").onclick=()=>{auRole="";auState="";auStore="";auMissing=[];render()};
  if($("au-csv"))$("au-csv").onclick=exportEmployeeCsv; // 2026-09-05追加
  // v2.6.0 プロフィール

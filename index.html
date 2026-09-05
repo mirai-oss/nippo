@@ -4600,6 +4600,19 @@ async function authorStoreNames(userId,role,teamId){
   return ids.map(id=>(stores.find(s=>s.id===id)||{}).name).filter(Boolean);
  }catch(e){return []}
 }
+// 2026-09-05追加: ユーザー要望「部下がいいね・フィードバックされたら通知させてほしい
+// （前に実装してるはずだけどなぜか実装されていない）」に対応。既存の通知の仕組み
+// （notificationsテーブル・ホーム画面の🔔カード・ホームの赤バッジ）にそのまま乗せる形にした
+// （report_feedback_seenという別方式の受け皿テーブルが2026-09-03に用意されていたが、
+// nippo側の画面はどこからも参照しておらず未配線のままだったため、今回は同じ画面・バッジで
+// 一貫して見られる既存の通知方式に統一した）。自分自身の日報への操作では送らない
+async function notifyReportAuthorOfFeedback(reportId,bodyJa){
+ try{
+  const {data:rep}=await sb.from("reports").select("author_id").eq("id",reportId).maybeSingle();
+  if(!rep||!rep.author_id||rep.author_id===me.id)return;
+  await sb.from("notifications").insert({recipient_id:rep.author_id,actor_id:me.id,type:"report_feedback",body_i18n:{ja:bodyJa},link:{report_id:reportId}});
+ }catch(e){/* 通知が送れなくても、いいね・コメント自体は完了しているため無視する */}
+}
 // ===== 詳細 =====
 async function detailView(){
  const {data:r,error}=await sb.from("reports")
@@ -4632,7 +4645,9 @@ async function detailView(){
   const v=r.answers[f.k];
   if(v==null||v===""||(Array.isArray(v)&&!v.length))return;
   if(f.type==="photo"&&Array.isArray(v)){
-   h+=`<div class="card"><h3>${esc(f.label)}</h3><div class="photo-grid">${v.map(u=>`<a class="ph" href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}"></a>`).join("")}</div></div>`;
+   // 2026-09-05修正: ここだけdata-photo-src方式（署名URL変換）を使っておらず、report-photos
+   // バケット非公開化(2026-08-21)以降ずっと写真が開けなくなっていた（ユーザー報告で発覚）
+   h+=`<div class="card"><h3>${esc(f.label)}</h3><div class="photo-grid">${v.map(u=>`<a class="ph" data-photo-src="${esc(u)}" href="#" target="_blank" rel="noopener"><img data-photo-src="${esc(u)}"></a>`).join("")}</div></div>`;
    return;
   }
   // v2.6.50 チェックリストは、付いた／付いていないが分かる形で出す
@@ -7210,13 +7225,17 @@ function bindPage(){
  if($("likebtn"))$("likebtn").onclick=async()=>{
   const {data:l}=await sb.from("report_likes").select("user_id").eq("report_id",detail).eq("user_id",me.id);
   if(l&&l.length)await sb.from("report_likes").delete().eq("report_id",detail).eq("user_id",me.id);
-  else await sb.from("report_likes").insert({report_id:detail,user_id:me.id});
+  else{
+   await sb.from("report_likes").insert({report_id:detail,user_id:me.id});
+   await notifyReportAuthorOfFeedback(detail,`${me.name}さんが日報に「いいね」しました`); // 2026-09-05追加
+  }
   render();
  };
  if($("cmtsend"))$("cmtsend").onclick=async()=>{
   const txt=$("cmtin").value.trim();if(!txt)return;
   const {error}=await sb.from("report_comments").insert({report_id:detail,author_id:me.id,body:txt});
-  if(error)toast("送信できませんでした: "+error.message,true);
+  if(error){toast("送信できませんでした: "+error.message,true);return}
+  await notifyReportAuthorOfFeedback(detail,`${me.name}さんが日報にコメントしました:「${txt.slice(0,40)}${txt.length>40?"…":""}」`); // 2026-09-05追加
   render();
  };
  if($("unreadbtn"))$("unreadbtn").onclick=async()=>{ // v2.6.28 未読に戻す（一覧に🔵が復活する）

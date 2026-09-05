@@ -4659,6 +4659,7 @@ async function detailView(){
 
 // ===== 管理（社長・本部専用） =====
 let adminMode="list",adminDetail=null,adminUsers=[],adminStoresMap={};
+let adminLineLinkInfo=null; // 2026-09-05追加 管理者が代理発行したLINE連携用の合言葉（対象は adminDetail）
 let adminProfs={}; // v2.6.45 入社情報（user_id をキー）
 let adminBankMap={}; // 2026-09-05追加 振込口座（user_idをキー。master/HQのみ取得）
 // 2026-09-05追加: 「何が提出されてるか」の見える化用。extra内の配列（写真アップロード項目）を数える
@@ -6276,19 +6277,55 @@ async function adminEditView(){
  const bank=bankRes.data;
  let h=`<span class="back" id="adback">← 従業員一覧</span><h2>${esc(u.name)} ${u.is_active?"":'<span class="badge">無効</span>'}</h2>
  <p class="muted" style="margin-top:-8px">${esc(u.email)}</p>`;
- // 2026-09-05追加: 「LINE連携・身分証明書等の提出物・振込口座」を1つのカードで一発で見える化
- h+=`<div class="card"><h3>📋 連携・提出状況</h3><p style="font-size:13px;line-height:1.9;margin:0">
-  LINE連携: ${u.line_user_id?`✅ 連携済み${u.line_linked_at?`（${new Date(u.line_linked_at).toLocaleDateString("ja-JP")}）`:""}`:'<span style="color:var(--red)">❌ 未連携</span>'}<br>
-  提出物: ${(()=>{const items=Object.entries((prof&&prof.extra)||{}).filter(([,v])=>Array.isArray(v)&&v.length);return items.length?items.map(([k,v])=>`${esc(k)}（${v.length}枚）`).join("・"):'<span class="muted">提出物なし</span>'})()}<br>
-  ${bankAllowed?`振込口座: ${bank?(bank.payment_method==="cash"?"💴 現金手渡し":`🏦 ${esc(bank.bank_name||"")}${bank.branch_name?" "+esc(bank.branch_name):""} ${{"1":"普通","2":"当座","4":"貯蓄"}[bank.account_type]||""} ${esc(bank.account_number||"")}（${esc(bank.account_holder_kana||"")}）`):'<span style="color:var(--red)">未登録</span>'}${bank?` <span class="muted" style="font-size:11px">（${new Date(bank.updated_at).toLocaleDateString("ja-JP")}更新）</span>`:""}<br><span class="muted" style="font-size:11px">振込口座は「給与仕訳」タブでの登録、または本人からの個人情報変更申請の承認で反映されます</span>`:""}
- </p></div>`;
+ // 2026-09-05追加: 「LINE連携はどこでやるの？身分証明書の追加は？口座情報は？」というユーザー要望に
+ // 対応し、見るだけでなくこの画面から本人に代わって操作できるようにした
+ h+=`<div class="card"><h3>💚 LINE連携</h3>
+  ${u.line_user_id?`<p style="margin:0">✅ 連携済み${u.line_linked_at?`（${new Date(u.line_linked_at).toLocaleDateString("ja-JP")}）`:""}</p>
+   <button class="btn sm sub" id="eu-line-unlink" style="margin-top:8px">連携を解除する（機種変更時など）</button>`
+  :adminLineLinkInfo&&adminLineLinkInfo.oa?`
+   <div style="background:#f0fff4;border:2px solid #06c755;border-radius:8px;padding:14px">
+    <p style="margin:0 0 10px;font-size:14px">本人のスマホで下のリンクを開いて<b>そのまま送信</b>してもらうか、合言葉を伝えて手動でLINEに送ってもらってください。</p>
+    <a href="https://line.me/R/oaMessage/${encodeURIComponent(adminLineLinkInfo.oa)}/?${encodeURIComponent(adminLineLinkInfo.code)}" class="btn" style="background:#06c755;display:block;text-align:center;text-decoration:none;color:#fff;padding:12px" target="_blank">💚 LINEで連携する（本人のスマホで開く）</a>
+    <p style="font-size:22px;font-weight:700;letter-spacing:4px;margin:10px 0 0;text-align:center">${esc(adminLineLinkInfo.code)}</p>
+   </div>`
+  :`<p class="muted" style="margin:0">❌ 未連携です。今後シフト提出の締切通知等がLINEに届くようになります。</p>
+   <button class="btn sm" id="eu-line-issue" style="margin-top:8px">🔗 連携用の合言葉を発行する</button>`}
+ </div>
+ <div class="card"><h3>📎 提出物</h3>
+  <p style="font-size:13px;line-height:1.9;margin:0">${(()=>{const items=Object.entries((prof&&prof.extra)||{}).filter(([,v])=>Array.isArray(v)&&v.length);return items.length?items.map(([k,v])=>`${esc(k)}: `+v.map((ph,x)=>`<a data-photo-src="${esc(ph)}" href="#" target="_blank">写真${x+1}</a>`).join(" ")).join("<br>"):'<span class="muted">提出物なし</span>'})()}</p>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+   <input type="text" id="eu-doclabel" placeholder="項目名（例: 身分証明書）" style="flex:1;min-width:140px;margin:0">
+   <input type="file" id="eu-docfile" accept="image/*,application/pdf" multiple style="flex:1;min-width:160px">
+  </div>
+  <button class="btn sm sub" id="eu-docupload" style="margin-top:8px">📎 追加でアップロードする</button>
+ </div>
+ ${bankAllowed?`<div class="card"><h3>🏦 振込口座</h3>
+  <label class="radio-row"><input type="radio" name="eu-pm" value="bank_transfer" ${(!bank||bank.payment_method!=="cash")?"checked":""}>銀行振込</label>
+  <label class="radio-row"><input type="radio" name="eu-pm" value="cash" ${(bank&&bank.payment_method==="cash")?"checked":""}>現金手渡し</label>
+  <div id="eu-bankfields" style="${(bank&&bank.payment_method==="cash")?"display:none":""}">
+   <p class="muted" style="margin:8px 0 2px">金融機関コード（4桁）</p><input type="text" id="eu-bankcode" value="${esc(bank&&bank.bank_code||"")}" inputmode="numeric" maxlength="4" placeholder="0033">
+   <p class="muted" style="margin:8px 0 2px">金融機関名（表示用・任意）</p><input type="text" id="eu-bankname" value="${esc(bank&&bank.bank_name||"")}" placeholder="例: PayPay銀行">
+   <p class="muted" style="margin:8px 0 2px">支店コード（3桁）</p><input type="text" id="eu-branchcode" value="${esc(bank&&bank.branch_code||"")}" inputmode="numeric" maxlength="3" placeholder="005">
+   <p class="muted" style="margin:8px 0 2px">支店名（表示用・任意）</p><input type="text" id="eu-branchname" value="${esc(bank&&bank.branch_name||"")}" placeholder="例: すずめ支店">
+   <p class="muted" style="margin:8px 0 2px">預金種別</p>
+   <select class="inp" id="eu-accttype">
+    <option value="1" ${(!bank||bank.account_type==="1")?"selected":""}>普通</option>
+    <option value="2" ${bank&&bank.account_type==="2"?"selected":""}>当座</option>
+    <option value="4" ${bank&&bank.account_type==="4"?"selected":""}>貯蓄</option>
+   </select>
+   <p class="muted" style="margin:8px 0 2px">口座番号（数字のみ・最大7桁）</p><input type="text" id="eu-acctnum" value="${esc(bank&&bank.account_number||"")}" inputmode="numeric" maxlength="7" placeholder="1234567">
+   <p class="muted" style="margin:8px 0 2px">口座名義（半角カタカナ）</p><input type="text" id="eu-acctkana" value="${esc(bank&&bank.account_holder_kana||"")}" placeholder="ﾄﾘｲﾁﾀﾛｳ">
+  </div>
+  <button class="btn sm" id="eu-banksave" style="margin-top:10px">振込口座を保存する</button>
+  <p class="muted" style="font-size:11px;margin-top:6px">ここで保存した内容は「給与仕訳」タブ・本人からの個人情報変更申請と同じ場所（1つのデータ）に保存されるため、どこから直しても常に最新の内容で連携されます。${bank?`（${new Date(bank.updated_at).toLocaleDateString("ja-JP")}更新）`:""}</p>
+ </div>`:""}`;
  if(prof){
   const smaregi=prof.smaregi_sync_status==="synced"?"✅ 登録済み":prof.smaregi_sync_status==="error"?"⚠️ エラー（"+esc(prof.smaregi_error||"")+"）":"未連携";
   h+=`<div class="card"><h3>入社情報（本人入力）</h3><p style="font-size:13px;line-height:1.9;margin:0">
    フリガナ: ${esc(prof.name_kana||"—")}<br>性別: ${{male:"男性",female:"女性",none:"回答しない"}[prof.gender]||"—"}<br>社員番号: ${esc(prof.staff_code||"—")}<br>生年月日: ${prof.birth_date||"—"}<br>電話: ${esc(prof.phone||"—")}<br>
    住所: ${esc([prof.postal_code,prof.address].filter(Boolean).join(" ")||"—")}<br>
    緊急連絡先: ${esc(prof.emergency_name||"—")}${prof.emergency_relation?`（${esc(prof.emergency_relation)}）`:""} ${esc(prof.emergency_phone||"")}<br>
-   入社日: ${prof.hire_date||"—"}<br>${prof.termination_date?`退職日: <b style="color:var(--red)">${prof.termination_date}</b><br>`:""}${prof.extra?Object.entries(prof.extra).map(([k,v])=>Array.isArray(v)?`${esc(k)}: `+v.map((u,x)=>`<a data-photo-src="${esc(u)}" href="#" target="_blank">写真${x+1}</a>`).join(" ")+"<br>":`${esc(k)}: ${esc(v)}<br>`).join(""):""}スマレジ連携: ${smaregi}</p>
+   入社日: ${prof.hire_date||"—"}<br>${prof.termination_date?`退職日: <b style="color:var(--red)">${prof.termination_date}</b><br>`:""}${prof.extra?Object.entries(prof.extra).filter(([,v])=>!Array.isArray(v)).map(([k,v])=>`${esc(k)}: ${esc(v)}<br>`).join(""):""}スマレジ連携: ${smaregi}</p>
    ${prof.smaregi_sync_status!=="synced"?'<button class="btn sm" id="eu-smaregi" style="margin-top:10px">スマレジに再同期する</button>':""}
    ${prof.smaregi_staff_id?'<button class="btn sm sub" id="eu-resend" style="margin-top:10px">通知を送り直す（スマレジのリンク付き）</button>':""}</div>`;
   h+=fareCardHtml(u,prof); // v2.6.66 交通費の自動計算（表示専用）
@@ -8012,7 +8049,7 @@ function bindPage(){
  if($("smb-go"))$("smb-go").onclick=()=>smaregiInviteBulkDo();
  if($("smb-csv"))$("smb-csv").onclick=()=>exportSmaregiBulkCsv();
  if($("smb-close"))$("smb-close").onclick=()=>{smBulkResults=null;render()};
- if($("adback"))$("adback").onclick=()=>{adminMode="list";adminDetail=null;rcDetail=null;render()};
+ if($("adback"))$("adback").onclick=()=>{adminMode="list";adminDetail=null;rcDetail=null;adminLineLinkInfo=null;render()};
  // 設定カスタマイズ（v1.5）
  if($("set-join"))$("set-join").onclick=()=>{setMode="join";cfgJoin=joinCfg();render()};
  // v2.6.53 ① 入社案内・マニュアルの設定
@@ -8288,7 +8325,7 @@ function bindPage(){
   adminDetail=id;adminMode="edit";
   const u=adminUsers.find(x=>x.id===adminDetail);
   euRole=u?u.role:null;euStores=[...(adminStoresMap[adminDetail]||[])];euTeam=u?(u.team_id||null):null;
-  lastIssued=null;render();
+  lastIssued=null;adminLineLinkInfo=null;render(); // 2026-09-05: 前の人の合言葉を持ち越さない
  };
  document.querySelectorAll(".row[data-au]").forEach(rw=>rw.onclick=()=>openAdminUser(rw.dataset.au));
  // v2.6.64 通知・発行直後のカードの名前をタップしても詳細が開くようにする
@@ -8327,6 +8364,70 @@ function bindPage(){
   const {data,error}=await sb.rpc("notify_join_resend",{p_user:adminDetail});
   $("eu-resend").disabled=false;
   toast(error?"送信エラー: "+error.message:(data>0?`${data}件の通知先に送りました`:"送信先が設定されていません"),!!error);
+ };
+ // 2026-09-05追加: 管理者からのLINE連携・提出物追加・振込口座編集
+ if($("eu-line-issue"))$("eu-line-issue").onclick=async()=>{
+  $("eu-line-issue").disabled=true;
+  const {data,error}=await sb.rpc("admin_issue_line_code",{p_user_id:adminDetail});
+  if(error||!data||!data.ok){toast("エラー: "+(error?error.message:"合言葉の発行に失敗しました"),true);$("eu-line-issue").disabled=false;return}
+  adminLineLinkInfo=data;render();
+ };
+ if($("eu-line-unlink"))$("eu-line-unlink").onclick=async()=>{
+  if(!confirm("LINE連携を解除しますか？"))return;
+  const {error}=await sb.rpc("admin_unlink_line",{p_user_id:adminDetail});
+  if(error){toast("解除エラー: "+error.message,true);return}
+  const u=adminUsers.find(x=>x.id===adminDetail);
+  if(u){u.line_user_id=null;u.line_linked_at=null}
+  adminLineLinkInfo=null;toast("LINE連携を解除しました");render();
+ };
+ if($("eu-docupload"))$("eu-docupload").onclick=async()=>{
+  const label=$("eu-doclabel").value.trim();
+  const files=$("eu-docfile").files;
+  if(!label){toast("項目名を入力してください（例: 身分証明書）",true);return}
+  if(!files||!files.length){toast("ファイルを選んでください",true);return}
+  const btn=$("eu-docupload");btn.disabled=true;btn.textContent="アップロード中...";
+  try{
+   const urls=[];
+   for(const f of files){
+    const ext=((f.name.split(".").pop()||"jpg").toLowerCase().replace(/[^a-z0-9]/g,""))||"jpg";
+    const path=adminDetail+"/join_"+Math.random().toString(36).slice(2,10)+"."+ext;
+    const {error:pe}=await sb.storage.from("report-photos").upload(path,f,{contentType:f.type||"application/octet-stream"});
+    if(pe)throw pe;
+    urls.push(path);
+   }
+   const {data:cur}=await sb.from("employee_profiles").select("extra").eq("user_id",adminDetail).maybeSingle();
+   const prevExtra=(cur&&cur.extra)||{};
+   const merged=Object.assign({},prevExtra,{[label]:[...(Array.isArray(prevExtra[label])?prevExtra[label]:[]),...urls]});
+   const {error:ue}=await sb.from("employee_profiles").upsert({user_id:adminDetail,extra:merged,updated_at:new Date().toISOString()},{onConflict:"user_id"});
+   if(ue)throw ue;
+   toast("アップロードしました");render();
+  }catch(e){toast("アップロードエラー: "+(e&&e.message?e.message:e),true);btn.disabled=false;btn.textContent="📎 追加でアップロードする"}
+ };
+ document.querySelectorAll('input[name="eu-pm"]').forEach(r=>r.onchange=()=>{
+  if($("eu-bankfields"))$("eu-bankfields").style.display=(r.value==="cash"&&r.checked)?"none":"";
+ });
+ if($("eu-banksave"))$("eu-banksave").onclick=async()=>{
+  const pm=(document.querySelector('input[name="eu-pm"]:checked')||{}).value||"bank_transfer";
+  const v=id=>{const el=$(id);return el?el.value.trim():""};
+  const rec={user_id:adminDetail,payment_method:pm,updated_by:me.id,updated_at:new Date().toISOString()};
+  if(pm==="cash"){
+   rec.bank_code=null;rec.bank_name=null;rec.branch_code=null;rec.branch_name=null;rec.account_number=null;rec.account_holder_kana=null;rec.account_type="1";
+  }else{
+   const bankCode=v("eu-bankcode"),branchCode=v("eu-branchcode"),acctNum=v("eu-acctnum"),kana=v("eu-acctkana");
+   // 2026-09-05: ユーザー指摘「PayPay銀行振込に必要な金融機関コード・支店コードが絶対割れないように」
+   //   →桁数チェックをこの場でかけ、振込CSVが後で作れなくなる不備を未然に防ぐ
+   if(!/^[0-9]{4}$/.test(bankCode)){toast("金融機関コードは数字4桁で入力してください",true);return}
+   if(!/^[0-9]{3}$/.test(branchCode)){toast("支店コードは数字3桁で入力してください",true);return}
+   if(!/^[0-9]{1,7}$/.test(acctNum)){toast("口座番号は数字のみ・7桁以内で入力してください",true);return}
+   if(!kana){toast("口座名義（半角カタカナ）を入力してください",true);return}
+   rec.bank_code=bankCode;rec.bank_name=v("eu-bankname")||null;rec.branch_code=branchCode;rec.branch_name=v("eu-branchname")||null;
+   rec.account_type=v("eu-accttype")||"1";rec.account_number=acctNum;rec.account_holder_kana=kana;
+  }
+  const btn=$("eu-banksave");btn.disabled=true;
+  const {error}=await sb.from("payroll_bank_accounts").upsert(rec,{onConflict:"user_id"});
+  btn.disabled=false;
+  if(error){toast("保存エラー: "+error.message,true);return}
+  toast("振込口座を保存しました");render();
  };
  if($("eu-toggle"))$("eu-toggle").onclick=adminToggle;
  // v2.6.8 退職日

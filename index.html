@@ -519,7 +519,7 @@ let rcCostEdit=null; // v2.7 B-3(C7): 求人費用の「入力済み」項目を
 let rcFStatus=""; // v2.5.6 選考ステータス絞り込み
 let csvRows=null,csvBusy=false; // v2.6.5 CSV取り込み
 let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8
-let myProf=null,auRole="",auState="",auStore=""; // v2.6.0
+let myProf=null,auRole="",auState="",auStore="",auMissing=[]; // v2.6.0／auMissingは2026-09-05追加（LINE未連携・提出物なし等の複数選択絞り込み）
 let ivSkipSm=false; // v2.6.1
 let joinGender=null; // v2.6.7
 let cwToken=null,smUrlTpl=null; // v2.6.9 Chatwork・スマレジURL
@@ -4680,6 +4680,45 @@ function ageOf(uid){
  if(m<0||(m===0&&now.getDate()<d.getDate()))age--;
  return (age>=0&&age<120)?age:null;
 }
+// 2026-09-05追加: 従業員一覧の絞り込み結果をCSVで出力（画面の役職/状態/店舗/未連携絞り込み・検索欄の
+// テキストをすべて反映する＝「絞った人もCSVの対象に」というユーザー要望への対応）
+function exportEmployeeCsv(){
+ const bankAllowed=me.is_master||me.role==="HQ";
+ const sname=id=>{const s=stores.find(x=>x.id===id);return s?s.name:""};
+ const q=($("auq")?$("auq").value:"").trim().toLowerCase();
+ const list=adminUsers.filter(u=>{
+  if(auRole&&u.role!==auRole)return false;
+  if(auState==="active"&&!u.is_active)return false;
+  if(auState==="inactive"&&u.is_active)return false;
+  if(auStore&&!(adminStoresMap[u.id]||[]).includes(auStore))return false;
+  if(auMissing.length){
+   const hit=(auMissing.includes("line")&&!u.line_user_id)||(auMissing.includes("doc")&&submitCountOf(u.id)===0)||(bankAllowed&&auMissing.includes("bank")&&!adminBankMap[u.id]);
+   if(!hit)return false;
+  }
+  if(q){
+   const storeNames=(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・");
+   const hay=[u.name,u.email,ROLE_NAME[u.role]||u.role,storeNames].join(" ").toLowerCase();
+   if(!hay.includes(q))return false;
+  }
+  return true;
+ });
+ if(!list.length){toast("出力する行がありません",true);return}
+ const qc=v=>'"'+String(v??"").replace(/"/g,'""')+'"';
+ const head=["氏名","フリガナ","役職","メール","電話","所属店舗","状態","生年月日","入社日","LINE連携","提出物件数"];
+ if(bankAllowed)head.push("振込口座");
+ const rows=list.map(u=>{
+  const p=adminProfs[u.id]||{};
+  const storeNames=(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし";
+  const bank=adminBankMap[u.id];
+  const row=[u.name,p.name_kana||"",ROLE_NAME[u.role]||u.role,u.email,p.phone||"",storeNames,u.is_active?"在籍中":"退職・無効",p.birth_date||"",p.hire_date||"",u.line_user_id?"連携済み":"未連携",submitCountOf(u.id)];
+  if(bankAllowed)row.push(bank?(bank.payment_method==="cash"?"現金手渡し":"登録済み"):"未登録");
+  return row;
+ });
+ const csv="﻿"+[head].concat(rows).map(r=>r.map(qc).join(",")).join("\r\n");
+ const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+ const el=document.createElement("a");el.href=URL.createObjectURL(blob);el.download="従業員一覧_"+todayStr()+".csv";document.body.appendChild(el);el.click();el.remove();
+ toast(`CSVをダウンロードしました（${list.length}名）`);
+}
 let payMonth=null,payExtraStores={},payViewMode=null; // 2026-08-30続き: 給与・インセンティブ配分の管理画面（マスターのみ・月単位に変更・一覧/入力の2モード）
 let nuRole=null,nuStores=[],euRole=null,euStores=[],lastIssued=null;
 let ivRole=null,ivStores=[],lastInvite=null;
@@ -4724,21 +4763,40 @@ async function adminView(){
  // 2026-08-29続き: 給与・インセンティブ配分（ユーザー要望「マスターの人が振り分けられるように権限設定して」）
  if(me.is_master)h+=`<button class="btn sub" id="adpayroll">💴 給与・インセンティブ配分</button>`;
  if(can("staff_admin")){
+  // 2026-09-05追加: 「LINE連携・身分証明書、連携してない人をすぐ探せるように」への対応。
+  // 複数選択（OR条件＝どれか1つでも当てはまる人を表示）
+  const missingMatch=u=>{
+   if(!auMissing.length)return true;
+   if(auMissing.includes("line")&&!u.line_user_id)return true;
+   if(auMissing.includes("doc")&&submitCountOf(u.id)===0)return true;
+   if(bankAllowed&&auMissing.includes("bank")&&!adminBankMap[u.id])return true;
+   return false;
+  };
   const shown=adminUsers.filter(u=>{
    if(auRole&&u.role!==auRole)return false;
    if(auState==="active"&&!u.is_active)return false;
    if(auState==="inactive"&&u.is_active)return false;
    if(auStore&&!(adminStoresMap[u.id]||[]).includes(auStore))return false;
+   if(!missingMatch(u))return false;
    return true;
   });
   h+=`<p class="muted">${shown.length}名${shown.length!==adminUsers.length?`（全${adminUsers.length}名中）`:""}（タップで役職・所属の変更）</p>
-  <input type="text" id="auq" placeholder="🔍 氏名・メール・役職・店舗で絞り込み" style="margin:4px 0 8px">
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 8px">
+   <input type="text" id="auq" placeholder="🔍 氏名・メール・役職・店舗で絞り込み" style="flex:1;min-width:160px;margin:0">
+   <button class="btn sm sub" id="au-csv" style="flex-shrink:0">📥 CSVダウンロード</button>
+  </div>
   <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
    <select class="inp" id="au-role" style="flex:1;min-width:100px;margin:0;font-size:13px;padding:8px"><option value="">役職: 全て</option>${Object.entries(ROLE_NAME).map(([r,n])=>`<option value="${r}"${auRole===r?" selected":""}>${n}</option>`).join("")}</select>
    <select class="inp" id="au-state" style="flex:1;min-width:110px;margin:0;font-size:13px;padding:8px"><option value="">状態: 全て</option><option value="active"${auState==="active"?" selected":""}>在籍中のみ</option><option value="inactive"${auState==="inactive"?" selected":""}>退職・無効のみ</option></select>
    <select class="inp" id="au-store" style="flex:1;min-width:110px;margin:0;font-size:13px;padding:8px"><option value="">店舗: 全て</option>${stores.map(s=>`<option value="${s.id}"${auStore===s.id?" selected":""}>${esc(s.name)}</option>`).join("")}</select>
-   ${(auRole||auState||auStore)?`<span class="chip" id="au-clear" style="font-size:11px;padding:4px 10px">✕ 解除</span>`:""}
-  </div>`;
+   ${(auRole||auState||auStore||auMissing.length)?`<span class="chip" id="au-clear" style="font-size:11px;padding:4px 10px">✕ 解除</span>`:""}
+  </div>
+  <p class="muted" style="margin:0 0 4px;font-size:12px">未連携・未提出の人だけ探す（複数選択可・Ctrl/Cmdキーを押しながらクリックで複数選択できます）</p>
+  <select class="inp" id="au-missing" multiple size="${bankAllowed?3:2}" style="margin:0 0 8px;font-size:13px">
+   <option value="line" ${auMissing.includes("line")?"selected":""}>💚 LINE未連携のみ</option>
+   <option value="doc" ${auMissing.includes("doc")?"selected":""}>📎 提出物（身分証明書等）未提出のみ</option>
+   ${bankAllowed?`<option value="bank" ${auMissing.includes("bank")?"selected":""}>🏦 振込口座未登録のみ</option>`:""}
+  </select>`;
   if(!shown.length)h+=`<p class="muted center" style="margin-top:16px">該当する従業員はいません</p>`;
   // 2026-09-05追加: 「LINE連携されてるか・身分証明書等アップロードしたか・何が提出されてるか」を
   // 一覧で一発で見えるようにしてほしいというユーザー要望に対応
@@ -6085,6 +6143,9 @@ async function adminSmaregiView(){
  h+=`<p class="muted">${staffs.length}名が登録・うち${linkedCount}名がアプリ連携済み（未連携${staffs.filter(s=>!linked[String(s.staffId)]).length}名）</p>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 8px">
    <input type="text" id="smq" placeholder="🔍 名前で絞り込み" style="flex:1;min-width:160px;margin:0">
+   <button class="btn sm sub" id="sm-csv" style="flex-shrink:0">📥 CSVダウンロード</button>
+  </div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px">
    <select class="inp" id="sm-storefilter" style="flex:1;min-width:180px;margin:0">
     <option value="">🏪 事業所で絞り込み（全店舗）</option>
     ${allStoreOpts.filter(o=>storeOptCounts[o.id]).map(o=>`<option value="${o.id}" ${smStoreFilter===o.id?"selected":""}>${esc(o.name)}（${storeOptCounts[o.id]}名）</option>`).join("")}
@@ -6166,6 +6227,28 @@ async function smaregiInviteBulkDo(){
  // セットされる（＝本人が招待リンクから登録完了した）時点で更新されるもので、招待発行しただけでは
  // まだ変化しない。直後にスマレジAPIへ再度141人ぶん問い合わせるのはレート制限のリスクがあるため避ける
  render();
+}
+// 2026-09-05追加: 「スマレジタイムカードの登録一覧とかで絞った人とかもCSVに」という要望に対応。
+// 画面の事業所/連携状況フィルタ・検索欄のテキストをすべて反映した状態でCSV出力する
+function exportSmaregiStaffCsv(){
+ if(!smStaffsCache){toast("一覧を読み込んでからお試しください",true);return}
+ const {staffs,profs,us}=smStaffsCache;
+ const linked={};profs.forEach(p=>{linked[String(p.smaregi_staff_id)]=p.user_id});
+ const uname=id=>{const u=us.find(x=>x.id===id);return u?u.name:""};
+ const allStoreOpts=[...stores,...storesHidden];
+ const storeNamesOf=s=>(s.storeIds&&s.storeIds.length)?s.storeIds.map(id=>{const x=allStoreOpts.find(o=>o.id===id);return x?x.name:null}).filter(Boolean).join("・"):"";
+ const linkFiltered=(smLinkFilter==="linked")?staffs.filter(s=>linked[String(s.staffId)]):(smLinkFilter==="unlinked")?staffs.filter(s=>!linked[String(s.staffId)]):staffs;
+ let list=linkFiltered.filter(s=>smFilterMatch(s,smStoreFilter));
+ const q=($("smq")?$("smq").value:"").trim().toLowerCase();
+ if(q)list=list.filter(s=>((s.name||"")+(s.kana||"")).toLowerCase().includes(q));
+ if(!list.length){toast("出力する行がありません",true);return}
+ const qc=v=>'"'+String(v??"").replace(/"/g,'""')+'"';
+ const head=["氏名","フリガナ","スタッフID","事業所","連携状況","連携先アカウント"];
+ const rows=list.map(s=>{const lk=linked[String(s.staffId)];return [s.name,s.kana||"",s.staffId,storeNamesOf(s)||"事業所不明",lk?"連携済み":"未連携",lk?uname(lk):""]});
+ const csv="﻿"+[head].concat(rows).map(r=>r.map(qc).join(",")).join("\r\n");
+ const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+ const el=document.createElement("a");el.href=URL.createObjectURL(blob);el.download="スマレジ登録スタッフ_"+todayStr()+".csv";document.body.appendChild(el);el.click();el.remove();
+ toast(`CSVをダウンロードしました（${list.length}名）`);
 }
 function exportSmaregiBulkCsv(){
  if(!smBulkResults||!smBulkResults.length){toast("結果がありません",true);return}
@@ -8048,6 +8131,7 @@ function bindPage(){
  document.querySelectorAll(".chip.smbstore").forEach(c=>c.onclick=()=>{const s=c.dataset.s;smBulkStores=smBulkStores.includes(s)?smBulkStores.filter(x=>x!==s):smBulkStores.concat([s]);c.classList.toggle("on")});
  if($("smb-go"))$("smb-go").onclick=()=>smaregiInviteBulkDo();
  if($("smb-csv"))$("smb-csv").onclick=()=>exportSmaregiBulkCsv();
+ if($("sm-csv"))$("sm-csv").onclick=exportSmaregiStaffCsv; // 2026-09-05追加
  if($("smb-close"))$("smb-close").onclick=()=>{smBulkResults=null;render()};
  if($("adback"))$("adback").onclick=()=>{adminMode="list";adminDetail=null;rcDetail=null;adminLineLinkInfo=null;render()};
  // 設定カスタマイズ（v1.5）
@@ -8470,7 +8554,9 @@ function bindPage(){
  };
  // v2.6.0 従業員の絞り込み
  ["au-role","au-state","au-store"].forEach(id=>{if($(id))$(id).onchange=()=>{auRole=$("au-role").value;auState=$("au-state").value;auStore=$("au-store").value;render()}});
- if($("au-clear"))$("au-clear").onclick=()=>{auRole="";auState="";auStore="";render()};
+ if($("au-missing"))$("au-missing").onchange=()=>{auMissing=[...$("au-missing").selectedOptions].map(o=>o.value);render()}; // 2026-09-05追加
+ if($("au-clear"))$("au-clear").onclick=()=>{auRole="";auState="";auStore="";auMissing=[];render()};
+ if($("au-csv"))$("au-csv").onclick=exportEmployeeCsv; // 2026-09-05追加
  // v2.6.0 プロフィール
  // v2.6.45 郵便番号↔住所の自動入力・電話のハイフン・最寄り駅
  if($("pf-zip")){bindZip("pf-zip","pf-addr");bindPhone("pf-phone");bindPhone("pf-ephone")}

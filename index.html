@@ -480,6 +480,7 @@ let smStaffsCache=null,smSel=null,smRole=null,smStores=[],smResult=null; // v1.7
 let smBulkSel=new Set(),smBulkPanel=false,smBulkRole=null,smBulkStores=[],smBulkDays="14",smBulkRunning=false,smBulkResults=null; // 2026-09-02 一括招待（担当D依頼・121人未連携対応）
 let smStoreFilter=""; // 2026-09-02 スマレジ上の事業所（店舗）で絞り込み・一括招待の店舗選びを楽にする
 let smLinkFilter=""; // 2026-09-05 「管理システムと連携してる人・してない人」を絞り込み検索
+let smPullRunning=false,smPullResult=null; // 2026-09-05 スマレジ個人情報の一括取り込み
 // 2026-09-02追加: 絞り込み条件の判定（表示側・一括選択側で同じロジックを使う）。
 // "__none__"=事業所不明、"__multi__"=2つ以上を兼務、それ以外=店舗UUID
 function smFilterMatch(s,filterValue){
@@ -1531,6 +1532,18 @@ async function smaregiSync(uid){ // スマレジ・タイムカードにスタ�
    method:"POST",
    headers:{Authorization:"Bearer "+(session?session.access_token:SUPA_KEY),apikey:SUPA_KEY,"Content-Type":"application/json"},
    body:JSON.stringify({action:"sync",user_id:uid})});
+  return await res.json();
+ }catch(e){return {ok:false,error:String(e)}}
+}
+// 2026-09-05追加: スマレジ側の住所・生年月日・電話番号等をemployee_profilesへ取り込む
+// （プル方向。uid省略で連携済み全員が対象＝一括取り込み）
+async function smaregiPullProfiles(uid){
+ try{
+  const {data:{session}}=await sb.auth.getSession();
+  const res=await fetch(SUPA_URL+"/functions/v1/smaregi-sync",{
+   method:"POST",
+   headers:{Authorization:"Bearer "+(session?session.access_token:SUPA_KEY),apikey:SUPA_KEY,"Content-Type":"application/json"},
+   body:JSON.stringify(uid?{action:"pull_profiles",user_id:uid}:{action:"pull_profiles"})});
   return await res.json();
  }catch(e){return {ok:false,error:String(e)}}
 }
@@ -6098,6 +6111,14 @@ async function deleteChannel(ci){
 async function adminSmaregiView(){
  let h=`<span class="back" id="adback">← 従業員一覧</span><h2>スマレジ登録スタッフ</h2>
  <p class="muted" style="margin-top:-8px">スマレジ・タイムカードに登録されているスタッフの一覧です。「連携する」で本人に招待メール／リンクを送れます。</p>`;
+ // 2026-09-05追加: ユーザー要望「従業員情報（住所・生年月日・電話番号等）は基本的に全部
+ // API連携で取得して反映させてほしい」に対応。スマレジは既にこれらの項目を持っているため
+ // （実データ確認済み）、連携済み全員分をまとめて取り込めるボタンを設置
+ h+=`<div class="card" style="border-color:var(--blue)"><h3>📥 個人情報の一括取り込み</h3>
+  <p class="muted" style="margin:0">連携済みの全員について、スマレジ側の住所・生年月日・電話番号・郵便番号・性別・入社日を取り込みます。<b>アカウント管理側で既に入力済みの項目は上書きしません</b>（空欄の項目だけ埋めます）。</p>
+  ${smPullRunning?`<p class="muted" style="margin-top:8px">取り込み中…（人数が多いと数十秒かかります）</p>`:`<button class="btn sm" id="sm-pullall" style="margin-top:8px">連携済み全員ぶん取り込む</button>`}
+  ${smPullResult?`<p style="margin-top:8px;font-size:13px">✅ ${smPullResult.updatedCount}名ぶん反映・${smPullResult.skippedCount}名はスキップ（既に入力済み等）${smPullResult.errorCount?`・❌${smPullResult.errorCount}件エラー`:""}</p>`:""}
+ </div>`;
  if(!smStaffsCache){
   const [r,{data:profs},{data:us}]=await Promise.all([
    smaregiStaffs(),
@@ -6427,6 +6448,7 @@ async function adminEditView(){
    緊急連絡先: ${esc(prof.emergency_name||"—")}${prof.emergency_relation?`（${esc(prof.emergency_relation)}）`:""} ${esc(prof.emergency_phone||"")}<br>
    入社日: ${prof.hire_date||"—"}<br>${prof.termination_date?`退職日: <b style="color:var(--red)">${prof.termination_date}</b><br>`:""}${prof.extra?Object.entries(prof.extra).filter(([,v])=>!Array.isArray(v)).map(([k,v])=>`${esc(k)}: ${esc(v)}<br>`).join(""):""}スマレジ連携: ${smaregi}</p>
    ${prof.smaregi_sync_status!=="synced"?'<button class="btn sm" id="eu-smaregi" style="margin-top:10px">スマレジに再同期する</button>':""}
+   ${prof.smaregi_staff_id?'<button class="btn sm sub" id="eu-pullprofile" style="margin-top:10px">📥 スマレジから住所・生年月日等を取り込む（未入力項目のみ）</button>':""}
    ${prof.smaregi_staff_id?'<button class="btn sm sub" id="eu-resend" style="margin-top:10px">通知を送り直す（スマレジのリンク付き）</button>':""}</div>`;
   h+=fareCardHtml(u,prof); // v2.6.66 交通費の自動計算（表示専用）
   h+=profileEditCard(prof,"ep"); // v2.6.45 入社情報を直せるようにする
@@ -8153,6 +8175,14 @@ function bindPage(){
  if($("smb-go"))$("smb-go").onclick=()=>smaregiInviteBulkDo();
  if($("smb-csv"))$("smb-csv").onclick=()=>exportSmaregiBulkCsv();
  if($("sm-csv"))$("sm-csv").onclick=exportSmaregiStaffCsv; // 2026-09-05追加
+ if($("sm-pullall"))$("sm-pullall").onclick=async()=>{ // 2026-09-05追加
+  smPullRunning=true;smPullResult=null;render();
+  const r=await smaregiPullProfiles();
+  smPullRunning=false;
+  if(!r||!r.ok){toast("エラー: "+((r&&r.error)||"不明"),true);render();return}
+  smPullResult=r;adminUsers=null;adminProfs=null; // 一覧・詳細を開いたときに最新の内容で出るよう、キャッシュを破棄
+  render();
+ };
  if($("smb-close"))$("smb-close").onclick=()=>{smBulkResults=null;render()};
  if($("adback"))$("adback").onclick=()=>{adminMode="list";adminDetail=null;rcDetail=null;adminLineLinkInfo=null;render()};
  // 設定カスタマイズ（v1.5）
@@ -8450,6 +8480,14 @@ function bindPage(){
   const r=await smaregiSync(adminDetail);
   if(r&&r.ok)toast("スマレジに登録しました（スタッフID: "+r.staffId+"）");
   else toast("同期エラー: "+((r&&(r.error&&r.error.title||JSON.stringify(r.error)))||"不明"),true);
+  render();
+ };
+ if($("eu-pullprofile"))$("eu-pullprofile").onclick=async()=>{ // 2026-09-05追加
+  const btn=$("eu-pullprofile");btn.disabled=true;btn.textContent="取り込み中...";
+  const r=await smaregiPullProfiles(adminDetail);
+  if(!r||!r.ok){toast("エラー: "+((r&&r.error)||"不明"),true);btn.disabled=false;btn.textContent="📥 スマレジから住所・生年月日等を取り込む（未入力項目のみ）";return}
+  if(r.updatedCount)toast(`取り込みました: ${(r.updated[0].filled||[]).join("・")}`);
+  else toast("取り込める項目がありませんでした（すでに入力済み、またはスマレジ側も未入力）");
   render();
  };
  document.querySelectorAll("[data-farecalc]").forEach(b=>b.onclick=async()=>{ // v2.6.66

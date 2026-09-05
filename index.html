@@ -8660,7 +8660,13 @@ function bindPage(){
 }
 
 // v2.5.6 未読バッジの自動更新（新しい応募・通知を画面を切り替えなくても反映）
-setInterval(()=>{if(me&&document.getElementById("nav").style.display!=="none")updateDots()},60000);
+// 2026-09-05修正: embedMode（統合ポータルにiframe埋め込みで使う、実際の主な使い方）では
+// nippo自前のnavを常に非表示にしているため、「navが表示中かどうか」で定期更新の可否を
+// 判定するこの条件は embed 中は常に false になり、60秒ごとの自動更新（バッジ再計算）が
+// ずっと止まったままだった。「チーム長の日報が提出されてもCEO/マスターにバッジが出ない」
+// というユーザー報告の原因はこれ（該当の日報は本人が開けば読めるので可視性の問題ではなく、
+// 開く前に知らせるバッジが自動更新されていなかった）。navの表示状態に関係なく更新するよう修正
+setInterval(()=>{if(me)updateDots()},60000);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&me)updateDots()});
 
 // セッション切れ対応

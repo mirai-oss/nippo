@@ -478,7 +478,7 @@ let searchQ="",fRole="",fStore="";                       // v1.7 検索
 let joinPhotos={},joinSmStaffs=null,joinInfoCur=null;    // v1.7 入社フォーム写真＋スマレジ選択
 let smStaffsCache=null,smSel=null,smRole=null,smStores=[],smResult=null; // v1.7 スマレジ連携招待
 let smBulkSel=new Set(),smBulkPanel=false,smBulkRole=null,smBulkStores=[],smBulkDays="14",smBulkRunning=false,smBulkResults=null; // 2026-09-02 一括招待（担当D依頼・121人未連携対応）
-let smStoreFilter="";smLinkFilter=""; // 2026-09-02 スマレジ上の事業所（店舗）で絞り込み・一括招待の店舗選びを楽にする
+let smStoreFilter=""; // 2026-09-02 スマレジ上の事業所（店舗）で絞り込み・一括招待の店舗選びを楽にする
 let smLinkFilter=""; // 2026-09-05 「管理システムと連携してる人・してない人」を絞り込み検索
 // 2026-09-02追加: 絞り込み条件の判定（表示側・一括選択側で同じロジックを使う）。
 // "__none__"=事業所不明、"__multi__"=2つ以上を兼務、それ以外=店舗UUID

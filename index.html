@@ -4987,10 +4987,10 @@ function payEditHtml(rows,payMonth,sname){
    </div>
    <div class="muted" style="font-size:11px;margin-top:4px">${pr?`自動取得（${esc(payMonth)}分・全店舗合算）: 支給額合計${Math.round(pr.total_allowance||0).toLocaleString()}円（固定給${Math.round(pr.fixed_salary_amount||0).toLocaleString()}円＋通勤手当${Math.round(pr.commute_allowance||0).toLocaleString()}円${pr.fixed_overtime_wage?`／内、固定残業代${Math.round(pr.fixed_overtime_wage).toLocaleString()}円`:""}）　控除合計${Math.round(pr.deduction_total||0).toLocaleString()}円　→　<b>差引支給額（振込額）${Math.round(pr.net_pay||0).toLocaleString()}円</b>`:`${esc(payMonth)}分の自動取得データはまだありません`}</div>
    <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
-    <input type="file" accept="application/pdf" id="paypdf-${u.id}" style="flex:1;font-size:11px">
+    <input type="file" accept="application/pdf" id="paypdf-${u.id}" multiple style="flex:1;font-size:11px">
     <button class="btn sm sub" data-paypdfupload="${u.id}" style="flex-shrink:0">📎 給与明細PDFを添付</button>
    </div>
-   <p class="muted" style="font-size:10px;margin:2px 0 0">スマレジの一括ダウンロード（ZIP）を解凍したPDFを、この人・この月のぶんだけ選んでアップロードしてください</p>
+   <p class="muted" style="font-size:10px;margin:2px 0 0">スマレジの一括ダウンロード（ZIP）を解凍したPDFを、この人・この月のぶんだけ選んでアップロードしてください。複数の事業所で働いている方は明細が事業所ごとに分かれていることがあるため、まとめて複数選択できます（追加のたびに残ります。入れ替えたい場合は会計側の「給与仕訳」タブから削除してください）</p>
    ${storeIds.length?storeIds.map(sid=>{
     const a=byStore[sid]||{};
     return `<details style="border-top:1px solid var(--line,#eee);margin-top:10px;padding-top:8px" ${storeIds.length===1?"open":""}>
@@ -7570,16 +7570,28 @@ function bindPage(){
  document.querySelectorAll("[data-paypdfupload]").forEach(b=>b.onclick=async()=>{ // 2026-08-31追加: 給与明細PDFの手動添付
   const uid=b.dataset.paypdfupload;
   const inp=$("paypdf-"+uid);
-  const file=inp&&inp.files&&inp.files[0];
-  if(!file){toast("PDFファイルを選んでください",true);return}
-  if(file.type!=="application/pdf"){toast("PDFファイルを選んでください",true);return}
+  const files=inp&&inp.files?[...inp.files]:[];
+  if(!files.length){toast("PDFファイルを選んでください",true);return}
+  if(files.some(f=>f.type!=="application/pdf")){toast("PDFファイルを選んでください",true);return}
   b.disabled=true;
-  const path=`${uid}/${payMonth}.pdf`;
-  const {error}=await sb.storage.from("payroll-pdfs").upload(path,file,{upsert:true,contentType:"application/pdf"});
+  // 2026-09-07追加: ユーザー要望「事業所ごとに明細PDFが分かれている人は3〜4枚まとめて
+  // 添付したい」に対応。1枚目は既存の会計側（invoices.html）が前提にしている固定パス
+  // {uid}/{yearMonth}.pdf のまま（後方互換のため変更しない）。2枚目以降は既存ファイルを
+  // 消さないよう、先に一覧を取って空いている連番（_2.pdf・_3.pdf...）へ追加する
+  const {data:existing}=await sb.storage.from("payroll-pdfs").list(uid,{search:payMonth});
+  const used=new Set((existing||[]).map(x=>x.name));
+  let ok=0,ng=0;
+  for(const file of files){
+   let path;
+   if(!used.has(`${payMonth}.pdf`)){path=`${payMonth}.pdf`}
+   else{let n=2;while(used.has(`${payMonth}_${n}.pdf`))n++;path=`${payMonth}_${n}.pdf`}
+   const {error}=await sb.storage.from("payroll-pdfs").upload(`${uid}/${path}`,file,{upsert:true,contentType:"application/pdf"});
+   if(error)ng++;else{ok++;used.add(path)}
+  }
   b.disabled=false;
-  if(error){toast("アップロードエラー: "+error.message,true);return}
   if(inp)inp.value="";
-  toast("給与明細PDFを添付しました");
+  if(ng)toast(`${ok}件添付・${ng}件は失敗しました`,true);
+  else toast(files.length>1?`給与明細PDFを${ok}件添付しました`:"給与明細PDFを添付しました");
  });
  document.querySelectorAll("[data-paysaveuser]").forEach(b=>b.onclick=async()=>{
   const uid=b.dataset.paysaveuser;

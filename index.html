@@ -928,6 +928,7 @@ const openApplicant=new URLSearchParams(location.search).get("a"); // v2.6.64 �
 // v2.7 統合ポータルシェル（portal.html）からの深リンク対応（担当Fからの依頼・実装指示書_統合ポータルシェル）
 // 例: ?page=shift で開けば、ホームではなくシフト画面が最初から開く。埋め込みiframe用のためURLはクリアしない
 const deepLinkPage=new URLSearchParams(location.search).get("page");
+const deepLinkSub=new URLSearchParams(location.search).get("sub"); // 2026-09-08追加: page=shift用のサブページ指定（勤怠メニュー: dashboard/submit/adjust/confirmed/actual/settings）
 const embedMode=new URLSearchParams(location.search).get("embed")==="1"; // v2.7 統合ポータルシェルのiframe埋め込み用。自前のnav・headerを隠す（担当F依頼・tori-dashboardのembed=1と同じ考え方）
 const DEEPLINK_PAGES=["home","write","weekly","list","check","shift","actual","tasks","chat","manuals","recruit","admin","settings","dash","cashhandoff"]; // render()が分岐できるpage値のみ許可（2026-09-08 現金手渡し画面を追加。統合ポータル(portal.html)のnippoPage("cashhandoff")リンクからここへ来る）
 const GAIHAN_HIDDEN_PAGES=["check","chat","weekly","manuals","shift"]; // 1533行目付近のnav非表示ロジックと同じ基準（外販には深リンクさせない）
@@ -1753,7 +1754,9 @@ async function loadMe(uid,opts){
  // v2.6.64 応募者詳細への直接リンクで開いたときは、ホームではなくその応募者の詳細を開く
  // v2.7 統合ポータルシェルからの深リンク（?page=）。openApplicantのほうが優先、権限的に見られないページ・未知のキーは無視してホームのまま
  if(openApplicant&&can("recruit")){page="recruit";rcDetail=openApplicant}
- else if(deepLinkPage&&DEEPLINK_PAGES.includes(deepLinkPage)&&!(me.role==="GAIHAN"&&GAIHAN_HIDDEN_PAGES.includes(deepLinkPage))){page=deepLinkPage;if(deepLinkPage==="actual")sfMgStep="actual"}
+ else if(deepLinkPage&&DEEPLINK_PAGES.includes(deepLinkPage)&&!(me.role==="GAIHAN"&&GAIHAN_HIDDEN_PAGES.includes(deepLinkPage))){page=deepLinkPage;if(deepLinkPage==="actual")sfMgStep="actual";
+  if(deepLinkPage==="shift"&&["dashboard","submit","adjust","confirmed","actual","settings"].includes(deepLinkSub))sfMgStep=deepLinkSub; // 2026-09-08追加: 勤怠メニュー(ダッシュボード/シフト/実績/設定)からの直接遷移
+ }
  else{page="home"}
  if(openApplicant)history.replaceState({},"",location.pathname); // 開いたらURLのパラメータは消す（再読み込みで毎回同じ人が開かないように）。?page=はiframeの再読み込みでも同じページを開き続けたいので消さない
  await render();
@@ -7644,6 +7647,104 @@ async function sfV12ConfirmedSection(){
  return h;
 }
 
+// ---- 設定（2026-09-08新設: 勤怠メニューの4つ目。役割設定を最優先で実装） ----
+async function sfV12SettingsSection(){
+ const ctx=await sfV12LoadCommon();
+ const {people,idsForIn}=ctx;
+ const [{data:roles},{data:empRoles},{data:reqRows},{data:settingRow},{data:presets}]=await Promise.all([
+  sb.from("sf_store_roles").select("*").eq("store_id",sfMgStore).order("sort_order"),
+  sb.from("sf_employee_roles").select("*").in("user_id",idsForIn),
+  sb.from("sf_required_headcounts").select("*").eq("store_id",sfMgStore),
+  sb.from("sf_store_settings").select("*").eq("store_id",sfMgStore).maybeSingle(),
+  sb.from("sf_time_presets").select("*").eq("store_id",sfMgStore).order("sort_order")
+ ]);
+ const roleList=(roles||[]).filter(r=>r.is_active);
+ const setting=settingRow||{pa_target_labor_rate:14.0,night_premium_rate:1.25,lunch_enabled:true,sales_basis_rule:"target"};
+ const empRolesByUser={};(empRoles||[]).forEach(r=>{(empRolesByUser[r.user_id]=empRolesByUser[r.user_id]||[]).push(r)});
+ const lineUnlinked=people.filter(u=>!u.line_user_id).length;
+ let h=`<div class="toolbar">
+  <div class="group"><select class="inp" id="v12-store" style="margin:0">${sfPickableStores().map(s=>`<option value="${s.id}" ${s.id===sfMgStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select></div>
+ </div>
+ <div class="title">勤怠設定</div>
+ <p class="muted" style="margin-top:-4px">選択中の店舗（${esc((()=>{const s=[...stores,...storesHidden].find(x=>x.id===sfMgStore);return s?s.name:""})())}）の設定です。店舗ごとに個別に設定できます。</p>
+
+ <div class="card">
+  <div class="cardhead"><h2>① 役割設定</h2><div class="sub">シフト表・日別集計の「キッチン人数」「ホール人数」等の集計はここで設定した役割を使います</div></div>
+  <div class="wrap"><table class="mini-table">
+   <thead><tr><th>役割名</th><th>並び順</th><th>状態</th><th></th></tr></thead>
+   <tbody>${(roles||[]).map(r=>`<tr><td>${esc(r.name)}</td><td>${r.sort_order}</td><td>${r.is_active?'<span class="badge good">有効</span>':'<span class="badge">無効</span>'}</td><td><button class="btn sm" data-v12-role-toggle="${r.id}">${r.is_active?"無効にする":"有効にする"}</button> <button class="btn sm" data-v12-role-del="${r.id}">削除</button></td></tr>`).join("")||'<tr><td colspan="4" class="muted">まだ役割がありません。下から追加してください（例: キッチン・ホール・仕込み・ドリンク・ランチ）</td></tr>'}</tbody>
+  </table></div>
+  <div class="actions"><div class="formgrid" style="flex:1"><div class="field"><label>役割名</label><input class="inp" id="v12-role-name" placeholder="例: キッチン"></div><div class="field"><label>&nbsp;</label><button class="btn primary" id="v12-role-add" style="width:100%">追加</button></div></div></div>
+ </div>
+
+ <div class="card">
+  <div class="cardhead"><h2>② 従業員の主役割・対応可能役割</h2></div>
+  ${!roleList.length?'<p class="muted" style="padding:10px 12px">先に①で役割を追加してください</p>':`
+  <div class="wrap"><table class="mini-table">
+   <thead><tr><th>従業員</th><th>区分</th><th>主役割</th><th>対応可能役割</th><th></th></tr></thead>
+   <tbody>${people.map(u=>{
+    const mine=empRolesByUser[u.id]||[];
+    const primary=(mine.find(r=>r.is_primary)||{}).role_name||"";
+    const tag=sfRoleTag(u);
+    return `<tr data-emprolerow="${u.id}">
+     <td>${esc(u.name)}</td>
+     <td><span class="badge ${tag.cls==="pa"?"":"blue"}">${tag.cls==="pa"?"PA":"社員"}</span></td>
+     <td><select class="inp" data-v12-role-primary="${u.id}" style="margin:0"><option value="">未設定</option>${roleList.map(r=>`<option value="${esc(r.name)}" ${primary===r.name?"selected":""}>${esc(r.name)}</option>`).join("")}</select></td>
+     <td>${roleList.map(r=>`<label style="margin-right:8px;font-size:11px;white-space:nowrap"><input type="checkbox" data-v12-role-avail="${u.id}|${esc(r.name)}" ${mine.some(m=>m.role_name===r.name)?"checked":""}> ${esc(r.name)}</label>`).join("")}</td>
+     <td><button class="btn sm primary" data-v12-emprole-save="${u.id}">保存</button></td>
+    </tr>`;
+   }).join("")}</tbody>
+  </table></div>`}
+ </div>
+
+ <div class="card">
+  <div class="cardhead"><h2>③ 必要人数設定（時間帯別）</h2><div class="sub">シフト調整・確定シフトの「配置／必要」欄の基準です（既存機能）</div></div>
+  <div class="wrap"><table class="mini-table">
+   <thead><tr><th>時間帯</th><th>曜日／日付</th><th>必要人数</th><th></th></tr></thead>
+   <tbody>${(reqRows||[]).map(r=>{const pr=(presets||[]).find(p=>p.id===r.preset_id);const wdLabel=r.specific_date?r.specific_date:(r.weekday!=null?["日","月","火","水","木","金","土"][r.weekday]+"曜":"—");return `<tr><td>${pr?esc(pr.label):"—"}</td><td>${wdLabel}</td><td>${r.required_count}名</td><td><button class="btn sm" data-v12-hc-del="${r.id}">削除</button></td></tr>`}).join("")||'<tr><td colspan="4" class="muted">まだ設定がありません</td></tr>'}</tbody>
+  </table></div>
+  <div class="actions"><div class="formgrid" style="flex:1">
+   <div class="field"><label>時間帯</label><select class="inp" id="v12-hc-preset">${(presets||[]).map(p=>`<option value="${p.id}">${esc(p.label)}</option>`).join("")}</select></div>
+   <div class="field"><label>曜日（曜日基準の場合）</label><select class="inp" id="v12-hc-weekday"><option value="">—</option>${["日","月","火","水","木","金","土"].map((w,i)=>`<option value="${i}">${w}曜</option>`).join("")}</select></div>
+   <div class="field"><label>必要人数</label><input class="inp" id="v12-hc-count" type="number" value="1" min="0"></div>
+   <div class="field"><label>&nbsp;</label><button class="btn primary" id="v12-hc-add" style="width:100%">追加</button></div>
+  </div></div>
+ </div>
+
+ <div class="card">
+  <div class="cardhead"><h2>④ PA目標人件費率・深夜割増・ランチ営業</h2><div class="sub">シフト調整の「適正人員計算」「日別集計」に反映されます</div></div>
+  <div class="modalbody"><div class="formgrid">
+   <div class="field"><label>PA目標人件費率（%）</label><input class="inp" id="v12-set-parate" type="number" step="0.1" value="${esc(String(setting.pa_target_labor_rate))}"></div>
+   <div class="field"><label>深夜割増率（倍率。労基法上の最低は1.25）</label><input class="inp" id="v12-set-night" type="number" step="0.01" value="${esc(String(setting.night_premium_rate))}"></div>
+   <div class="field"><label>売上基準の考え方</label><select class="inp" id="v12-set-basis">
+     <option value="target" ${setting.sales_basis_rule==="target"?"selected":""}>売上目標を優先し、昨年同週同曜日を参考</option>
+     <option value="ly" ${setting.sales_basis_rule==="ly"?"selected":""}>昨年同週同曜日を優先</option>
+     <option value="high" ${setting.sales_basis_rule==="high"?"selected":""}>高い方を採用</option>
+     <option value="avg" ${setting.sales_basis_rule==="avg"?"selected":""}>平均値を採用</option>
+   </select></div>
+   <div class="field"><label>ランチ営業</label><label style="display:flex;align-items:center;gap:6px;margin-top:6px"><input type="checkbox" id="v12-set-lunch" ${setting.lunch_enabled?"checked":""}> この店舗はランチ営業を行っている</label></div>
+  </div></div>
+  <div class="actions"><div></div><button class="btn primary" id="v12-set-save">この店舗の設定を保存</button></div>
+ </div>
+
+ <div class="card">
+  <div class="cardhead"><h2>⑤ 社員休日基準・勤務時間プリセット</h2></div>
+  <div class="modalbody" style="display:flex;gap:10px;flex-wrap:wrap">
+   <button class="btn" id="v12-settings-dayoffcfg">👉 休日基準設定を開く（人事シフト内の設定）</button>
+   <button class="btn" id="v12-settings-presets">👉 勤務時間プリセットを開く（既存の時間帯設定画面）</button>
+  </div>
+ </div>
+
+ <div class="card">
+  <div class="cardhead"><h2>⑥ スマレジ連携・LINE通知（状況）</h2></div>
+  <div class="modalbody">
+   <p style="margin:0 0 8px">スマレジ未連携: <b class="${ctx.unlinkedCount?"warn":""}">${ctx.unlinkedCount}名</b>／LINE未連携: <b class="${lineUnlinked?"warn":""}">${lineUnlinked}名</b>（この店舗の在籍者${people.length}名中）</p>
+   <p class="muted" style="margin:0">連携作業そのものは「管理（アカウント）」画面の従業員一覧から行います。ここでは状況の確認のみです。急募・出勤強化日・未提出リマインドのLINE通知は、対象者にLINE連携済みであれば自動で送信されます（個別のON/OFF切替は今回未実装）。</p>
+  </div>
+ </div>`;
+ return h;
+}
+
 // ---- ⑤実績・差異 ----
 let sfV12ActSeg="hours"; // 勤務時間数／出退勤時間／予定との差異／叶え率
 async function sfV12ActualSection(){
@@ -7819,23 +7920,32 @@ async function sfV12View(){
  const pickable=sfPickableStores();
  if(!sfMgStore||!pickable.find(s=>s.id===sfMgStore))sfMgStore=pickable[0].id;
  const storeName=(()=>{const s=[...stores,...storesHidden].find(x=>x.id===sfMgStore);return s?s.name:""})();
- const tab=["dashboard","submit","adjust","confirmed","actual"].includes(sfMgStep)?sfMgStep:"dashboard";
+ // 2026-09-08 ユーザー指示: 「勤怠」という情報設計に整理。トップは
+ //   ダッシュボード／シフト（提出・調整・確定の切替）／実績／設定 の4つに統合する
+ //   （UIの見た目・色・余白は既存v12のまま。タブの束ね方だけを変更）
+ const tab=["dashboard","submit","adjust","confirmed","actual","settings"].includes(sfMgStep)?sfMgStep:"dashboard";
+ const topTab=["submit","adjust","confirmed"].includes(tab)?"shift":tab;
  let body="";
  if(tab==="submit")body=await sfV12SubmitSection();
  else if(tab==="adjust")body=await sfV12AdjustSection();
  else if(tab==="confirmed")body=await sfV12ConfirmedSection();
  else if(tab==="actual")body=await sfV12ActualSection();
+ else if(tab==="settings")body=await sfV12SettingsSection();
  else body=await sfV12DashboardSection();
  return `<div class="shift-management-reference">
   <div class="top"><div class="brand">N-Style <small>シフト・勤怠管理</small></div><div>${esc(storeName)} ｜ ${esc(ROLE_NAME[me.role]||me.role)}</div></div>
   <main class="page">
    <div class="mainnav">
-    <button class="${tab==="dashboard"?"on":""}" data-v12tab="dashboard">ダッシュボード</button>
-    <button class="${tab==="submit"?"on":""}" data-v12tab="submit">シフト提出</button>
-    <button class="${tab==="adjust"?"on":""}" data-v12tab="adjust">シフト調整</button>
-    <button class="${tab==="confirmed"?"on":""}" data-v12tab="confirmed">確定シフト</button>
-    <button class="${tab==="actual"?"on":""}" data-v12tab="actual">実績・差異</button>
+    <button class="${topTab==="dashboard"?"on":""}" data-v12tab="dashboard">ダッシュボード</button>
+    <button class="${topTab==="shift"?"on":""}" data-v12tab="shift">シフト</button>
+    <button class="${topTab==="actual"?"on":""}" data-v12tab="actual">実績・差異</button>
+    <button class="${topTab==="settings"?"on":""}" data-v12tab="settings">設定</button>
    </div>
+   ${topTab==="shift"?`<div class="hr-switch" id="v12-shiftsub" style="margin:12px 18px 0">
+    <button class="${tab==="submit"?"on":""}" data-v12shiftsub="submit">シフト提出</button>
+    <button class="${tab==="adjust"?"on":""}" data-v12shiftsub="adjust">シフト調整</button>
+    <button class="${tab==="confirmed"?"on":""}" data-v12shiftsub="confirmed">確定シフト</button>
+   </div>`:""}
    <section class="view on">${body}</section>
   </main>
   ${await sfV12EditModalHtml()}
@@ -7848,7 +7958,12 @@ async function sfV12View(){
 function bindSfV12Page(){
  const root=document.querySelector(".shift-management-reference");
  if(!root)return; // 完成HTML版は店長以上のみ（一般従業員は従来のsfSubmitViewのまま）
- document.querySelectorAll("[data-v12tab]").forEach(b=>b.onclick=()=>{sfMgStep=b.dataset.v12tab;sfEditDate=null;sfV12EditCell=null;sfV12Selected=new Set();page="shift";render()});
+ document.querySelectorAll("[data-v12tab]").forEach(b=>b.onclick=()=>{
+  const t=b.dataset.v12tab;
+  sfMgStep=t==="shift"?(["submit","adjust","confirmed"].includes(sfMgStep)?sfMgStep:"submit"):t; // 2026-09-08追加: シフトタブは提出/調整/確定の最後に見ていたものを覚えておく
+  sfEditDate=null;sfV12EditCell=null;sfV12Selected=new Set();page="shift";render();
+ });
+ document.querySelectorAll("[data-v12shiftsub]").forEach(b=>b.onclick=()=>{sfMgStep=b.dataset.v12shiftsub;sfEditDate=null;sfV12EditCell=null;sfV12Selected=new Set();render()});
  // 共通: 店舗・期間・半月/1ヶ月・時間帯
  if($("v12-store"))$("v12-store").onchange=e=>{sfMgStore=e.target.value;sfEditDate=null;render()};
  if($("v12-period"))$("v12-period").onchange=e=>{sfMgPeriodIdx=+e.target.value;sfEditDate=null;render()};
@@ -7879,6 +7994,77 @@ function bindSfV12Page(){
   if(error){toast("削除エラー: "+error.message,true);return}
   toast("削除しました");render();
  });
+ // 設定（勤怠設定タブ。2026-09-08新設）
+ if($("v12-role-add"))$("v12-role-add").onclick=async()=>{
+  const name=$("v12-role-name").value.trim();
+  if(!name){toast("役割名を入力してください",true);return}
+  const {data:existing}=await sb.from("sf_store_roles").select("sort_order").eq("store_id",sfMgStore).order("sort_order",{ascending:false}).limit(1);
+  const nextOrder=existing&&existing.length?existing[0].sort_order+10:10;
+  const {error}=await sb.from("sf_store_roles").insert({store_id:sfMgStore,name,sort_order:nextOrder,created_by:me.id});
+  if(error){toast("追加エラー: "+(error.message.includes("duplicate")?"同じ名前の役割が既にあります":error.message),true);return}
+  toast("役割を追加しました");render();
+ };
+ document.querySelectorAll("[data-v12-role-toggle]").forEach(b=>b.onclick=async()=>{
+  const {data:cur}=await sb.from("sf_store_roles").select("is_active").eq("id",b.dataset.v12RoleToggle).maybeSingle();
+  const {error}=await sb.from("sf_store_roles").update({is_active:!(cur&&cur.is_active)}).eq("id",b.dataset.v12RoleToggle);
+  if(error){toast("更新エラー: "+error.message,true);return}
+  render();
+ });
+ document.querySelectorAll("[data-v12-role-del]").forEach(b=>b.onclick=async()=>{
+  if(!confirm("この役割を削除しますか？（既にシフトへ設定済みの人の役割名はそのまま残ります）"))return;
+  const {error}=await sb.from("sf_store_roles").delete().eq("id",b.dataset.v12RoleDel);
+  if(error){toast("削除エラー: "+error.message,true);return}
+  toast("削除しました");render();
+ });
+ document.querySelectorAll("[data-v12-emprole-save]").forEach(b=>b.onclick=async()=>{
+  const uid=b.dataset.v12EmproleSave;
+  const row=document.querySelector(`[data-emprolerow="${uid}"]`);
+  if(!row)return;
+  const primary=row.querySelector(`[data-v12-role-primary="${uid}"]`).value||null;
+  const checked=[...row.querySelectorAll(`[data-v12-role-avail^="${uid}|"]`)].filter(c=>c.checked).map(c=>c.dataset.v12RoleAvail.split("|")[1]);
+  const names=new Set(checked);
+  if(primary)names.add(primary); // 主役割は対応可能役割にも自動的に含める
+  b.disabled=true;
+  const {error:delErr}=await sb.from("sf_employee_roles").delete().eq("user_id",uid);
+  if(delErr){toast("保存エラー: "+delErr.message,true);b.disabled=false;return}
+  if(names.size){
+   const rows=[...names].map(n=>({user_id:uid,role_name:n,is_primary:n===primary}));
+   const {error:insErr}=await sb.from("sf_employee_roles").insert(rows);
+   if(insErr){toast("保存エラー: "+insErr.message,true);b.disabled=false;return}
+  }
+  b.disabled=false;toast("保存しました");
+ });
+ if($("v12-hc-add"))$("v12-hc-add").onclick=async()=>{
+  const presetId=$("v12-hc-preset").value;
+  const weekdayVal=$("v12-hc-weekday").value;
+  const count=+$("v12-hc-count").value;
+  if(!presetId){toast("時間帯を選択してください",true);return}
+  if(weekdayVal===""){toast("曜日を選択してください（特定日指定は今後の対応予定です）",true);return}
+  // (store_id,preset_id,weekday)にunique制約が無いため、重複を避けたい場合は一覧から古い設定を削除してから追加してください
+  const {error}=await sb.from("sf_required_headcounts").insert({store_id:sfMgStore,preset_id:presetId,weekday:+weekdayVal,specific_date:null,required_count:count});
+  if(error){toast("保存エラー: "+error.message,true);return}
+  toast("必要人数を保存しました");render();
+ };
+ document.querySelectorAll("[data-v12-hc-del]").forEach(b=>b.onclick=async()=>{
+  if(!confirm("この必要人数設定を削除しますか？"))return;
+  const {error}=await sb.from("sf_required_headcounts").delete().eq("id",b.dataset.v12HcDel);
+  if(error){toast("削除エラー: "+error.message,true);return}
+  toast("削除しました");render();
+ });
+ if($("v12-set-save"))$("v12-set-save").onclick=async()=>{
+  const payload={store_id:sfMgStore,
+   pa_target_labor_rate:parseFloat($("v12-set-parate").value)||14.0,
+   night_premium_rate:parseFloat($("v12-set-night").value)||1.25,
+   sales_basis_rule:$("v12-set-basis").value,
+   lunch_enabled:$("v12-set-lunch").checked,
+   updated_by:me.id,updated_at:new Date().toISOString()};
+  const {error}=await sb.from("sf_store_settings").upsert(payload,{onConflict:"store_id"});
+  if(error){toast("保存エラー: "+error.message,true);return}
+  sfV12PaRate=String(payload.pa_target_labor_rate);sfV12SalesBasisRule=payload.sales_basis_rule; // 画面上のシフト調整タブにも即反映
+  toast("この店舗の設定を保存しました");render();
+ };
+ if($("v12-settings-dayoffcfg"))$("v12-settings-dayoffcfg").onclick=()=>{sfMgStep="adjust";sfV12HrMode="hr";sfV12DayoffCfgOpen=true;render()};
+ if($("v12-settings-presets"))$("v12-settings-presets").onclick=(e)=>{e.preventDefault();sfMgStep="presets";render()};
  if($("v12-hr-alertcfg"))$("v12-hr-alertcfg").onclick=()=>toast("勤務時間アラートの個別設定は今後の対応予定です");
  if($("v12-hr-csv"))$("v12-hr-csv").onclick=()=>{
   if(!sfV12LastHrRows){toast("表示内容がありません",true);return}

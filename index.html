@@ -6605,6 +6605,10 @@ async function cashHandoffView(){
   <div><div class="muted" style="font-size:11px">受け渡し完了</div><div style="font-size:20px;font-weight:700">${completedCount}／${filtered.length}名</div></div>
  </div>`;
  if(!filtered.length)return h+`<p class="muted" style="margin-top:16px">この条件に一致する対象者はいません。</p>`;
+ h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 4px">
+  <button class="btn sm sub" id="cash-export-csv">📄 CSVダウンロード</button>
+  <button class="btn sm sub" id="cash-export-print">🖨 印刷・PDF保存</button>
+ </div>`;
  const byStore={};filtered.forEach(t=>{(byStore[t.store_id||"?"]=byStore[t.store_id||"?"]||[]).push(t)});
  Object.entries(byStore).forEach(([sid,people])=>{
   h+=`<div class="card"><h3 style="margin:0 0 8px">🏪 ${esc(sname(sid==="?"?null:sid))}（${people.length}名）</h3>`;
@@ -6615,6 +6619,51 @@ async function cashHandoffView(){
   h+=`</div>`;
  });
  return h;
+}
+// 2026-09-08追加: CSV・印刷(PDF)出力用に、現在の絞り込み条件で一覧を整形する共通関数
+function cashListForExport(){
+ const sname=id=>{const s=[...stores,...storesHidden].find(x=>x.id===id);return s?s.name:"所属不明"};
+ const filtered=cashStoreFilter?(cashList||[]).filter(t=>(t.store_id||"?")===cashStoreFilter):(cashList||[]);
+ return filtered.slice().sort((a,b)=>{
+  const sa=sname(a.store_id||null),sb=sname(b.store_id||null);
+  return sa.localeCompare(sb,"ja")||a.name.localeCompare(b.name,"ja");
+ }).map(t=>{
+  const rec=(cashRecords||{})[t.user_id]||{};
+  const fmt=v=>v?new Date(v).toLocaleString("ja-JP"):"未";
+  return {
+   store:sname(t.store_id||null),name:t.name,amount:Math.round(Number(t.amount)||0),
+   withdrawn:fmt(rec.withdrawn_at),payer:fmt(rec.payer_checked_at),receiver:fmt(rec.receiver_checked_at),completed:fmt(rec.completed_at)
+  };
+ });
+}
+function cashExportCsv(){
+ const rows=cashListForExport();
+ const header=["店舗","氏名","金額","引き出し","渡した側確認","受け取った側確認","受け渡し完了"];
+ const csv=[header,...rows.map(r=>[r.store,r.name,r.amount,r.withdrawn,r.payer,r.receiver,r.completed])]
+  .map(row=>row.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\r\n");
+ const blob=new Blob(["﻿"+csv],{type:"text/csv"});
+ const url=URL.createObjectURL(blob);
+ const a=document.createElement("a");a.href=url;a.download=`現金手渡し_${cashMonth}.csv`;document.body.appendChild(a);a.click();a.remove();
+ setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+// PDFは日本語対応の外部ライブラリ追加を避けるため、ブラウザの印刷機能（保存先にPDFを選ぶ）を使う方式にした
+function cashExportPrint(){
+ const rows=cashListForExport();
+ const totalAmount=rows.reduce((s,r)=>s+r.amount,0);
+ const w=window.open("","_blank");
+ if(!w){toast("ポップアップがブロックされました。ブラウザの設定を確認してください",true);return}
+ w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>現金手渡し一覧_${esc(cashMonth)}</title>
+ <style>body{font-family:sans-serif;padding:16px;color:#222}table{border-collapse:collapse;width:100%;font-size:13px}
+ th,td{border:1px solid #999;padding:6px 8px;text-align:left}th{background:#eee}h1{font-size:18px;margin:0 0 4px}
+ p{margin:0 0 12px;color:#555}</style></head><body>
+ <h1>💴 現金手渡し一覧（${esc(cashMonth)}分）</h1>
+ <p>対象 ${rows.length}名／合計 ${totalAmount.toLocaleString()}円</p>
+ <table><thead><tr><th>店舗</th><th>氏名</th><th>金額</th><th>引き出し</th><th>渡した側</th><th>受け取った側</th><th>受け渡し完了</th></tr></thead><tbody>
+ ${rows.map(r=>`<tr><td>${esc(r.store)}</td><td>${esc(r.name)}</td><td>${r.amount.toLocaleString()}円</td><td>${esc(r.withdrawn)}</td><td>${esc(r.payer)}</td><td>${esc(r.receiver)}</td><td>${esc(r.completed)}</td></tr>`).join("")}
+ </tbody></table>
+ <script>window.onload=function(){window.print()}</script>
+ </body></html>`);
+ w.document.close();
 }
 // サイン用キャンバス（ポインター座標をcanvasの内部解像度にスケールして描く。タッチでのスクロール暴発を
 // 防ぐためtouch-action:noneをHTML側に指定している）
@@ -6640,7 +6689,11 @@ async function cashHandoffDetailView(){
   <label class="radio-row"><input type="checkbox" id="cash-amtok" ${rec&&rec.amount_confirmed?"checked":""}> 給与明細と金額に間違いがないことを確認しました</label>
  </div>
  <div class="card"><h3>🏧 現金の引き出し</h3>
-  ${rec&&rec.withdrawn_at?`<p style="margin:0">✅ 引き出し済み（${new Date(rec.withdrawn_at).toLocaleString("ja-JP")}）</p>${rec.withdrawn_photo_path?`<button class="btn sm sub" data-cashsigview="${esc(rec.withdrawn_photo_path)}">写真を見る</button>`:""}`
+  ${rec&&rec.withdrawn_at?`<p style="margin:0">✅ 引き出し済み（${new Date(rec.withdrawn_at).toLocaleString("ja-JP")}）</p>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+     ${rec.withdrawn_photo_path?`<button class="btn sm sub" data-cashsigview="${esc(rec.withdrawn_photo_path)}">写真を見る</button>`:""}
+     <button class="btn sm sub" id="cash-withdraw-undo">取り消す</button>
+    </div>`
    :`<label class="radio-row"><input type="checkbox" id="cash-withdrawncb"> 銀行・ATMから現金を引き出しました</label>
     <p class="muted" style="font-size:11px;margin:6px 0 2px">引き出した金額が分かる写真（現金の束・ATM明細など）を撮って添付できます（任意）</p>
     <input type="file" accept="image/*" capture="environment" id="cash-withdraw-photo" class="inp" style="padding:6px">
@@ -6696,6 +6749,8 @@ function bindCashHandoffPage(){
  if($("cashback"))$("cashback").onclick=()=>{cashDetail=null;render()};
  ["cash-year","cash-monthsel"].forEach(id=>{if($(id))$(id).onchange=()=>{cashMonth=$("cash-year").value+"-"+String($("cash-monthsel").value).padStart(2,"0");render()}});
  if($("cash-storefilter"))$("cash-storefilter").onchange=()=>{cashStoreFilter=$("cash-storefilter").value;render()};
+ if($("cash-export-csv"))$("cash-export-csv").onclick=cashExportCsv;
+ if($("cash-export-print"))$("cash-export-print").onclick=cashExportPrint;
  document.querySelectorAll("[data-cashopen]").forEach(rw=>rw.onclick=()=>{cashDetail=rw.dataset.cashopen;render()});
  document.querySelectorAll("[data-cashsigview]").forEach(b=>b.onclick=async()=>{
   const url=await resolveSignedUrl("cash-signatures",b.dataset.cashsigview);
@@ -6737,6 +6792,19 @@ function bindCashHandoffPage(){
    toast("引き出し確認を保存しました");
   }catch(e){toast("保存エラー: "+(e&&e.message?e.message:e),true)}
   cashWithdrawSaving=false;render();
+ };
+ // 2026-09-08追加: 引き出し確認の取り消し（間違えて押した場合。渡した側・受け取った側には影響しない）
+ if($("cash-withdraw-undo"))$("cash-withdraw-undo").onclick=async()=>{
+  if(!confirm("「引き出し済み」を取り消しますか？"))return;
+  try{
+   const {error}=await sb.from("sf_cash_handoff_signatures").update({
+    withdrawn_at:null,withdrawn_by:null,withdrawn_photo_path:null,updated_at:new Date().toISOString()
+   }).eq("user_id",cashDetail).eq("year_month",cashMonth);
+   if(error)throw error;
+   await refreshCashRecord(cashDetail,cashMonth);
+   toast("引き出し確認を取り消しました");
+   render();
+  }catch(e){toast("取り消しエラー: "+(e&&e.message?e.message:e),true)}
  };
  if($("cash-payer-save"))$("cash-payer-save").onclick=async()=>{
   if(!$("cash-paidcb").checked){toast("「現金を渡しました」にチェックしてください",true);return}

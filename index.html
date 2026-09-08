@@ -3164,8 +3164,9 @@ async function sfSubmitView(){
     const clickable=locked?(s&&s.status==="published"&&!cr):true;
     const attr=clickable?(locked?`data-sfchange="${ds}"`:`data-sfedit="${ds}"`):"";
     const selected=ds===sfEditDate||ds===sfChangeDate;
+    const wc=sfV12WeekdayColor(ds),hol=sfV12JpHolidayName(ds);
     return `<div class="sf-day ${selected?"active":""} ${isBoost?"sf-boost":""}" ${attr} style="${clickable?"cursor:pointer":"cursor:default;opacity:.7"}">
-     <b>${isBoost?"🔥 ":""}${sfFmtDateShort(ds)}</b>
+     <b${wc?` style="color:${wc}"`:""}>${isBoost?"🔥 ":""}${sfFmtDateShort(ds)}</b>${hol?`<div style="font-size:8px;color:${wc}">${esc(hol)}</div>`:""}
      <div class="sf-coverage"><strong style="font-size:12px">${esc(label)}</strong>
       <div class="sf-tags">${crTag}${helpTag}</div></div>
     </div>`;
@@ -4090,13 +4091,14 @@ async function sfLeaveView(){
 }
 
 // ---- 保存処理（共通） ----
-async function sfSaveDay(uid,storeId,ds,periodKey,presetId,isOff,startT,endT,presets){
+async function sfSaveDay(uid,storeId,ds,periodKey,presetId,isOff,startT,endT,presets,roleName){ // roleNameは2026-09-08追加(その日の勤務役割)。省略時は変更しない
  let start=startT,end=endT,breakMin=0,pid=presetId||null;
  if(isOff){start=null;end=null}
  else if(pid){const pr=presets.find(x=>x.id===pid);if(pr){start=start||pr.start_time;end=end||pr.end_time;breakMin=pr.break_minutes}}
  if(!isOff&&(!start||!end)){toast("時間を入力してください",true);return false}
  const payload={user_id:uid,store_id:storeId,work_date:ds,period_key:periodKey,preset_id:pid,is_off:!!isOff,
   start_time:isOff?"00:00":start,end_time:isOff?"00:00":end,break_minutes:breakMin,status:"draft",created_by:me.id,updated_at:new Date().toISOString()};
+ if(roleName!==undefined)payload.role_name=roleName||null;
  const {error}=await sb.from("sf_shifts").upsert(payload,{onConflict:"user_id,work_date"});
  if(error){toast("保存エラー: "+error.message,true);return false}
  return true;
@@ -7025,9 +7027,46 @@ function bindCashHandoffPage(){
 // このUIへ接続する。CSSは.shift-management-reference配下に完全スコープ（<style>内に生成済み）。
 // 元ファイル: docs/mockups/NStyle_シフト管理_UI_v12_人事シフト全店舗横断.html
 // ============================================================================
-function sfV12ShortDate(ds){ // 表ヘッダー用の短い日付（モックの「1 火」形式）
+// 2026-09-08追加: 日本の祝日名（固定日・ハッピーマンデー・春分秋分の近似計算・振替休日）。
+//   ns-portal jp_is_national_holiday/jp_is_holiday（担当B・2026-09-08新設）と同じロジックのJS版。
+//   「国民の休日」（祝日に挟まれた平日）は非対応（発生頻度が極めて低いため、SQL側と同じ割り切り）
+function sfV12JpHolidayName(ds){
+ const d=new Date(ds+"T00:00:00");
+ const y=d.getFullYear(),m=d.getMonth()+1,day=d.getDate(),dow=d.getDay();
+ const FIXED={"1-1":"元日","2-11":"建国記念の日","2-23":"天皇誕生日","4-29":"昭和の日","5-3":"憲法記念日","5-4":"みどりの日","5-5":"こどもの日","8-11":"山の日","11-3":"文化の日","11-23":"勤労感謝の日"};
+ const key=m+"-"+day;
+ if(FIXED[key])return FIXED[key];
+ if(dow===1){
+  const week=Math.ceil(day/7);
+  if(m===1&&week===2)return "成人の日";
+  if(m===7&&week===3)return "海の日";
+  if(m===9&&week===3)return "敬老の日";
+  if(m===10&&week===2)return "スポーツの日";
+ }
+ const spring=Math.floor(20.8431+0.242194*(y-1980))-Math.floor((y-1980)/4);
+ const autumn=Math.floor(23.2488+0.242194*(y-1980))-Math.floor((y-1980)/4);
+ if(m===3&&day===spring)return "春分の日";
+ if(m===9&&day===autumn)return "秋分の日";
+ if(dow===1){ // 振替休日: 前日(日曜)が祝日なら、その翌日の月曜が振替休日
+  const prev=new Date(d.getTime()-86400000);
+  if(prev.getDay()===0&&sfV12JpHolidayName(sfFmtDate(prev)))return "振替休日";
+ }
+ return null;
+}
+// 曜日の文字色（スマレジのタイムカード画面と同じ考え方: 平日=黒／土曜=青／日曜・祝日=赤。
+//   背景色は変えず、文字色だけを変える）
+function sfV12WeekdayColor(ds){
+ const dow=new Date(ds+"T00:00:00").getDay();
+ if(sfV12JpHolidayName(ds)||dow===0)return "#c0392b"; // 日曜・祝日=赤
+ if(dow===6)return "#2a5da0"; // 土曜=青
+ return null; // 平日=既定（黒）のまま
+}
+function sfV12ShortDate(ds){ // 表ヘッダー用の短い日付（モックの「1 火」形式）。曜日色・祝日名を付与
  const d=new Date(ds+"T00:00:00");const w=["日","月","火","水","木","金","土"][d.getDay()];
- return d.getDate()+" "+w;
+ const color=sfV12WeekdayColor(ds);
+ const hol=sfV12JpHolidayName(ds);
+ const label=d.getDate()+" "+w;
+ return color?`<span style="color:${color}">${label}</span>${hol?`<br><small style="color:${color};font-size:8px">${esc(hol)}</small>`:""}`:label;
 }
 // 2026-09-08追加: 実績・差異タブの期間モード（半月/1ヶ月＝新UI、日別/期間指定＝既存のactualReportView()）
 function sfV12ActPeriodModeOptions(){
@@ -7160,7 +7199,7 @@ async function sfV12DashboardSection(){
       <div class="cardhead"><h2>提出・貢献状況</h2><button class="btn" id="v12-notify-unsubmitted">未提出者へLINE通知</button></div>
       <div class="wrap"><table class="mini-table">
         <thead><tr><th>従業員</th><th>提出</th><th>期限内</th><th>叶え率</th><th>ヘルプ</th><th>急募対応</th><th>貢献スコア</th></tr></thead>
-        <tbody>${contribRows.map(r=>`<tr><td>${esc(r.u.name)}</td><td>${r.submitted?'<span class="badge good">提出済</span>':'<span class="badge bad">未提出</span>'}</td><td>${r.onDeadline==null?"—":r.onDeadline?"○":"×"}</td><td>${r.rate==null?"—":r.rate+"%"}</td><td>${r.helpMine?r.helpMine+"回 / "+(r.helpMinMine/60).toFixed(1)+"h":"0"}</td><td>${r.urgentDone.count?r.urgentDone.count+"回 / "+(r.urgentDone.min/60).toFixed(1)+"h":"0"}</td><td>—</td></tr>`).join("")}</tbody>
+        <tbody>${contribRows.map(r=>`<tr><td>${esc(r.u.name)}${sfV12EmpPaBadge(r.u)}</td><td>${r.submitted?'<span class="badge good">提出済</span>':'<span class="badge bad">未提出</span>'}</td><td>${r.onDeadline==null?"—":r.onDeadline?"○":"×"}</td><td>${r.rate==null?"—":r.rate+"%"}</td><td>${r.helpMine?r.helpMine+"回 / "+(r.helpMinMine/60).toFixed(1)+"h":"0"}</td><td>${r.urgentDone.count?r.urgentDone.count+"回 / "+(r.urgentDone.min/60).toFixed(1)+"h":"0"}</td><td>—</td></tr>`).join("")}</tbody>
       </table></div>
     </div>
     <div class="card">
@@ -7223,7 +7262,8 @@ async function sfV12SubmitSection(){
      const label=s?(s.is_off?"休み":sfFmtTime(s.start_time)+"〜"+sfFmtTime(s.end_time)):"未入力";
      const c2=(changeReqs||[]).find(x=>x.work_date===ds);
      const status=c2?(c2.status==="pending"?"変更申請中":c2.status==="resolved"?"変更対応済み":"変更申請却下"):(helpSet.has(ds)?"他店舗ヘルプ可":"");
-     return `<div class="day ${ds===sfEditDate?"selected":""}" data-v12-subday="${ds}"><b>${sfFmtDateShort(ds)}</b><div class="preset">${esc(label)}</div>${status?`<div class="status">${esc(status)}</div>`:""}</div>`;
+     const wc=sfV12WeekdayColor(ds),hol=sfV12JpHolidayName(ds);
+     return `<div class="day ${ds===sfEditDate?"selected":""}" data-v12-subday="${ds}"><b${wc?` style="color:${wc}"`:""}>${sfFmtDateShort(ds)}</b>${hol?`<div style="font-size:8px;color:${wc}">${esc(hol)}</div>`:""}<div class="preset">${esc(label)}</div>${status?`<div class="status">${esc(status)}</div>`:""}</div>`;
     }).join("")}</div>
    </div>
    <aside>
@@ -7325,7 +7365,7 @@ async function sfV12HrPanelHtml(ctx){
        <thead><tr><th>従業員</th>${dates.map(ds=>`<th>${sfV12ShortDate(ds)}</th>`).join("")}<th>連勤</th><th>休日</th><th>時間</th></tr></thead>
        <tbody>${(sfV12HrOnlyIssue?rows.filter(r=>r.maxConsec>=7):rows).map(r=>{
         const tag=sfRoleTag(r.u);
-        return `<tr><td><div class="name">${esc(r.u.name)}</div><div class="meta">${esc(tag.label)} / ${esc(storeNameOf(primaryStoreOf[r.u.id]))}所属</div></td>
+        return `<tr><td><div class="name">${esc(r.u.name)}${sfV12EmpPaBadge(r.u)}</div><div class="meta">${esc(tag.label)} / ${esc(storeNameOf(primaryStoreOf[r.u.id]))}所属</div></td>
          ${r.cells.map(c=>{
           if(c.off)return "<td>休</td>";
           const isHelp=c.s.store_id!==primaryStoreOf[r.u.id];
@@ -7394,6 +7434,52 @@ function sfV12NightMinutesRatio(startT,endT){ // 22:00〜翌5:00にかかる分�
  let night=0;
  for(let m=s;m<e;m++){const h=(m%(24*60))/60;if(h>=22||h<5)night++}
  return night/span;
+}
+// 2026-09-08追加: シフト表下部の日別集計フッター（社員人数/PA人数/役割別人数/出勤人数/
+//   PA勤務時間/社員人件費/PA人件費/合計人件費率/売上目標/昨年同週同曜日売上）
+async function sfV12DayFooterRowsHtml(ctx,dates,includeTotalCol=true){
+ const {people,shByUserDate,wageRates,salesTargetByDate}=ctx;
+ const NIGHT_PREMIUM=1.25;
+ const [{data:roles},lyRes]=await Promise.all([
+  sb.from("sf_store_roles").select("name").eq("store_id",sfMgStore).eq("is_active",true).order("sort_order"),
+  (async()=>{const lyDates=dates.map(sfV12LastYearDate);const {data}=await sb.from("dash_sales_daily").select("biz_date,sales").eq("store_id",sfMgStore).in("biz_date",lyDates);return {lyDates,data}})()
+ ]);
+ const roleNames=(roles||[]).map(r=>r.name);
+ const lyByDate={};(lyRes.data||[]).forEach(r=>{lyByDate[r.biz_date]=r.sales});
+ const rows=dates.map((ds,i)=>{
+  let empCount=0,paCount=0,attendCount=0,paMin=0,empCost=0,paCost=0;
+  const roleCounts={};roleNames.forEach(n=>roleCounts[n]=0);
+  people.forEach(u=>{
+   const s=shByUserDate[u.id+"|"+ds];if(!s||s.is_off)return;
+   attendCount++;
+   const isPA=sfRoleTag(u).cls==="pa";
+   if(isPA)paCount++;else empCount++;
+   if(s.role_name&&Object.prototype.hasOwnProperty.call(roleCounts,s.role_name))roleCounts[s.role_name]++;
+   const min=sfShiftMinutes(s);const rate=wageRates[u.id];
+   const nightRatio=sfV12NightMinutesRatio(s.start_time,s.end_time);
+   const nightMin=Math.round(min*nightRatio),normalMin=min-nightMin;
+   if(isPA){paMin+=min;if(rate!=null)paCost+=normalMin*rate+nightMin*rate*NIGHT_PREMIUM}
+   else if(rate!=null)empCost+=min*rate;
+  });
+  const target=salesTargetByDate[ds]||0;
+  const ly=lyByDate[lyRes.lyDates[i]]||0;
+  const totalCost=empCost+paCost;
+  const rateTxt=target>0?(totalCost/target*100).toFixed(1)+"%":"—";
+  return {empCount,paCount,roleCounts,attendCount,paMin,empCost,paCost,rateTxt,target,ly};
+ });
+ const td=(f,cls)=>rows.map(r=>`<td${cls?` class="${cls(r)}"`:""}>${f(r)}</td>`).join("");
+ const tot=includeTotalCol?"<td>—</td>":"";
+ const roleRowsHtml=roleNames.map(n=>`<tr class="footer"><td>${esc(n)}人数</td>${td(r=>r.roleCounts[n])}${tot}</tr>`).join("");
+ return `<tr class="footer"><td>社員人数</td>${td(r=>r.empCount)}${tot}</tr>
+  <tr class="footer"><td>PA人数</td>${td(r=>r.paCount)}${tot}</tr>
+  ${roleRowsHtml}
+  <tr class="footer"><td>出勤人数</td>${td(r=>r.attendCount)}${tot}</tr>
+  <tr class="footer"><td>PA勤務時間</td>${td(r=>(r.paMin/60).toFixed(1)+"h")}${tot}</tr>
+  <tr class="footer"><td>社員人件費</td>${td(r=>Math.round(r.empCost).toLocaleString()+"円")}${tot}</tr>
+  <tr class="footer"><td>PA人件費</td>${td(r=>Math.round(r.paCost).toLocaleString()+"円")}${tot}</tr>
+  <tr class="footer"><td>合計人件費率</td>${td(r=>r.rateTxt,r=>parseFloat(r.rateTxt)>33?"short":"")}${tot}</tr>
+  <tr class="footer"><td>売上目標</td>${td(r=>r.target?"¥"+Math.round(r.target/1000)+"k":"—")}${tot}</tr>
+  <tr class="footer"><td>昨年同週同曜日売上</td>${td(r=>r.ly?"¥"+Math.round(r.ly/1000)+"k":"—")}${tot}</tr>`;
 }
 async function sfV12LaborSimHtml(ctx){
  const {dates,people,shByUserDate,wageRates,salesTargetByDate}=ctx;
@@ -7488,6 +7574,10 @@ let sfV12SalesBasisRule="target",sfV12PaRate="14.0";
 
 
 // ---- ③シフト調整 ----
+function sfV12EmpPaBadge(u){ // 2026-09-08追加: 従業員名の横に社員/PAの区分を必ず表示する
+ const t=sfRoleTag(u);
+ return `<span class="badge ${t.cls==="pa"?"":"blue"}" style="font-size:9px;margin-left:4px;vertical-align:middle">${t.cls==="pa"?"PA":"社員"}</span>`;
+}
 function sfV12CellHtml(s){
  if(!s)return `<td>—</td>`;
  if(s.is_off)return `<td>休</td>`;
@@ -7495,7 +7585,8 @@ function sfV12CellHtml(s){
  let cls="";
  if(s.status==="published")cls=s.smaregi_sync_status==="error"?"err":"";
  else cls="help"; // draft(未公開)はモックの「ヘルプ」水色枠を代用して目立たせる
- return `<td><div class="cell edit-cell ${cls}" data-v12cell="${s.user_id}|${s.work_date}"><div class="time">${label}</div></div></td>`;
+ const roleTag=s.role_name?`<div class="cellrole" style="font-size:9px;color:var(--muted);line-height:1.2;margin-top:1px">${esc(s.role_name)}</div>`:""; // 2026-09-08追加
+ return `<td><div class="cell edit-cell ${cls}" data-v12cell="${s.user_id}|${s.work_date}"><div class="time">${label}</div>${roleTag}</div></td>`;
 }
 // 2026-09-08追加: ヘルプ候補（他店舗ヘルプ可能を宣言している人・全社対象。旧sf-*実装と同じデータ）
 async function sfV12HelpCandidatesHtml(dates){
@@ -7575,7 +7666,7 @@ async function sfV12AdjustSection(){
       ${peopleFiltered.map(u=>{
        const tag=sfRoleTag(u);
        const totalMin=dates.reduce((a,ds)=>a+sfShiftMinutes(shByUserDate[u.id+"|"+ds]),0);
-       return `<tr><td><div class="name">${esc(u.name)}</div><div class="meta">${esc(tag.label)}</div></td>${dates.map(ds=>sfV12CellHtml(shByUserDate[u.id+"|"+ds])).join("")}<td>${(totalMin/60).toFixed(0)}h</td></tr>`;
+       return `<tr><td><div class="name">${esc(u.name)}${sfV12EmpPaBadge(u)}</div><div class="meta">${esc(tag.label)}</div></td>${dates.map(ds=>sfV12CellHtml(shByUserDate[u.id+"|"+ds])).join("")}<td>${(totalMin/60).toFixed(0)}h</td></tr>`;
       }).join("")}
       ${filteredPresets.map(pr=>{
        return `<tr class="footer"><td>${esc(pr.label)}人数</td>${dates.map(ds=>{
@@ -7586,6 +7677,7 @@ async function sfV12AdjustSection(){
         return `<td class="${have<need.required_count?"short":""}">${have}${need.required_count?"/"+need.required_count:""}</td>`;
        }).join("")}<td>—</td></tr>`;
       }).join("")}
+      ${await sfV12DayFooterRowsHtml(ctx,dates)}
     </tbody>
    </table>
   </div>
@@ -7625,13 +7717,14 @@ async function sfV12ConfirmedSection(){
  const pending=(changeReqs||[]).filter(c=>c.status==="pending");
  const unconfirmed=people.filter(u=>dates.some(ds=>{const s=shByUserDate[u.id+"|"+ds];return s&&s.status==="published"&&!s.confirmed_at}));
  const helpCells=people.reduce((a,u)=>a+dates.filter(ds=>{const s=shByUserDate[u.id+"|"+ds];return s&&!s.is_off&&s.status==="published"}).length,0);
+ const footerRows=await sfV12DayFooterRowsHtml(ctx,dates,false); // 2026-09-08追加: 日別集計フッター（このテーブルには「計」列が無いため省略）
  h+=`<div class="notice success"><span><b>公開済：</b> ${people.length}名中${publishedCount}件公開</span><span>変更申請${pending.length}件</span></div>
  <div class="grid2">
    <div class="card">
     <div class="cardhead"><h2>公開済みシフト</h2><span class="sub">公開後変更可 / スマレジへ即時追従</span></div>
     <div class="wrap"><table>
      <thead><tr><th>従業員</th>${dates.map(ds=>`<th>${sfV12ShortDate(ds)}</th>`).join("")}</tr></thead>
-     <tbody>${people.map(u=>`<tr><td><div class="name">${esc(u.name)}</div></td>${dates.map(ds=>sfV12CellHtml(shByUserDate[u.id+"|"+ds])).join("")}</tr>`).join("")}</tbody>
+     <tbody>${people.map(u=>`<tr><td><div class="name">${esc(u.name)}${sfV12EmpPaBadge(u)}</div></td>${dates.map(ds=>sfV12CellHtml(shByUserDate[u.id+"|"+ds])).join("")}</tr>`).join("")}${footerRows}</tbody>
     </table></div>
    </div>
    <aside>
@@ -7787,6 +7880,7 @@ async function sfV12ActualSection(){
     <div class="${sfV12ActSeg==="times"?"on":""}" data-v12act="times">出退勤時間</div>
     <div class="${sfV12ActSeg==="diff"?"on":""}" data-v12act="diff">予定との差異</div>
     <div class="${sfV12ActSeg==="fulfill"?"on":""}" data-v12act="fulfill">叶え率</div>
+    <div class="${sfV12ActSeg==="cost"?"on":""}" data-v12act="cost">人件費</div>
    </div><button class="btn" id="v12-act-csv">CSV</button><button class="btn" id="v12-act-refresh">スマレジ最新取得</button></div>
  </div>
  <div class="title">実績・差異</div>
@@ -7799,7 +7893,7 @@ async function sfV12ActualSection(){
   <div class="kpi bad"><small>超過時間</small><b>${paOver.toFixed(1)}h</b></div>
  </div>`;
  h+=sfV12AttendanceIssuesHtml(dates,people,shByUserDate,laborByUserDate);
- h+=`<div class="card"><div class="cardhead"><h2 id="v12-act-title">${sfV12ActSeg==="hours"?"勤務時間数":sfV12ActSeg==="times"?"出退勤時間":sfV12ActSeg==="diff"?"日別 実績差分":"シフト叶え率"}</h2><span class="sub">スマレジ実績を正本として表示 / 予定・実績とも修正可</span></div>
+ h+=`<div class="card"><div class="cardhead"><h2 id="v12-act-title">${sfV12ActSeg==="hours"?"勤務時間数":sfV12ActSeg==="times"?"出退勤時間":sfV12ActSeg==="diff"?"日別 実績差分":sfV12ActSeg==="cost"?"人件費（実績）":"シフト叶え率"}</h2><span class="sub">スマレジ実績を正本として表示 / 予定・実績とも修正可</span></div>
   <div class="wrap">`;
  if(sfV12ActSeg==="hours"){
   h+=`<table><thead><tr><th>従業員</th>${dates.map(ds=>`<th>${sfV12ShortDate(ds)}</th>`).join("")}<th>計</th></tr></thead><tbody>
@@ -7821,6 +7915,17 @@ async function sfV12ActualSection(){
   </table>`;
  }else if(sfV12ActSeg==="fulfill"){
   h+=`</div><div class="grid2"><div class="side"><h3>叶え率ランキング</h3>${sfFulfillmentRankHtml(fulData)}</div><div class="side"><h3>叶え率一覧</h3>${sfFulfillmentTableHtml(fulData)}</div></div><div style="display:none">`;
+ }else if(sfV12ActSeg==="cost"){ // 2026-09-08追加: 人件費（実績）。labor_cost_dailyの実績原価(スマレジ由来)を社員/PAで按分表示
+  h+=`<table><tr><th>日付</th><th>社員人件費</th><th>PA人件費</th><th>合計人件費</th><th>売上実績</th><th>人件費率</th></tr>
+   ${dates.map(ds=>{
+    let empCost=0,paCost=0;
+    people.forEach(u=>{const lk=laborByUserDate[u.id+"|"+ds];if(!lk)return;if(sfRoleTag(u).cls==="pa")paCost+=lk.cost;else empCost+=lk.cost});
+    const total=empCost+paCost;
+    const actual=salesActualByDate[ds];
+    const rate=actual&&actual.sales>0?(total/actual.sales*100):null;
+    return `<tr><td>${sfV12ShortDate(ds)}</td><td>${Math.round(empCost).toLocaleString()}円</td><td>${Math.round(paCost).toLocaleString()}円</td><td>${Math.round(total).toLocaleString()}円</td><td>${actual?Math.round(actual.sales).toLocaleString()+"円":"—"}</td><td class="${rate!=null&&rate>33?"short":""}">${rate!=null?rate.toFixed(1)+"%":"—"}</td></tr>`;
+   }).join("")}
+  </table>`;
  }else{ // times: 出退勤時間（2026-09-08修正: シフト予定ではなく、スマレジタイムカードの実際の打刻(labor_cost_daily.clock_in/clock_out)を表示する）
   h+=`<table><thead><tr><th>従業員</th>${dates.map(ds=>`<th>${sfV12ShortDate(ds)}</th>`).join("")}</tr></thead><tbody>
    ${people.map(u=>`<tr><td><div class="name">${esc(u.name)}</div></td>${dates.map(ds=>{
@@ -7864,12 +7969,14 @@ async function sfV12EditModalHtml(){
   const [{data:u}]=await Promise.all([sb.from("users").select("id,name").eq("id",uid).maybeSingle()]);
   const {data:s}=await sb.from("sf_shifts").select("*").eq("user_id",uid).eq("work_date",ds).maybeSingle();
   const {data:presets}=await sb.from("sf_time_presets").select("*").eq("store_id",sfMgStore).eq("is_active",true).order("sort_order");
+  const {data:roles}=await sb.from("sf_store_roles").select("*").eq("store_id",sfMgStore).eq("is_active",true).order("sort_order"); // 2026-09-08追加
   inner=`<div class="modalhead"><b>${esc((u&&u.name)||"")} ${sfFmtDateShort(ds)} を編集</b><button class="btn modal-close" id="v12-editclose">×</button></div>
    <div class="modalbody">
     <div class="formgrid">
       <div class="field"><label>開始</label><input class="inp" id="v12-edit-start" type="time" value="${s&&!s.is_off?sfFmtTime(s.start_time):""}"></div>
       <div class="field"><label>終了</label><input class="inp" id="v12-edit-end" type="time" value="${s&&!s.is_off?sfFmtTime(s.end_time):""}"></div>
-      <div class="field"><label>役割（時間帯）</label><select class="inp" id="v12-edit-preset"><option value="">選択してください</option>${(presets||[]).map(pr=>`<option value="${pr.id}" ${s&&s.preset_id===pr.id?"selected":""}>${esc(pr.label)}</option>`).join("")}</select></div>
+      <div class="field"><label>時間帯（プリセット）</label><select class="inp" id="v12-edit-preset"><option value="">選択してください</option>${(presets||[]).map(pr=>`<option value="${pr.id}" ${s&&s.preset_id===pr.id?"selected":""}>${esc(pr.label)}</option>`).join("")}</select></div>
+      <div class="field"><label>役割</label><select class="inp" id="v12-edit-role"><option value="">未設定</option>${(roles||[]).map(r=>`<option value="${esc(r.name)}" ${s&&s.role_name===r.name?"selected":""}>${esc(r.name)}</option>`).join("")}</select></div>
     </div>
     <div class="audit"><label><input type="checkbox" id="v12-edit-off" ${s&&s.is_off?"checked":""}> 休みにする</label>　｜　スマレジ：${s&&s.smaregi_sync_status==="error"?"エラー（"+esc(s.smaregi_error||"")+"）":s&&s.smaregi_sync_status==="synced"?"同期済":"未同期"}</div>
    </div>
@@ -8228,8 +8335,9 @@ function bindSfV12Page(){
   const p=sfPeriodFromIdx(sfMgPeriodIdx);
   const off=$("v12-edit-off").checked;
   const presetId=$("v12-edit-preset").value||null;
+  const roleName=$("v12-edit-role")?$("v12-edit-role").value||null:undefined;
   const {data:presets}=await sb.from("sf_time_presets").select("*").eq("store_id",sfMgStore);
-  const ok=await sfSaveDay(uid,sfMgStore,ds,p.key,presetId,off,$("v12-edit-start").value,$("v12-edit-end").value,presets||[]);
+  const ok=await sfSaveDay(uid,sfMgStore,ds,p.key,presetId,off,$("v12-edit-start").value,$("v12-edit-end").value,presets||[],roleName);
   if(ok){sfV12EditCell=null;toast("保存しました");render()}
  };
  if($("v12-edit-delete"))$("v12-edit-delete").onclick=async()=>{

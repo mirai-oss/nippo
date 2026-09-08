@@ -258,6 +258,7 @@
   <button data-p="chat"><i>💬</i>チャット<span class="ndot" id="chatdot" style="display:none"></span></button>
   <button data-p="manuals"><i>📎</i>マニュアル</button>
   <button data-p="recruit" id="navrecruit" style="display:none"><i>📥</i>応募<span class="ndot" id="recruitdot" style="display:none"></span></button>
+  <button data-p="cashhandoff" id="navcash" style="display:none"><i>💴</i>手渡し</button>
   <button data-p="admin" id="navadmin" style="display:none"><i>👥</i>管理<span class="ndot" id="admdot" style="display:none"></span></button>
   <button data-p="settings"><i>⚙️</i>設定</button>
 </nav>
@@ -322,7 +323,8 @@ const FEATURES={
  kpi_config:"KPI・評価設定 ※次バージョンから",
  labor_cost_view:"勤怠実績・人件費データの閲覧（実績確認・調整グリッド等）※担当DのRLS対応待ち。2026-08-29ユーザー要望で追加",
  paid_leave_balance_view:"有給残日数を本人に表示する（B-17・2026-08-31追加。既定はOFF＝現状どおり非表示）",
- paid_leave_apply:"有給を申請できる（2026-08-31追加。既定は社員・店長・本部・チーム長。人ごとに追加/除外できる）"
+ paid_leave_apply:"有給を申請できる（2026-08-31追加。既定は社員・店長・本部・チーム長。人ごとに追加/除外できる）",
+ cash_handoff_manage:"現金手渡し給与の受け渡しサインを扱える（2026-09-08追加。会計・給与仕訳の閲覧権限が無くても店長以上なら使える想定）"
 };
 // ===== v2.5 応募者管理 =====
 const APPLICANT_STATUS={new:"新規",contacted:"連絡済み",interview_set:"面接設定",interviewed:"面接済み",hired:"採用",retired:"退職",noshow:"バックレ",rejected:"不採用",declined:"辞退"};
@@ -401,7 +403,8 @@ const FEATURE_DEFAULTS={ // DB未設定時のフォールバック（v2.3まで�
  kpi_config:["CEO","HQ"],
  labor_cost_view:["CEO","HQ","TEAM","TENCHO"], // 2026-08-29 現状のlabor_cost_daily RLS(CEO/HQ/TEAM)にTENCHOを加えた既定値
  paid_leave_balance_view:[], // 2026-08-31 既定は誰にも見せない（現状どおり）。個人ごとの例外設定でON/OFFする
- paid_leave_apply:["SHAIN","TENCHO","TEAM","HQ"] // 2026-08-31 既定は「社員」中心（ユーザー指示）。AL/GAIHANは既定オフ・個人ごとに追加可
+ paid_leave_apply:["SHAIN","TENCHO","TEAM","HQ"], // 2026-08-31 既定は「社員」中心（ユーザー指示）。AL/GAIHANは既定オフ・個人ごとに追加可
+ cash_handoff_manage:["TENCHO","TEAM","HQ","CEO"] // 2026-09-08 「店長以上」というユーザー指定どおり
 };
 const ROLES_ALL=Object.keys(ROLE_NAME);
 const FMT_ROLES=["AL","SHAIN","TENCHO","TEAM","HQ","GAIHAN"]; // v2.6.26 フォーマットを作れる役職
@@ -1730,6 +1733,7 @@ async function render(){
  // v2.6.25 外販の人は ホーム・日報・一覧・タスク・応募・設定 だけ
  if(me.role==="GAIHAN")document.querySelectorAll('nav button[data-p="check"],nav button[data-p="chat"],nav button[data-p="weekly"],nav button[data-p="manuals"],nav button[data-p="shift"]').forEach(b=>b.style.display="none");
  document.getElementById("navrecruit").style.display=can("recruit")?"":"none"; // v2.5.2 応募は独立タブ
+ document.getElementById("navcash").style.display=can("cash_handoff_manage")?"":"none"; // 2026-09-08追加
  document.getElementById("navactual").style.display=(sfCanManage(null)||me.role==="TENCHO")?"":"none"; // v2.7 実績確認（シフトから分離）
  updateDots();
  let body="";
@@ -1746,6 +1750,7 @@ async function render(){
  else if(page==="chat")body=await chatView();
  else if(page==="dash")body=await dashView();
  else if(page==="recruit")body=await recruitView(); // v2.5.2
+ else if(page==="cashhandoff")body=`<div class="sf-theme">${await cashHandoffView()}</div>`; // 2026-09-08追加
  else if(page==="admin")body=await adminView();
  else if(page==="settings")body=await settingsView();
  $("app").innerHTML=(embedMode?"":`<header><b>日報・週報システム</b><span style="font-size:12px">${esc(me.name)}（${ROLE_NAME[me.role]||""}）</span></header>`)+`<main>${body}</main>`;
@@ -6541,6 +6546,189 @@ async function adminToggle(){
  adminMode="list";adminUsers=null;render();
 }
 
+// ===== 2026-09-08追加: 現金手渡し給与の受け渡し確認・電子サイン =====
+// ユーザー要望「現金手渡しの人を店舗ごとに振り分けて、渡した人・受け取った人がそれぞれ
+// 電子サインできるようにしたい。会計・給与仕訳が見れない権限の人でも、店長以上ならこの
+// タブと電子サインの場所を使えるようにしたい」に対応。invoices.html（会計）とは別に、
+// nippo側の独立した画面として作る（cash_handoff_manageフィーチャーで店長以上に開放）。
+let cashMonth=null,cashList=null,cashRecords=null,cashDetail=null,cashPayerSaving=false,cashReceiverSaving=false;
+function cashMonthSelectHtml(ym){
+ const [y,m]=ym.split("-").map(Number);
+ const nowY=new Date().getFullYear();
+ const years=[];for(let yy=nowY+1;yy>=nowY-2;yy--)years.push(yy);
+ return `<select class="inp" id="cash-year" style="flex:1;min-width:100px;margin:0">${years.map(yy=>`<option value="${yy}" ${yy===y?"selected":""}>${yy}年</option>`).join("")}</select>
+ <select class="inp" id="cash-monthsel" style="flex:1;min-width:90px;margin:0">${Array.from({length:12},(_,i)=>i+1).map(mm=>`<option value="${mm}" ${mm===m?"selected":""}>${mm}月</option>`).join("")}</select>`;
+}
+function cashStatusOf(rec){
+ if(!rec)return {label:"未対応",cls:"b"};
+ if(rec.completed_at)return {label:"🎉振込完了（サイン済み）",cls:"g"};
+ if(rec.payer_checked_at&&rec.receiver_checked_at)return {label:"両者確認済み・完了処理待ち",cls:"g"};
+ if(rec.payer_checked_at)return {label:"渡した側のみ確認済み",cls:"b"};
+ if(rec.receiver_checked_at)return {label:"受け取った側のみ確認済み",cls:"b"};
+ return {label:"未対応",cls:"b"};
+}
+async function cashHandoffView(){
+ if(!can("cash_handoff_manage"))return `<p class="muted">この画面を利用する権限がありません。</p>`;
+ if(cashDetail)return await cashHandoffDetailView();
+ if(!cashMonth){const t=new Date();cashMonth=t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0")}
+ let h=`<h2>💴 現金手渡し・サイン</h2>
+ <p class="muted" style="margin-top:-8px">現金手渡しで給料を渡す方の一覧です。渡すときにこの画面を開き、渡した側・受け取った側それぞれで確認とサインをしてください。</p>
+ <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">${cashMonthSelectHtml(cashMonth)}</div>`;
+ const [{data:targets,error:e1},{data:recs,error:e2}]=await Promise.all([
+  sb.rpc("cash_handoff_targets",{p_year_month:cashMonth}),
+  sb.from("sf_cash_handoff_signatures").select("*").eq("year_month",cashMonth)
+ ]);
+ if(e1)return h+`<div class="alert">読み込みエラー: ${esc(e1.message)}</div>`;
+ cashList=(targets||[]).filter(t=>t.is_active);
+ cashRecords={};(recs||[]).forEach(r=>cashRecords[r.user_id]=r);
+ if(!cashList.length)return h+`<p class="muted" style="margin-top:16px">この月・現金手渡しの対象者はいません。</p>`;
+ const sname=id=>{const s=[...stores,...storesHidden].find(x=>x.id===id);return s?s.name:"所属不明"};
+ const byStore={};cashList.forEach(t=>{(byStore[t.store_id||"?"]=byStore[t.store_id||"?"]||[]).push(t)});
+ Object.entries(byStore).forEach(([sid,people])=>{
+  h+=`<div class="card"><h3 style="margin:0 0 8px">🏪 ${esc(sname(sid==="?"?null:sid))}（${people.length}名）</h3>`;
+  people.sort((a,b)=>a.name.localeCompare(b.name,"ja")).forEach(p=>{
+   const st=cashStatusOf(cashRecords[p.user_id]);
+   h+=`<div class="row" data-cashopen="${p.user_id}"><span><b>${esc(p.name)}</b><br><span class="muted">${Math.round(p.amount).toLocaleString()}円 ／ <span class="badge ${st.cls}">${st.label}</span></span></span><span class="muted">›</span></div>`;
+  });
+  h+=`</div>`;
+ });
+ return h;
+}
+// サイン用キャンバス（ポインター座標をcanvasの内部解像度にスケールして描く。タッチでのスクロール暴発を
+// 防ぐためtouch-action:noneをHTML側に指定している）
+function sigBindCanvas(canvasId){
+ const cv=$(canvasId);if(!cv)return;
+ const ctx=cv.getContext("2d");
+ ctx.lineWidth=2.5;ctx.lineCap="round";ctx.lineJoin="round";ctx.strokeStyle="#222";
+ let drawing=false,last=null;
+ const pos=e=>{const r=cv.getBoundingClientRect();const sx=cv.width/r.width,sy=cv.height/r.height;return {x:(e.clientX-r.left)*sx,y:(e.clientY-r.top)*sy}};
+ cv.onpointerdown=e=>{drawing=true;last=pos(e);cv.dataset.sigDrawn="1";e.preventDefault()};
+ cv.onpointermove=e=>{if(!drawing)return;const p=pos(e);ctx.beginPath();ctx.moveTo(last.x,last.y);ctx.lineTo(p.x,p.y);ctx.stroke();last=p;e.preventDefault()};
+ const end=()=>{drawing=false};
+ cv.onpointerup=end;cv.onpointerleave=end;cv.onpointercancel=end;
+}
+function sigClear(canvasId){const cv=$(canvasId);if(!cv)return;cv.getContext("2d").clearRect(0,0,cv.width,cv.height);cv.dataset.sigDrawn=""}
+function sigToBlob(canvasId){const cv=$(canvasId);return new Promise(res=>cv.toBlob(res,"image/png"))}
+async function cashHandoffDetailView(){
+ const t=(cashList||[]).find(x=>x.user_id===cashDetail);
+ if(!t)return `<span class="back" id="cashback">← 一覧</span><div class="alert">対象が見つかりません</div>`;
+ const rec=(cashRecords||{})[cashDetail];
+ let h=`<span class="back" id="cashback">← 一覧</span><h2>💴 ${esc(t.name)}さんの現金手渡し（${esc(cashMonth)}分）</h2>
+ <div class="card"><h3>金額</h3><p style="font-size:22px;font-weight:700;margin:4px 0">${Math.round(t.amount).toLocaleString()}円</p>
+  <label class="radio-row"><input type="checkbox" id="cash-amtok" ${rec&&rec.amount_confirmed?"checked":""}> 給与明細と金額に間違いがないことを確認しました</label>
+ </div>
+ <div class="card"><h3>🧑‍💼 渡した側（店舗）</h3>
+  ${rec&&rec.payer_checked_at?`<p style="margin:0">✅ 確認・サイン済み（${new Date(rec.payer_checked_at).toLocaleString("ja-JP")}）</p>${rec.payer_signature_path?`<button class="btn sm sub" data-cashsigview="${esc(rec.payer_signature_path)}">サインを見る</button>`:""}`
+   :`<label class="radio-row"><input type="checkbox" id="cash-paidcb"> 現金を渡しました</label>
+    <p class="muted" style="font-size:11px;margin:6px 0 2px">↓ この枠内に指またはペンでサインしてください</p>
+    <canvas id="sig-payer" width="300" height="140" style="touch-action:none;border:1px solid var(--line,#ccc);border-radius:8px;background:#fff;display:block;max-width:100%"></canvas>
+    <div style="display:flex;gap:6px;margin-top:6px">
+     <button class="btn sm sub" id="cash-payer-clear">やり直す</button>
+     <button class="btn sm" id="cash-payer-save" ${cashPayerSaving?"disabled":""}>${cashPayerSaving?"保存中...":"渡した側を確定する"}</button>
+    </div>`}
+ </div>
+ <div class="card"><h3>🙋 受け取った側（本人）</h3>
+  ${rec&&rec.receiver_checked_at?`<p style="margin:0">✅ 確認・サイン済み（${new Date(rec.receiver_checked_at).toLocaleString("ja-JP")}）</p>${rec.receiver_signature_path?`<button class="btn sm sub" data-cashsigview="${esc(rec.receiver_signature_path)}">サインを見る</button>`:""}`
+   :`<label class="radio-row"><input type="checkbox" id="cash-recvcb"> 現金を受け取りました</label>
+    <p class="muted" style="font-size:11px;margin:6px 0 2px">↓ この端末を受け取った本人に渡して、ご本人にサインしてもらってください</p>
+    <canvas id="sig-receiver" width="300" height="140" style="touch-action:none;border:1px solid var(--line,#ccc);border-radius:8px;background:#fff;display:block;max-width:100%"></canvas>
+    <div style="display:flex;gap:6px;margin-top:6px">
+     <button class="btn sm sub" id="cash-receiver-clear">やり直す</button>
+     <button class="btn sm" id="cash-receiver-save" ${cashReceiverSaving?"disabled":""}>${cashReceiverSaving?"保存中...":"受け取った側を確定する"}</button>
+    </div>`}
+ </div>`;
+ if(rec&&rec.payer_checked_at&&rec.receiver_checked_at&&!rec.completed_at){
+  h+=`<button class="btn" id="cash-complete">✅ 両者確認済み・この受け渡しを完了にする</button>`;
+ }
+ if(rec&&rec.completed_at){
+  h+=`<div class="info">🎉 ${new Date(rec.completed_at).toLocaleString("ja-JP")} に完了しました。給与仕訳・会計ダッシュボードの状態も「振込完了」に更新されています。</div>`;
+ }
+ return h;
+}
+// data-photo-src方式は署名URLの対象バケットがreport-photos固定のため、cash-signatures用に
+// 同じ考え方の専用簡易版を用意する（1枚だけ・遅延解決は不要でクリック時にその場で取得すれば十分）
+async function resolveSignedUrl(bucket,path){
+ try{const {data}=await sb.storage.from(bucket).createSignedUrl(path,3600);return data&&data.signedUrl}catch(e){return null}
+}
+// 保存直後、その場でcashRecordsを最新化する（renderだけだとメモリ上の古い状態のまま
+// 表示され続けてしまうため）
+async function refreshCashRecord(uid,ym){
+ const {data}=await sb.from("sf_cash_handoff_signatures").select("*").eq("user_id",uid).eq("year_month",ym).maybeSingle();
+ if(!cashRecords)cashRecords={};
+ if(data)cashRecords[uid]=data;
+}
+function bindCashHandoffPage(){
+ if($("cashback"))$("cashback").onclick=()=>{cashDetail=null;render()};
+ ["cash-year","cash-monthsel"].forEach(id=>{if($(id))$(id).onchange=()=>{cashMonth=$("cash-year").value+"-"+String($("cash-monthsel").value).padStart(2,"0");render()}});
+ document.querySelectorAll("[data-cashopen]").forEach(rw=>rw.onclick=()=>{cashDetail=rw.dataset.cashopen;render()});
+ document.querySelectorAll("[data-cashsigview]").forEach(b=>b.onclick=async()=>{
+  const url=await resolveSignedUrl("cash-signatures",b.dataset.cashsigview);
+  if(url)window.open(url,"_blank");else toast("サイン画像を開けませんでした",true);
+ });
+ if($("cash-amtok"))$("cash-amtok").onchange=async()=>{
+  const checked=$("cash-amtok").checked;
+  await sb.from("sf_cash_handoff_signatures").upsert({
+   user_id:cashDetail,year_month:cashMonth,store_id:(cashList.find(t=>t.user_id===cashDetail)||{}).store_id||null,
+   amount:(cashList.find(t=>t.user_id===cashDetail)||{}).amount||0,
+   amount_confirmed:checked,created_by:me.id,updated_at:new Date().toISOString()
+  },{onConflict:"user_id,year_month"});
+ };
+ if($("sig-payer"))sigBindCanvas("sig-payer");
+ if($("sig-receiver"))sigBindCanvas("sig-receiver");
+ if($("cash-payer-clear"))$("cash-payer-clear").onclick=()=>sigClear("sig-payer");
+ if($("cash-receiver-clear"))$("cash-receiver-clear").onclick=()=>sigClear("sig-receiver");
+ if($("cash-payer-save"))$("cash-payer-save").onclick=async()=>{
+  if(!$("cash-paidcb").checked){toast("「現金を渡しました」にチェックしてください",true);return}
+  if(!$("sig-payer").dataset.sigDrawn){toast("サインを書いてください",true);return}
+  cashPayerSaving=true;render();
+  try{
+   const blob=await sigToBlob("sig-payer");
+   const path=`${cashDetail}/${cashMonth}_payer_${Date.now()}.png`;
+   const {error:ue}=await sb.storage.from("cash-signatures").upload(path,blob,{contentType:"image/png"});
+   if(ue)throw ue;
+   const t=cashList.find(x=>x.user_id===cashDetail)||{};
+   const {error}=await sb.from("sf_cash_handoff_signatures").upsert({
+    user_id:cashDetail,year_month:cashMonth,store_id:t.store_id||null,amount:t.amount||0,
+    payer_id:me.id,payer_checked_at:new Date().toISOString(),payer_signature_path:path,
+    created_by:me.id,updated_at:new Date().toISOString()
+   },{onConflict:"user_id,year_month"});
+   if(error)throw error;
+   await refreshCashRecord(cashDetail,cashMonth);
+   toast("渡した側の確認・サインを保存しました");
+  }catch(e){toast("保存エラー: "+(e&&e.message?e.message:e),true)}
+  cashPayerSaving=false;render();
+ };
+ if($("cash-receiver-save"))$("cash-receiver-save").onclick=async()=>{
+  if(!$("cash-recvcb").checked){toast("「現金を受け取りました」にチェックしてください",true);return}
+  if(!$("sig-receiver").dataset.sigDrawn){toast("サインを書いてください",true);return}
+  cashReceiverSaving=true;render();
+  try{
+   const blob=await sigToBlob("sig-receiver");
+   const path=`${cashDetail}/${cashMonth}_receiver_${Date.now()}.png`;
+   const {error:ue}=await sb.storage.from("cash-signatures").upload(path,blob,{contentType:"image/png"});
+   if(ue)throw ue;
+   const t=cashList.find(x=>x.user_id===cashDetail)||{};
+   const {error}=await sb.from("sf_cash_handoff_signatures").upsert({
+    user_id:cashDetail,year_month:cashMonth,store_id:t.store_id||null,amount:t.amount||0,
+    receiver_checked_at:new Date().toISOString(),receiver_signature_path:path,
+    created_by:me.id,updated_at:new Date().toISOString()
+   },{onConflict:"user_id,year_month"});
+   if(error)throw error;
+   await refreshCashRecord(cashDetail,cashMonth);
+   toast("受け取った側の確認・サインを保存しました");
+  }catch(e){toast("保存エラー: "+(e&&e.message?e.message:e),true)}
+  cashReceiverSaving=false;render();
+ };
+ if($("cash-complete"))$("cash-complete").onclick=async()=>{
+  const btn=$("cash-complete");btn.disabled=true;btn.textContent="処理中...";
+  const {data,error}=await sb.rpc("cash_handoff_complete",{p_user_id:cashDetail,p_year_month:cashMonth});
+  if(error){toast("エラー: "+error.message,true);btn.disabled=false;btn.textContent="✅ 両者確認済み・この受け渡しを完了にする";return}
+  await refreshCashRecord(cashDetail,cashMonth);
+  toast(data&&data.journal_marked_paid?"完了しました（給与仕訳の状態も振込完了に更新しました）":"完了しました");
+  render();
+ };
+}
+
 // ===== 設定 =====
 let gasSaved=null,gasCalNow=""; // v2.6.38 面接Meetの接続先が登録済みか／v2.6.42 いまのカレンダーID
 // 2026-09-01追加: 入社登録直後、LINE未連携ならその場で連携してもらう画面。
@@ -7213,7 +7401,7 @@ async function resetFmt(){
 
 // ===== イベント =====
 // トップレベルのページ切替（nav・統合ポータルシェルからのpostMessageで共用）。各種モーダル的な状態をリセットしてから移動する
-function goToPage(p){page=p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;smBulkSel=new Set();smBulkPanel=false;smBulkResults=null;smStoreFilter="";smLinkFilter="";tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";chatReply=null;chatInvite=false;chatInviteSel=[];rcDetail=null;rcJobs=false;rcMsgs=null;rcDup=false;rcSimilar=[];rcPast=[];rcCal=false;rcCalDay=null;unlockedScoreKeys={};render()} // v2.6.76 予算ロック解除の状態もリセット
+function goToPage(p){page=p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;smBulkSel=new Set();smBulkPanel=false;smBulkResults=null;smStoreFilter="";smLinkFilter="";tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";chatReply=null;chatInvite=false;chatInviteSel=[];rcDetail=null;rcJobs=false;rcMsgs=null;rcDup=false;rcSimilar=[];rcPast=[];rcCal=false;rcCalDay=null;unlockedScoreKeys={};cashDetail=null;cashList=null;cashRecords=null;render()} // v2.6.76 予算ロック解除の状態もリセット／2026-09-08 現金手渡し画面の状態もリセット
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>goToPage(b.dataset.p));
 // 統合ポータルシェル(portal.html)からのタブ切替メッセージを受け取り、iframeをリロードせず画面だけ切り替える。
 // tori-dashboard向けに担当Fが用意したpostMessage({type:'nsPortalSetTab', tab:...})と同じ契約に合わせてある
@@ -7233,6 +7421,7 @@ function bindPage(){
  if(page==="shift")bindShiftPage();
  if(page==="actual")bindActualPage();
  if(page==="manuals")bindManualsPage(); // v2.6.59
+ if(page==="cashhandoff")bindCashHandoffPage(); // 2026-09-08追加
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
  if($("goweekly"))$("goweekly").onclick=()=>{page="weekly";render()};
  if($("editdaily"))$("editdaily").onclick=()=>{editId=todayDaily.id;page="write";render()};

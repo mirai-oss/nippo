@@ -274,6 +274,38 @@
    .sf-month-day{min-height:auto;display:grid;grid-template-columns:64px 1fr;gap:6px;align-items:start}
    .sf-bottom-action{flex-direction:column;align-items:stretch}
   }
+
+  /* ===== 2026-09-08 ユーザー指示により、シフト管理UIは以下の完成HTML(モックアップ)を
+     唯一の正としてDOM・CSS・文言をそのまま移植する。既存のportal/nippo共通CSSと衝突しないよう
+     .shift-management-reference 配下に完全スコープしてある（このCSSは元のHTMLファイルの
+     <style>内容を、全セレクタの先頭に ".shift-management-reference " を機械的に付与して生成した
+     ものなので、手で個別に書き換えず、モックアップ側を直した場合はこのブロックごと再生成すること）。
+     元ファイル: docs/mockups/NStyle_シフト管理_UI_v12_人事シフト全店舗横断.html ===== */
+  .shift-management-reference{
+    --bg:#f5f6f7;--panel:#fff;--ink:#222;--muted:#727980;--line:#dfe3e7;
+    --green:#69b80c;--green-dark:#58a000;--green-soft:#f1f8e9;
+    --red:#cf4b45;--red-soft:#fff0ef;--amber:#a96f09;--amber-soft:#fff7e5;
+    --blue:#3478b8;--blue-soft:#eef6fd;--purple:#6f5aa8;--purple-soft:#f4f0ff;
+    --black:#111;
+  }.shift-management-reference *{box-sizing:border-box}.shift-management-reference{margin:0;background:var(--bg);color:var(--ink);font:13px -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans JP",sans-serif}.shift-management-reference button, .shift-management-reference select, .shift-management-reference input{font:inherit}.shift-management-reference button{cursor:pointer}.shift-management-reference .top{height:48px;background:var(--black);color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 16px;position:sticky;top:0;z-index:40}.shift-management-reference .brand{font-weight:800}.shift-management-reference .brand small{font-weight:500;color:#c8c8c8;margin-left:8px}.shift-management-reference .page{padding:14px 18px 46px}.shift-management-reference .mainnav{display:flex;background:#fff;border:1px solid var(--line);border-bottom:0;overflow:auto}.shift-management-reference .mainnav button{border:0;background:#fff;padding:12px 16px;border-bottom:3px solid transparent;color:#656b71;font-weight:700;white-space:nowrap}.shift-management-reference .mainnav button.on{color:#222;border-color:var(--green)}.shift-management-reference .view{display:none}.shift-management-reference .view.on{display:block}.shift-management-reference .toolbar{background:#fff;border:1px solid var(--line);padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.shift-management-reference .group, .shift-management-reference .seg{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.shift-management-reference .btn, .shift-management-reference select, .shift-management-reference input{border:1px solid #ccd2d7;background:#fff;border-radius:3px;padding:7px 10px;color:#333}.shift-management-reference .btn.primary{background:var(--green);border-color:var(--green);color:#fff;font-weight:700}.shift-management-reference .btn.red{background:var(--red);border-color:var(--red);color:#fff;font-weight:700}.shift-management-reference .btn.purple{background:var(--purple);border-color:var(--purple);color:#fff;font-weight:700}.shift-management-reference .seg{gap:0;border:1px solid #ccd2d7;border-radius:3px;overflow:hidden}.shift-management-reference .seg button{border:0;border-right:1px solid #ccd2d7;background:#fff;padding:7px 11px}.shift-management-reference .seg button:last-child{border-right:0}.shift-management-reference .seg button.on{background:var(--green);color:#fff;font-weight:700}.shift-management-reference .month{font-size:21px;font-weight:500;min-width:170px;text-align:center}.shift-management-reference .title{margin:16px 0 8px;font-size:16px;color:#5b910e;font-weight:800}.shift-management-reference .sub{font-size:10px;color:var(--muted);margin-top:3px}.shift-management-reference .kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:10px 0}.shift-management-reference .kpi{background:#fff;border:1px solid var(--line);padding:11px 13px;min-height:70px}.shift-management-reference .kpi small{color:var(--muted)}.shift-management-reference .kpi b{display:block;font-size:19px;margin-top:4px}.shift-management-reference .kpi.good{border-left:3px solid var(--green)}.shift-management-reference .kpi.bad{border-left:3px solid var(--red)}.shift-management-reference .kpi.purple{border-left:3px solid var(--purple)}.shift-management-reference .card{background:#fff;border:1px solid var(--line);margin-top:10px}.shift-management-reference .cardhead{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px}.shift-management-reference .cardhead h2{font-size:14px;margin:0}.shift-management-reference .notice{background:var(--amber-soft);border:1px solid #e8d4a4;padding:9px 12px;margin:9px 0;font-size:11px;display:flex;justify-content:space-between;align-items:center;gap:8px}.shift-management-reference .notice.danger{background:var(--red-soft);border-color:#efc5c2;color:#8f3530}.shift-management-reference .notice.success{background:var(--green-soft);border-color:#d8e9c4;color:#4b7710}.shift-management-reference .wrap{overflow:auto}.shift-management-reference table{border-collapse:collapse;width:100%;min-width:1480px;table-layout:fixed}.shift-management-reference th, .shift-management-reference td{border-right:1px solid #dde1e4;border-bottom:1px solid #dde1e4;text-align:center;padding:4px 3px;height:41px}.shift-management-reference th{background:#fafafa;font-size:10px;color:#555}.shift-management-reference th:first-child, .shift-management-reference td:first-child{position:sticky;left:0;background:#fff;z-index:3;text-align:left;width:145px}.shift-management-reference th:first-child{z-index:5;background:#fafafa}.shift-management-reference .name{font-weight:700;color:#2e72b5;font-size:11px}.shift-management-reference .meta{font-size:9px;color:var(--muted)}.shift-management-reference .cell{font-size:9px;line-height:1.12;padding:3px 2px;border-radius:2px;cursor:pointer;position:relative}.shift-management-reference .cell:hover{outline:2px solid #c4d5e5}.shift-management-reference .cell.selected{outline:2px solid var(--blue);background:var(--blue-soft)}.shift-management-reference .time{font-weight:700}.shift-management-reference .role{font-size:8px;margin-top:2px;text-decoration:underline}.shift-management-reference .kitchen{color:#5c8d13}.shift-management-reference .hall{color:#3478b8}.shift-management-reference .prep{color:#a56c00}.shift-management-reference .drink{color:#6c5ba7}.shift-management-reference .err{background:var(--red-soft)}.shift-management-reference .warn{background:var(--amber-soft)}.shift-management-reference .help{background:var(--purple-soft)}.shift-management-reference .footer td{height:29px;background:#fbfbfb;font-size:10px}.shift-management-reference .footer td:first-child{font-weight:700}.shift-management-reference .short{color:var(--red);font-weight:800}.shift-management-reference .goodtxt{color:#4d7d0f;font-weight:800}.shift-management-reference .actions{padding:10px 12px;background:#fafbfb;display:flex;justify-content:space-between;gap:8px;align-items:center}.shift-management-reference .badge{display:inline-block;padding:3px 7px;border-radius:999px;font-size:9px;background:#f0f2f3}.shift-management-reference .badge.good{background:var(--green-soft);color:#4c7a0f}.shift-management-reference .badge.bad{background:var(--red-soft);color:#9e3832}.shift-management-reference .badge.blue{background:var(--blue-soft);color:#2c6497}.shift-management-reference .badge.purple{background:var(--purple-soft);color:#615090}.shift-management-reference .grid2{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(320px,.75fr);gap:10px}.shift-management-reference .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}.shift-management-reference .side{background:#fff;border:1px solid var(--line);padding:12px;margin-top:10px}.shift-management-reference .side h3{font-size:13px;margin:0 0 8px}.shift-management-reference .rank{padding:8px 0;border-bottom:1px solid #eee}.shift-management-reference .rank:last-child{border:0}.shift-management-reference .ranktop{display:flex;justify-content:space-between;gap:8px}.shift-management-reference .ranktop b{font-size:12px}.shift-management-reference .ranktop span{font-size:10px;color:var(--muted)}.shift-management-reference .barwrap{height:7px;background:#edf0f2;border-radius:999px;overflow:hidden;margin-top:5px}.shift-management-reference .barfill{height:100%;background:var(--green)}.shift-management-reference .mini-table{width:100%;min-width:0;table-layout:auto}.shift-management-reference .mini-table th, .shift-management-reference .mini-table td{position:static!important;width:auto!important;height:34px;text-align:left;padding:7px 8px}.shift-management-reference .calendar{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;padding:10px}.shift-management-reference .day{border:1px solid var(--line);background:#fff;min-height:108px;padding:7px}.shift-management-reference .day b{font-size:11px}.shift-management-reference .day .preset{display:inline-block;margin-top:8px;padding:5px 7px;background:#f1f2f3;border-radius:3px;font-size:9px}.shift-management-reference .day .status{font-size:9px;color:var(--muted);margin-top:4px}.shift-management-reference .day.selected{outline:2px solid var(--green)}.shift-management-reference .formgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.shift-management-reference .field label{display:block;color:var(--muted);font-size:10px;margin-bottom:4px}.shift-management-reference .field input, .shift-management-reference .field select{width:100%}.shift-management-reference .bulkbar{display:none;background:#eef6fd;border:1px solid #bfd7eb;padding:9px 12px;margin:8px 0;align-items:center;justify-content:space-between;gap:10px}.shift-management-reference .bulkbar.on{display:flex}.shift-management-reference .bulkbar b{color:#285f91}.shift-management-reference .urgent-list{display:grid;gap:8px}.shift-management-reference .urgent-item{border:1px solid var(--line);padding:10px;background:#fff}.shift-management-reference .urgent-item.open{border-left:3px solid var(--red)}.shift-management-reference .urgent-head{display:flex;justify-content:space-between;gap:8px}.shift-management-reference .urgent-head b{font-size:12px}.shift-management-reference .urgent-meta{font-size:10px;color:var(--muted);margin-top:3px}.shift-management-reference .urgent-actions{margin-top:8px;display:flex;gap:6px;flex-wrap:wrap}.shift-management-reference .syncbox{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.shift-management-reference .syncdot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block}.shift-management-reference .modal-bg{display:none;position:fixed;inset:0;background:#0007;z-index:100;align-items:center;justify-content:center;padding:15px}.shift-management-reference .modal-bg.on{display:flex}.shift-management-reference .modal{width:min(620px,100%);background:#fff;border-radius:6px;box-shadow:0 20px 60px #0005}.shift-management-reference .modalhead{padding:13px 15px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}.shift-management-reference .modalbody{padding:15px}.shift-management-reference .modalfoot{padding:12px 15px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:8px}.shift-management-reference .audit{border-top:1px solid #eee;margin-top:10px;padding-top:8px;font-size:10px;color:var(--muted)}
+  @media(max-width:1050px){.shift-management-reference .kpis{grid-template-columns:repeat(3,1fr)}.shift-management-reference .grid2, .shift-management-reference .grid3{grid-template-columns:1fr}.shift-management-reference .calendar{grid-template-columns:repeat(3,1fr)}}
+  @media(max-width:700px){.shift-management-reference .page{padding:10px}.shift-management-reference .kpis{grid-template-columns:repeat(2,1fr)}.shift-management-reference .calendar{grid-template-columns:1fr 1fr}.shift-management-reference .formgrid{grid-template-columns:1fr}.shift-management-reference .bulkbar{align-items:stretch;flex-direction:column}}.shift-management-reference /* ===== v11: 売上・適正人員・人件費シミュレーション ===== */
+  .labor-sim{margin-top:10px;background:#fff;border:1px solid var(--line)}.shift-management-reference .labor-sim-head{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.shift-management-reference .labor-sim-head h2{font-size:14px;margin:0}.shift-management-reference .sim-note{font-size:10px;color:var(--muted)}.shift-management-reference .sim-table{min-width:1480px}.shift-management-reference .sim-table th, .shift-management-reference .sim-table td{height:31px;font-size:9px}.shift-management-reference .sim-table .rowlabel{font-weight:700;background:#fafafa;color:#555}.shift-management-reference .sim-table .money{font-variant-numeric:tabular-nums}.shift-management-reference .sim-table .target{background:#f8fbff}.shift-management-reference .sim-table .ly{background:#fafafa}.shift-management-reference .sim-table .rate-good{color:#4d7d0f;font-weight:800}.shift-management-reference .sim-table .rate-bad{color:var(--red);font-weight:800;background:var(--red-soft)}.shift-management-reference .sim-table .rate-warn{color:#895d0c;font-weight:800;background:var(--amber-soft)}.shift-management-reference .sim-table .recommend{background:#f8fbff;font-weight:700}.shift-management-reference .sim-table .recommend.bad{background:var(--red-soft);color:#9a3732}.shift-management-reference .sim-table .recommend.good{background:var(--green-soft);color:#4b7710}.shift-management-reference .day-tip{position:relative;cursor:help}.shift-management-reference .day-tip:hover::after{
+   content:attr(data-tip);
+   position:absolute;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%);
+   width:260px;white-space:normal;text-align:left;line-height:1.45;
+   background:#222;color:#fff;padding:9px 10px;border-radius:5px;font-size:10px;z-index:50;
+   box-shadow:0 6px 18px #0003;
+  }.shift-management-reference .day-tip:hover::before{
+   content:"";position:absolute;left:50%;bottom:100%;transform:translateX(-50%);
+   border:6px solid transparent;border-top-color:#222;z-index:51;
+  }.shift-management-reference .reco-panel{display:grid;grid-template-columns:1.15fr .85fr;gap:10px;margin-top:10px}.shift-management-reference .reco-card{background:#fff;border:1px solid var(--line);padding:12px}.shift-management-reference .reco-card h3{font-size:13px;margin:0 0 8px}.shift-management-reference .reco-item{padding:8px 0;border-bottom:1px solid #eee}.shift-management-reference .reco-item:last-child{border:0}.shift-management-reference .reco-item b{font-size:12px}.shift-management-reference .reco-item p{font-size:10px;color:var(--muted);margin:3px 0 0}.shift-management-reference .formula-box{background:#fafbfb;border:1px solid var(--line);padding:10px;font-size:10px;line-height:1.55;color:#555}.shift-management-reference .rulebar{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  @media(max-width:1050px){.shift-management-reference .reco-panel{grid-template-columns:1fr}}.shift-management-reference /* ===== v12: 人事シフト（全店舗横断） ===== */
+  .hr-switch{display:flex;gap:0;border:1px solid #ccd2d7;border-radius:3px;overflow:hidden}.shift-management-reference .hr-switch button{border:0;border-right:1px solid #ccd2d7;background:#fff;padding:7px 11px}.shift-management-reference .hr-switch button:last-child{border-right:0}.shift-management-reference .hr-switch button.on{background:#555;color:#fff;font-weight:700}.shift-management-reference .hr-panel{display:none}.shift-management-reference .hr-panel.on{display:block}.shift-management-reference .hr-kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:10px 0}.shift-management-reference .hr-kpi{background:#fff;border:1px solid var(--line);padding:11px 13px}.shift-management-reference .hr-kpi small{color:var(--muted)}.shift-management-reference .hr-kpi b{display:block;font-size:18px;margin-top:4px}.shift-management-reference .hr-kpi.bad{border-left:3px solid var(--red)}.shift-management-reference .hr-kpi.warn{border-left:3px solid var(--amber)}.shift-management-reference .hr-kpi.good{border-left:3px solid var(--green)}.shift-management-reference .hr-table{min-width:1500px}.shift-management-reference .store-chip{display:inline-block;border-radius:999px;padding:2px 5px;font-size:8px;margin-top:2px;background:#eef1f3;color:#555}.shift-management-reference .store-chip.main{background:var(--green-soft);color:#4f7a13}.shift-management-reference .store-chip.help{background:var(--purple-soft);color:#655293}.shift-management-reference .store-chip.other{background:var(--blue-soft);color:#2c6497}.shift-management-reference .consecutive-bad{background:var(--red-soft)!important;color:#9f3732!important;font-weight:800}.shift-management-reference .consecutive-warn{background:var(--amber-soft)!important;color:#845b0a!important;font-weight:800}.shift-management-reference .dayoff-good{color:#4c7c0f;font-weight:800}.shift-management-reference .dayoff-bad{color:var(--red);font-weight:800}.shift-management-reference .hr-summary{display:grid;grid-template-columns:1.3fr .7fr;gap:10px;margin-top:10px}.shift-management-reference .hr-alert-list{display:grid;gap:8px}.shift-management-reference .hr-alert{border:1px solid var(--line);background:#fff;padding:10px}.shift-management-reference .hr-alert.bad{border-left:3px solid var(--red)}.shift-management-reference .hr-alert.warn{border-left:3px solid var(--amber)}.shift-management-reference .hr-alert b{font-size:12px}.shift-management-reference .hr-alert p{margin:3px 0 0;font-size:10px;color:var(--muted)}
+  @media(max-width:1050px){.shift-management-reference .hr-kpis{grid-template-columns:repeat(3,1fr)}.shift-management-reference .hr-summary{grid-template-columns:1fr}}
+  @media(max-width:700px){.shift-management-reference .hr-kpis{grid-template-columns:repeat(2,1fr)}}
+  
+  
 </style>
 </head>
 <body>
@@ -2991,6 +3023,14 @@ let sfScrollPending=false; // ユーザー要望（2026-08-25）: 調整グリ�
 let sfMgStore=null,sfMgPeriodIdx=null;
 let sfPsStore=null;
 let sfMgStep="dashboard",sfReqDate=null; // v2.7 ①希望確認 ②調整（担当BシフトUIv5）／A-4(2026-08-29) mysubmit/presetsも同じ状態で管理するよう拡張／2026-09-08 v12刷新で既定値をdashboardに変更
+// 2026-09-08 完成HTML(docs/mockups/NStyle_シフト管理_UI_v12_人事シフト全店舗横断.html)の
+// DOM・CSS・文言をそのまま移植する指示に対応。関連状態は sfV12* で統一する
+let sfV12HrMode="store"; // 「表示：店舗シフト／人事シフト（全店舗横断）」
+let sfV12EmpType="all"; // 全従業員／社員のみ／PAのみ
+let sfV12PeriodMode="half"; // 半月表示／1ヶ月表示
+let sfV12MultiMode=false,sfV12Selected=new Set(); // 複数選択モード
+let sfV12BulkOpen=false,sfV12UrgentOpen=false;
+let sfV12EditCell=null; // {uid,ds} セル編集モーダル用（既存のsfEditDateと役割は同じだが、店舗シフト表専用に持つ）
 let sfShortageOnly=false; // 2026-09-08 v12刷新: シフト調整タブ「不足だけ表示」トグル（表示用フィルタのみ・データ取得は変更しない）
 let sfSlotFilter="all"; // B-2(2026-08-29) "all"|"lunch"|"dinner"。①希望確認・②調整の絞り込み
 let sfHelpCandidatesOpen=false; // 2026-08-29続き（モックアップ準拠）: ②調整「ヘルプ候補」ボタンの開閉
@@ -3034,31 +3074,13 @@ async function shiftView(){
   if(sfMgStep==="leave"&&canSeeLeaveTile)return `<div class="sf-theme">${h}${await sfLeaveView()}</div>`;
   return `<div class="sf-theme">${h}${await sfSubmitView()}</div>`;
  }
- // 2026-09-08 v12刷新: タイル形式のナビを、モックアップどおりの黒バー＋タブバーに変更。
- //   「①希望確認」はダッシュボードタブに統合（下記sfDashboardTabHtml参照）。
- //   「⏱時間帯設定」「🌴有給申請」はモックに無いが既存機能を消さないため、タブバー内に
- //   小さい補助ボタンとして残す（指示書§2.1「補助ボタンは右上にまとめる」に沿った配置）
- const sfTopStoreName=(()=>{const sid=sfMgStore||(sfPickableStores()[0]||{}).id;const s=[...stores,...storesHidden].find(x=>x.id===sid);return s?s.name:""})();
- h=`<div class="sf-topbar"><b>📅 シフト・勤怠管理</b><span>${esc(sfTopStoreName)} ｜ ${esc(ROLE_NAME[me.role]||me.role)}</span></div>
- <div class="sf-tabbar">
-  <button class="${sfMgStep==="dashboard"?"on":""}" data-sftop="dashboard">ダッシュボード</button>
-  <button class="${sfMgStep==="mysubmit"?"on":""}" data-sftop="mysubmit">シフト提出</button>
-  <button class="${sfMgStep==="adjust"?"on":""}" data-sftop="adjust">シフト調整</button>
-  <button class="${sfMgStep==="confirmed"?"on":""}" data-sftop="confirmed">確定シフト</button>
-  <button class="${sfMgStep==="actual"?"on":""}" data-sftop="actual">実績・差異</button>
- </div>
- <div class="sf-toolbar2">
-  <div class="muted" style="font-size:11px">店長以上・本部向け（アルバイト・社員には表示されません）</div>
-  <div class="group" style="display:flex;gap:6px;flex-wrap:wrap">
-   <button class="btn sm sub" data-sftop="presets">⏱ 時間帯設定</button>
-   ${canSeeLeaveTile?'<button class="btn sm sub" data-sftop="leave">🌴 有給申請</button>':""}
-  </div>
- </div>`;
- if(sfMgStep==="mysubmit")return `<div class="sf-theme">${h}${await sfSubmitView()}</div>`;
- if(sfMgStep==="presets")return `<div class="sf-theme">${h}${await sfPresetsView()}</div>`;
- if(sfMgStep==="leave"&&canSeeLeaveTile)return `<div class="sf-theme">${h}${await sfLeaveView()}</div>`;
- if(sfMgStep==="actual")return `<div class="sf-theme">${h}${await actualReportView()}</div>`;
- return `<div class="sf-theme">${h}${await sfManageView()}</div>`; // dashboard/adjust/confirmedはsfManageView内部で分岐（KPIカードも共通で出す）
+ // 2026-09-08 ユーザー指示: シフト管理UIは完成HTML(docs/mockups/NStyle_シフト管理_UI_v12_人事シフト全店舗横断.html)の
+ //   DOM・CSS・文言をそのまま移植する(sfV12View以下)。「⏱時間帯設定」「🌴有給申請」はモックに無いが
+ //   既存機能を削除しないため、モック本体には手を入れず、上に小さな補助リンクとしてだけ残す
+ if(sfMgStep==="presets")return await sfPresetsView();
+ if(sfMgStep==="leave"&&canSeeLeaveTile)return await sfLeaveView();
+ const utilLinks=`<div style="padding:6px 18px;font-size:11px;color:#8a93a2">その他: <a href="#" data-sfutil="presets" style="color:#3478b8">⏱ 時間帯設定</a>${canSeeLeaveTile?' ｜ <a href="#" data-sfutil="leave" style="color:#3478b8">🌴 有給申請</a>':""}</div>`;
+ return utilLinks+await sfV12View();
 }
 
 // ---- 提出（自分） ----
@@ -3429,7 +3451,7 @@ function sfAdjustStepHtml(ctx){
  // 2026-08-29続き: モックアップの「調整グリッド」レイアウト（シフト表＋右に調整が必要な日）
  const reqboxHtml=`<div class="card sf-reqbox"><b>調整が必要な日</b>${needDays.length?needDays.map(d=>`<div class="sf-reqday"><b>${sfFmtDateShort(d.ds)}</b><p>${esc(d.label)} ${d.short}名不足</p></div>`).join(""):'<p class="muted" style="margin-top:6px">現在、不足している時間帯はありません</p>'}</div>`;
  // A-1(2026-08-29) KPIカードから再利用できるよう、算出済みの数値も一緒に返す
- return {html:h,reqboxHtml,checkText:checkMsgs.length?checkMsgs.join("・"):"問題ありません",totalCost,salesTotal,rateText,needCount:needDays.length,needDates:[...new Set(needDays.map(d=>d.ds))]}; // needDatesは2026-09-08追加（v12「不足だけ表示」トグル用）
+ return {html:h,reqboxHtml,checkText:checkMsgs.length?checkMsgs.join("・"):"問題ありません",totalCost,empCost,paCost,salesTotal,rateText,needCount:needDays.length,needDates:[...new Set(needDays.map(d=>d.ds))]}; // needDates/empCost/paCostは2026-09-08追加（v12刷新用）
 }
 // ③確定: 公開後の未確認者一覧・再通知・変更申請の受付一覧（実装指示書_担当B_シフトUIv5_2026-08-24.md B-2）
 // A-3(2026-08-29) ③確定シフトをモックアップ同様の日付プライマリ表示に変更
@@ -4075,8 +4097,9 @@ function bindShiftPage(){
  // A-4(2026-08-29) 「提出／管理・公開／時間帯設定」の中間モードは廃止し、シフトタブ（shiftView）の
  //   横並びタイル（data-sftile）で直接sfMgStepを切り替えるようにした
  document.querySelectorAll("[data-sftile]").forEach(b=>b.onclick=()=>{sfMgStep=b.dataset.sftile;sfEditDate=null;render()});
- // 2026-09-08 v12刷新: 黒バー配下のタブバー＋補助ボタン（data-sftop）。data-sftileと同じ考え方
- document.querySelectorAll("[data-sftop]").forEach(b=>b.onclick=()=>{sfMgStep=b.dataset.sftop;sfEditDate=null;sfShortageOnly=false;page="shift";render()}); // page="shift"に統一（?page=actualから来た場合でも以後のタブ切替を正しく反映させるため
+ // 2026-09-08 完成HTML移植: 「時間帯設定」「有給申請」への補助リンク（モックに無い要素のため最小限に）
+ document.querySelectorAll("[data-sfutil]").forEach(b=>b.onclick=(e)=>{e.preventDefault();sfMgStep=b.dataset.sfutil;render()});
+ bindSfV12Page();
  // 2026-08-29続き（モックアップ準拠）: ②調整の「自動配置案」「ヘルプ候補」
  if($("sfmg-autoassign"))$("sfmg-autoassign").onclick=()=>toast("自動配置案は準備中の機能です。今は手動でセルを選んで調整してください");
  if($("sfmg-helpcandidates"))$("sfmg-helpcandidates").onclick=()=>{sfHelpCandidatesOpen=!sfHelpCandidatesOpen;render()};
@@ -6961,6 +6984,917 @@ function bindCashHandoffPage(){
   toast(data&&data.journal_marked_paid?"完了しました（給与仕訳の状態も振込完了に更新しました）":"完了しました");
   render();
  };
+}
+
+// ============================================================================
+// 2026-09-08 ユーザー指示: シフト管理UIは下記の完成HTMLをDOM・CSS・文言そのまま移植する
+// （見た目の再解釈・再デザインは禁止）。既存のDB取得・保存ロジック（sf_shifts等）を
+// このUIへ接続する。CSSは.shift-management-reference配下に完全スコープ（<style>内に生成済み）。
+// 元ファイル: docs/mockups/NStyle_シフト管理_UI_v12_人事シフト全店舗横断.html
+// ============================================================================
+function sfV12ShortDate(ds){ // 表ヘッダー用の短い日付（モックの「1 火」形式）
+ const d=new Date(ds+"T00:00:00");const w=["日","月","火","水","木","金","土"][d.getDay()];
+ return d.getDate()+" "+w;
+}
+// 店舗横断（人事シフト）用: 1年前の同じ曜日の売上実績を「昨年同週同曜日」の参考値として使う
+function sfV12LastYearDate(ds){
+ const d=new Date(ds+"T00:00:00");d.setDate(d.getDate()-364);// 52週間=364日前は同じ曜日になる
+ return sfFmtDate(d);
+}
+async function sfV12LoadCommon(){
+ const pickable=sfPickableStores();
+ if(!sfMgStore||!pickable.find(s=>s.id===sfMgStore))sfMgStore=pickable[0].id;
+ if(sfMgPeriodIdx===null){const cp=sfCurrentPeriod();sfMgPeriodIdx=sfPeriodIdx(cp.y,cp.m,cp.half)}
+ const p=sfPeriodFromIdx(sfMgPeriodIdx);
+ const dates=sfV12PeriodMode==="month"?sfV12MonthDates(p):sfDateList(p);
+ const [{data:presets},{data:shifts},{data:members},{data:reqs}]=await Promise.all([
+  sb.from("sf_time_presets").select("*").eq("store_id",sfMgStore).eq("is_active",true).order("sort_order"),
+  sb.from("sf_shifts").select("*").eq("store_id",sfMgStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
+  sb.from("user_stores").select("user_id,users(id,name,role,is_active,line_user_id)").eq("store_id",sfMgStore),
+  sb.from("sf_required_headcounts").select("*").eq("store_id",sfMgStore)
+ ]);
+ const people=(members||[]).map(m=>m.users).filter(u=>u&&u.is_active).sort((a,b)=>a.name.localeCompare(b.name,"ja"));
+ const peopleIds=people.map(u=>u.id);
+ const idsForIn=peopleIds.length?peopleIds:["00000000-0000-0000-0000-000000000000"];
+ const shByUserDate={};(shifts||[]).forEach(s=>{shByUserDate[s.user_id+"|"+s.work_date]=s});
+ const filteredPresets=(presets||[]).filter(pr=>sfSlotFilter==="all"||pr.slot_kind===sfSlotFilter);
+ const enteredCount=(shifts||[]).length;
+ const publishedCount=(shifts||[]).filter(s=>s.status==="published").length;
+ const notSubmitted=people.filter(u=>!dates.some(ds=>shByUserDate[u.id+"|"+ds]));
+ const payrollYm=p.y+"-"+String(p.m+1).padStart(2,"0");
+ const [{data:allUS},{data:targets},{data:profs},{data:helpRowsPeriod},{data:payrollRows},{data:allocRows},{data:laborRows}]=await Promise.all([
+  sb.from("user_stores").select("user_id").in("user_id",idsForIn),
+  sb.from("dash_sales_target_daily").select("biz_date,sales_target").eq("store_id",sfMgStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]),
+  sb.from("employee_profiles").select("user_id,smaregi_staff_id").in("user_id",idsForIn),
+  sb.from("sf_help_availability").select("user_id,work_date").gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
+  sb.from("sf_payroll_sync").select("user_id,fixed_salary_amount,commute_allowance").eq("year_month",payrollYm).in("user_id",idsForIn),
+  sb.from("sf_payroll_allocations").select("user_id,kind,amount").eq("store_id",sfMgStore).eq("period_key",payrollYm).in("user_id",idsForIn),
+  sb.from("labor_cost_daily").select("user_id,work_date,worked_minutes,computed_cost,smaregi_estimate_cost").eq("store_id",sfMgStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1])
+ ]);
+ const storeCountMap={};(allUS||[]).forEach(r=>{storeCountMap[r.user_id]=(storeCountMap[r.user_id]||0)+1});
+ const salesTargetByDate={};(targets||[]).forEach(r=>{salesTargetByDate[r.biz_date]=r.sales_target||0});
+ const salesTotal=Object.values(salesTargetByDate).reduce((a,v)=>a+v,0);
+ const linkedSet=new Set((profs||[]).filter(pr=>pr.smaregi_staff_id).map(pr=>pr.user_id));
+ const unlinkedCount=people.filter(u=>!linkedSet.has(u.id)).length;
+ const wageRates=await sfComputeWageRates(sfMgStore,peopleIds);
+ const payrollByUser={};(payrollRows||[]).forEach(r=>{payrollByUser[r.user_id]=r});
+ const allocByUser={};(allocRows||[]).forEach(r=>{(allocByUser[r.user_id]=allocByUser[r.user_id]||[]).push(r)});
+ const laborByUserDate={};(laborRows||[]).forEach(r=>{
+  const key=r.user_id+"|"+r.work_date;const a=laborByUserDate[key]||(laborByUserDate[key]={minutes:0,cost:0});
+  a.minutes+=r.worked_minutes||0;a.cost+=(r.computed_cost!=null?r.computed_cost:r.smaregi_estimate_cost)||0;
+ });
+ const adj=sfAdjustStepHtml({dates,people,shByUserDate,presets:filteredPresets,reqs:reqs||[],storeCountMap,salesTotal,wageRates,unlinkedCount,payrollByUser,allocByUser});
+ const helpCount=new Set((helpRowsPeriod||[]).map(r=>r.user_id)).size;
+ const fulData=sfFulfillmentData(dates,people,shByUserDate,laborByUserDate);
+ return {p,dates,presets:presets||[],filteredPresets,shifts:shifts||[],people,peopleIds,idsForIn,shByUserDate,
+  enteredCount,publishedCount,notSubmitted,storeCountMap,salesTotal,salesTargetByDate,unlinkedCount,wageRates,
+  payrollByUser,allocByUser,adj,helpCount,helpRowsPeriod:helpRowsPeriod||[],reqs:reqs||[],laborByUserDate,fulData};
+}
+function sfV12MonthDates(p){ // 「1ヶ月表示」: 選択中の半月＋対になるもう半分をあわせた1ヶ月ぶん
+ const other=p.half==="A"?sfPeriodFromIdx(sfMgPeriodIdx+1):sfPeriodFromIdx(sfMgPeriodIdx-1);
+ const a=p.half==="A"?p:other, b=p.half==="A"?other:p;
+ return [...sfDateList(a),...sfDateList(b)];
+}
+
+// ---- ①ダッシュボード ----
+async function sfV12DashboardSection(){
+ const ctx=await sfV12LoadCommon();
+ const {dates,people,notSubmitted,adj,helpRowsPeriod,shByUserDate,storeCountMap,fulData,p}=ctx;
+ const pickable=sfPickableStores();
+ // 期限内提出率: そのシフト希望の最終更新が提出期限(p.deadline)以前だった人の割合（既存のcreated_at/updated_atを再利用。新規データ収集は行わない）
+ let onTime=0;
+ people.forEach(u=>{
+  const mine=ctx.shifts.filter(s=>s.user_id===u.id);
+  if(!mine.length)return;
+  const maxTs=mine.reduce((mx,s)=>Math.max(mx,new Date(s.submitted_at||s.updated_at||s.created_at||0).getTime()),0);
+  if(maxTs&&maxTs<=p.deadline.getTime())onTime++;
+ });
+ const onTimePct=people.length?Math.round(onTime/people.length*1000)/10:0;
+ // 平均叶え率: 実績・差異タブと同じ計算(希望日数に対する実績日数)。経過日がまだ無い期間は「—」
+ const avgFulfill=fulData.rows.length?Math.round(fulData.rows.reduce((a,r)=>a+(r.wishDays?r.actualDays/r.wishDays:0),0)/fulData.rows.length*1000)/10:null;
+ // ヘルプ貢献: この期間、自店舗以外の勤務（storeCountMap>1の人の、この店舗での勤務）を「ヘルプ」として集計
+ let helpShiftCount=0,helpShiftMin=0;
+ people.forEach(u=>{
+  if((storeCountMap[u.id]||1)<=1)return;
+  dates.forEach(ds=>{const s=shByUserDate[u.id+"|"+ds];if(s&&!s.is_off){helpShiftCount++;helpShiftMin+=sfShiftMinutes(s)}});
+ });
+ // 急募対応: 現状は急募機能が実データを持たないため0（後述の急募一覧と連動。実施回数が増えればここに反映される）
+ const {data:urgentRows}=await sb.from("sf_urgent_shifts").select("*").eq("store_id",sfMgStore).order("work_date");
+ const urgentList=urgentRows||[];
+ const urgentOpenList=urgentList.filter(u=>u.status==="open");
+ const contribRows=people.map(u=>{
+  const submitted=dates.some(ds=>shByUserDate[u.id+"|"+ds]);
+  const onDeadline=(()=>{const mine=ctx.shifts.filter(s=>s.user_id===u.id);if(!mine.length)return null;const mx=mine.reduce((m,s)=>Math.max(m,new Date(s.submitted_at||s.updated_at||s.created_at||0).getTime()),0);return mx?mx<=p.deadline.getTime():null})();
+  const ful=fulData.rows.find(r=>r.u.id===u.id);
+  const rate=ful&&ful.wishDays?Math.round(ful.actualDays/ful.wishDays*1000)/10:null;
+  const helpMine=(storeCountMap[u.id]||1)>1?dates.filter(ds=>{const s=shByUserDate[u.id+"|"+ds];return s&&!s.is_off}).length:0;
+  const helpMinMine=(storeCountMap[u.id]||1)>1?dates.reduce((a,ds)=>{const s=shByUserDate[u.id+"|"+ds];return a+(s&&!s.is_off?sfShiftMinutes(s):0)},0):0;
+  return {u,submitted,onDeadline,rate,helpMine,helpMinMine};
+ });
+ let h=`<div class="toolbar">
+  <div class="group"><select class="inp" id="v12-store" style="margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===sfMgStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select><select class="inp" id="v12-period" style="margin:0">${sfPeriodSelectHtml(sfMgPeriodIdx)}</select></div>
+  <div class="group"><button class="btn" id="v12-dash-csv">CSV</button><button class="btn" id="v12-dash-cond">集計条件</button></div>
+ </div>
+ <div class="title">シフトダッシュボード</div>
+ <div class="kpis">
+   <div class="kpi ${onTimePct>=90?"good":onTimePct>=70?"":"bad"}"><small>期限内提出率</small><b>${onTimePct}%</b><div class="sub">${onTime} / ${people.length}名</div></div>
+   <div class="kpi ${notSubmitted.length?"bad":""}"><small>未提出</small><b>${notSubmitted.length}名</b><div class="sub">LINE通知可</div></div>
+   <div class="kpi"><small>平均叶え率</small><b>${avgFulfill==null?"—":avgFulfill+"%"}</b><div class="sub">希望日数基準</div></div>
+   <div class="kpi purple"><small>ヘルプ貢献</small><b>${helpShiftCount}回</b><div class="sub">計${(helpShiftMin/60).toFixed(1)}h</div></div>
+   <div class="kpi ${urgentOpenList.length?"bad":""}"><small>急募対応</small><b>${urgentList.filter(u=>u.status==="filled").length}回</b><div class="sub">今月 / 対応者数は下記</div></div>
+   <div class="kpi ${adj.needCount?"":""}"><small>人員不足</small><b>${adj.needCount}枠</b><div class="sub">${adj.needCount?"未解消":"解消済み"}</div></div>
+ </div>
+ <div class="grid2">
+   <div>
+    <div class="card">
+      <div class="cardhead"><h2>提出・貢献状況</h2><button class="btn" id="v12-notify-unsubmitted">未提出者へLINE通知</button></div>
+      <div class="wrap"><table class="mini-table">
+        <thead><tr><th>従業員</th><th>提出</th><th>期限内</th><th>叶え率</th><th>ヘルプ</th><th>急募対応</th><th>貢献スコア</th></tr></thead>
+        <tbody>${contribRows.map(r=>`<tr><td>${esc(r.u.name)}</td><td>${r.submitted?'<span class="badge good">提出済</span>':'<span class="badge bad">未提出</span>'}</td><td>${r.onDeadline==null?"—":r.onDeadline?"○":"×"}</td><td>${r.rate==null?"—":r.rate+"%"}</td><td>${r.helpMine?r.helpMine+"回 / "+(r.helpMinMine/60).toFixed(1)+"h":"0"}</td><td>—</td><td>—</td></tr>`).join("")}</tbody>
+      </table></div>
+    </div>
+    <div class="card">
+      <div class="cardhead"><h2>現在の急募</h2><button class="btn red open-urgent" id="v12-open-urgent">＋ 急募を作成</button></div>
+      <div style="padding:10px 12px" class="urgent-list">${urgentOpenList.length?urgentOpenList.map(u=>`
+        <div class="urgent-item open"><div class="urgent-head"><b>${sfV12ShortDate(u.work_date)}（${esc(u.start_time)}〜${esc(u.end_time)}）　${esc(u.role_label||"")} ${u.headcount}名</b><span class="badge bad">募集中</span></div>
+         <div class="urgent-meta">${esc(u.message||"")}</div>
+         <div class="urgent-actions"><button class="btn sm sub" data-v12-urgent-fill="${u.id}">確定にする</button><button class="btn sm sub" data-v12-urgent-cancel="${u.id}">取り下げ</button></div>
+        </div>`).join(""):'<p class="muted">現在、募集中の急募はありません</p>'}</div>
+    </div>
+   </div>
+   <div>
+     <div class="side"><h3>シフト貢献 TOP</h3>${contribRows.length?"":'<p class="muted">対象者がいません</p>'}</div>
+     <div class="side"><h3>急募対応 TOP</h3><p class="muted">まだ実績がありません</p><div class="sub" style="margin-top:8px">※急募に応募→採用→実勤務まで完了した回数をカウント（今後、急募の応募・採用機能を使うと集計されます）</div></div>
+     <div class="side"><h3>スマレジ同期</h3><div class="syncbox"><span class="syncdot"></span><b>予定シフト同期状況</b></div><div class="sub">${(ctx.shifts.filter(s=>s.status==="published"&&s.smaregi_sync_status==="error").length)}件エラー</div></div>
+   </div>
+ </div>`;
+ return h;
+}
+
+// ---- ②シフト提出（自分の希望シフト）----
+async function sfV12SubmitSection(){
+ const myStores=me.stores||[];
+ if(!myStores.length)return `<div class="toolbar"><div class="group"><b>所属店舗がありません。本部までお問い合わせください。</b></div></div>`;
+ if(!sfSubStore||!myStores.find(s=>s.id===sfSubStore))sfSubStore=myStores[0].id;
+ if(sfMgPeriodIdx===null){const cp=sfCurrentPeriod();sfMgPeriodIdx=sfPeriodIdx(cp.y,cp.m,cp.half)}
+ const p=sfPeriodFromIdx(sfMgPeriodIdx);
+ const dates=sfDateList(p);
+ const now=new Date();
+ const isPastDeadline=now>p.deadline;
+ const [{data:presets},{data:shifts},{data:changeReqs},{data:helpRows}]=await Promise.all([
+  sb.from("sf_time_presets").select("*").eq("store_id",sfSubStore).eq("is_active",true).order("sort_order"),
+  sb.from("sf_shifts").select("*").eq("user_id",me.id).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
+  sb.from("sf_change_requests").select("work_date,status").eq("user_id",me.id).eq("period_key",p.key),
+  sb.from("sf_help_availability").select("work_date").eq("user_id",me.id).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1])
+ ]);
+ const shMap={};(shifts||[]).forEach(s=>shMap[s.work_date]=s);
+ const helpSet=new Set((helpRows||[]).map(r=>r.work_date));
+ const anyPublished=(shifts||[]).some(s=>s.status==="published");
+ const enteredCount=dates.filter(ds=>shMap[ds]).length;
+ const lastSubmit=(shifts||[]).reduce((mx,s)=>{const t=new Date(s.submitted_at||s.updated_at||s.created_at||0).getTime();return t>mx?t:mx},0);
+ if(!sfEditDate||!dates.includes(sfEditDate))sfEditDate=dates.find(ds=>!isPastDeadline&&!anyPublished&&!shMap[ds])||dates[0];
+ const cur=shMap[sfEditDate];
+ const cr=(changeReqs||[]).find(c=>c.work_date===sfEditDate);
+ const locked=isPastDeadline||anyPublished;
+ let h=`<div class="toolbar">
+  <div class="group">${myStores.length>1?`<select class="inp" id="v12-sub-store" style="margin:0">${myStores.map(s=>`<option value="${s.id}" ${s.id===sfSubStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select>`:`<b>${esc(myStores[0].name)}</b>`}<button class="btn" id="v12-sub-prev">‹</button><span class="month">${sfFmtDateShort(dates[0]).split("(")[0]}〜${sfFmtDateShort(dates[dates.length-1]).split("(")[0]}</span><button class="btn" id="v12-sub-next">›</button></div>
+  <div class="group"><span class="badge bad">締切 ${p.deadline.getMonth()+1}/${p.deadline.getDate()}</span><span class="badge blue">公開 ${p.publish.getMonth()+1}/${p.publish.getDate()}</span>${(!locked&&presets&&presets.length)?'<button class="btn primary" id="v12-sub-submitall">この内容で提出</button>':""}</div>
+ </div>
+ <div class="title">希望シフト提出</div>
+ <div class="grid2">
+   <div class="card">
+    <div class="cardhead"><h2>半月カレンダー</h2><div class="group"><button class="btn" id="v12-sub-half-a">前半</button><button class="btn" id="v12-sub-half-b">後半</button></div></div>
+    <div class="calendar">${dates.map(ds=>{
+     const s=shMap[ds];
+     const label=s?(s.is_off?"休み":sfFmtTime(s.start_time)+"〜"+sfFmtTime(s.end_time)):"未入力";
+     const c2=(changeReqs||[]).find(x=>x.work_date===ds);
+     const status=c2?(c2.status==="pending"?"変更申請中":c2.status==="resolved"?"変更対応済み":"変更申請却下"):(helpSet.has(ds)?"他店舗ヘルプ可":"");
+     return `<div class="day ${ds===sfEditDate?"selected":""}" data-v12-subday="${ds}"><b>${sfFmtDateShort(ds)}</b><div class="preset">${esc(label)}</div>${status?`<div class="status">${esc(status)}</div>`:""}</div>`;
+    }).join("")}</div>
+   </div>
+   <aside>
+    <div class="side">
+      <h3>${sfFmtDateShort(sfEditDate)}を編集</h3>
+      ${locked?(cur&&cur.status==="published"&&!cr?`<p class="muted">確定済みです。変更したい場合は下のボタンから変更希望を送ってください。</p><button class="btn primary" style="width:100%;margin-top:10px" id="v12-sub-change">🔁 変更希望を送る</button>`:cr?`<p class="muted">変更希望を送信済みです（${cr.status==="pending"?"未対応":cr.status==="resolved"?"対応済み":"却下"}）</p>`:'<p class="muted">この期間は提出期限を過ぎています。</p>'):`
+      <div class="field"><label>時間帯プリセット</label><select class="inp" id="v12-sub-preset" style="margin:0"><option value="">選択してください</option>${(presets||[]).map(pr=>`<option value="${pr.id}" ${cur&&cur.preset_id===pr.id?"selected":""}>${esc(pr.label)}（${sfFmtTime(pr.start_time)}〜${sfFmtTime(pr.end_time)}）</option>`).join("")}<option value="off" ${cur&&cur.is_off?"selected":""}>休み</option></select></div>
+      <div class="formgrid" style="margin-top:8px"><div class="field"><label>開始</label><input class="inp" id="v12-sub-start" type="time" value="${cur&&!cur.is_off?sfFmtTime(cur.start_time):""}"></div><div class="field"><label>終了</label><input class="inp" id="v12-sub-end" type="time" value="${cur&&!cur.is_off?sfFmtTime(cur.end_time):""}"></div></div>
+      <div class="field" style="margin-top:8px"><label>他店舗ヘルプ</label><select class="inp" id="v12-sub-help" style="margin:0"><option value="0" ${!helpSet.has(sfEditDate)?"selected":""}>不可</option><option value="1" ${helpSet.has(sfEditDate)?"selected":""}>可能</option></select></div>
+      <button class="btn primary" style="width:100%;margin-top:10px" id="v12-sub-save">この日に反映</button>
+      ${cur?`<button class="btn" style="width:100%;margin-top:6px;background:#fff;color:var(--red);border:1px solid var(--red)" id="v12-sub-delete">この日の入力を削除</button>`:""}
+      `}
+    </div>
+    <div class="side">
+      <h3>提出状況</h3><p>入力済 ${enteredCount} / ${dates.length}日</p><p>未入力 ${dates.length-enteredCount}日</p><p>前回提出 ${lastSubmit?new Date(lastSubmit).toLocaleString("ja-JP"):"—"}</p><p>${me.line_user_id?'<span class="badge good">LINE連携済</span>':'<span class="badge bad">LINE未連携</span>'}</p>
+    </div>
+   </aside>
+ </div>
+ <div class="card">
+   <div class="cardhead"><h2>日別希望ガント / ヘルプ候補</h2></div>
+   <div style="padding:14px;color:#666">既存v5の「メイン所属 / ヘルプ希望 / 社員 / PA」を区別した希望ガントは維持。ここでは一覧UIに収め、日付選択時だけ展開する設計です。</div>
+ </div>`;
+ return h;
+}
+
+// ---- 人事シフト（全店舗横断）: 調整・確定シフト共通で使うパネル ----
+// 既存の「複数店舗所属(storeCountMap)」の概念をそのまま使い、対象期間中の全社シフト(sf_shifts)を
+// 横断取得して1人ずつ連勤日数・休日数を計算する。休日必要数はモック自身が
+// 「社員マスタの『月間休日基準』から取得する想定」と明記している未実装項目のため、
+// 半月あたり4日という一般的な目安値を仮の基準として使う（実データではない）
+async function sfV12HrPanelHtml(ctx){
+ const {dates,people}=ctx;
+ const peopleIds=people.map(u=>u.id);
+ if(!peopleIds.length)return `<div class="hr-kpis"></div><p class="muted">対象者がいません</p>`;
+ const [{data:allShifts},{data:allUS}]=await Promise.all([
+  sb.from("sf_shifts").select("user_id,work_date,is_off,status,start_time,end_time,store_id").in("user_id",peopleIds).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
+  sb.from("user_stores").select("user_id,store_id,is_primary").in("user_id",peopleIds)
+ ]);
+ const storeNameOf=id=>{const s=[...stores,...storesHidden].find(x=>x.id===id);return s?s.name:"?"};
+ const primaryStoreOf={};(allUS||[]).forEach(r=>{if(r.is_primary||!primaryStoreOf[r.user_id])primaryStoreOf[r.user_id]=r.store_id});
+ const storeCountAll={};(allUS||[]).forEach(r=>{storeCountAll[r.user_id]=(storeCountAll[r.user_id]||0)+1});
+ const byUser={};(allShifts||[]).forEach(s=>{(byUser[s.user_id]=byUser[s.user_id]||{}).__push=1;(byUser[s.user_id][s.work_date]=s)});
+ const REQUIRED_DAYOFF=4; // 半月あたりの仮の休日基準（社員マスタ未実装のため。モック自身の注記のとおりの仮値）
+ const rows=people.map(u=>{
+  const map=byUser[u.id]||{};
+  let dayoff=0,maxConsec=0,curConsec=0,totalMin=0;
+  const cells=dates.map(ds=>{
+   const s=map[ds];
+   if(!s||s.is_off){dayoff++;curConsec=0;return {ds,off:true}}
+   curConsec++;maxConsec=Math.max(maxConsec,curConsec);
+   totalMin+=sfShiftMinutes(s);
+   return {ds,off:false,s};
+  });
+  return {u,cells,dayoff,maxConsec,totalMin,storeCount:storeCountAll[u.id]||1};
+ });
+ const consecBad=rows.filter(r=>r.maxConsec>=7).length;
+ const dayoffBad=rows.filter(r=>r.dayoff<REQUIRED_DAYOFF).length;
+ const multiStore=rows.filter(r=>r.storeCount>1).length;
+ const empRows=rows.filter(r=>sfRoleTag(r.u).cls==="emp");
+ const avgDayoffEmp=empRows.length?(empRows.reduce((a,r)=>a+r.dayoff,0)/empRows.length).toFixed(1):"0.0";
+ const avgWeekHour=people.length?(rows.reduce((a,r)=>a+r.totalMin,0)/60/people.length/(dates.length/7)).toFixed(1):"0.0";
+ const helpMin=rows.filter(r=>r.storeCount>1).reduce((a,r)=>a+r.totalMin,0);
+ const alerts=rows.filter(r=>r.maxConsec>=7);
+ let h=`<div class="hr-kpis">
+  <div class="hr-kpi ${consecBad?"bad":""}"><small>連勤要確認</small><b>${consecBad}名</b><div class="sub">7連勤以上</div></div>
+  <div class="hr-kpi ${dayoffBad?"warn":""}"><small>休日不足見込み</small><b>${dayoffBad}名</b><div class="sub">社内休日基準未達</div></div>
+  <div class="hr-kpi"><small>複数店舗勤務</small><b>${multiStore}名</b><div class="sub">対象期間</div></div>
+  <div class="hr-kpi"><small>社員平均休日</small><b>${avgDayoffEmp}日</b><div class="sub">半月</div></div>
+  <div class="hr-kpi"><small>平均週勤務時間</small><b>${avgWeekHour}h</b><div class="sub">社員</div></div>
+  <div class="hr-kpi good"><small>ヘルプ稼働</small><b>${(helpMin/60).toFixed(1)}h</b><div class="sub">全店舗合計</div></div>
+ </div>
+ ${alerts.length?`<div class="notice danger"><span><b>人事シフト要確認：</b> ${alerts.map(a=>esc(a.u.name)+"が"+a.maxConsec+"連勤").join("・")}になっています。</span><button class="btn" id="v12-hr-onlyissue">要確認者だけ表示</button></div>`:""}
+ <div class="card">
+   <div class="cardhead">
+     <div><h2>全店舗横断シフト</h2><div class="sub">1人の勤務を店舗横断で集約。セルには「店舗・時間・役割」を表示。</div></div>
+     <div class="group"><button class="btn" id="v12-hr-dayoffcfg">休日基準設定</button><button class="btn" id="v12-hr-alertcfg">勤務時間アラート設定</button><button class="btn" id="v12-hr-csv">CSV</button></div>
+   </div>
+   <div class="wrap">
+     <table class="hr-table">
+       <thead><tr><th>従業員</th>${dates.map(ds=>`<th>${sfV12ShortDate(ds)}</th>`).join("")}<th>連勤</th><th>休日</th><th>時間</th></tr></thead>
+       <tbody>${(sfV12HrOnlyIssue?rows.filter(r=>r.maxConsec>=7):rows).map(r=>{
+        const tag=sfRoleTag(r.u);
+        return `<tr><td><div class="name">${esc(r.u.name)}</div><div class="meta">${esc(tag.label)} / ${esc(storeNameOf(primaryStoreOf[r.u.id]))}所属</div></td>
+         ${r.cells.map(c=>{
+          if(c.off)return "<td>休</td>";
+          const isHelp=c.s.store_id!==primaryStoreOf[r.u.id];
+          return `<td><div class="cell"><div class="time">${sfFmtTime(c.s.start_time).slice(0,2)}-${sfFmtTime(c.s.end_time).slice(0,2)}</div><span class="store-chip ${isHelp?"help":"main"}">${esc(storeNameOf(c.s.store_id))}</span></div></td>`;
+         }).join("")}
+         <td class="${r.maxConsec>=7?"consecutive-bad":r.maxConsec>=5?"consecutive-warn":""}">${r.maxConsec}連勤</td>
+         <td class="${r.dayoff<REQUIRED_DAYOFF?"dayoff-bad":"dayoff-good"}">${r.dayoff} / 必要${REQUIRED_DAYOFF}</td>
+         <td>${(r.totalMin/60).toFixed(1)}h</td></tr>`;
+       }).join("")}</tbody>
+     </table>
+   </div>
+ </div>
+ <div class="hr-summary">
+   <div class="hr-alert-list">${alerts.length?alerts.map(a=>`<div class="hr-alert bad"><b>${esc(a.u.name)}：${a.maxConsec}連勤${a.dayoff<REQUIRED_DAYOFF?" / 休日不足見込み":""}</b><p>店舗単位では問題なく見えても、全店舗合算での連勤日数です。調整をご検討ください。</p></div>`).join(""):'<div class="hr-alert"><b>要確認者はいません</b><p>連勤7日以上の対象者はいません。</p></div>'}</div>
+   <div class="side" style="margin-top:0">
+     <h3>社員休日チェック</h3>
+     ${empRows.length?empRows.map(r=>`<div class="rank"><div class="ranktop"><b>${esc(r.u.name)}</b><span class="${r.dayoff<REQUIRED_DAYOFF?"dayoff-bad":"dayoff-good"}">${r.dayoff} / ${REQUIRED_DAYOFF}日</span></div><div class="sub">${r.dayoff<REQUIRED_DAYOFF?(REQUIRED_DAYOFF-r.dayoff)+"日不足見込み":"基準内"}</div></div>`).join(""):'<p class="muted">社員がいません</p>'}
+     <div class="sub" style="margin-top:8px">※休日必要数は半月あたり${REQUIRED_DAYOFF}日の仮基準です（社員マスタの「月間休日基準」機能は未実装）。</div>
+   </div>
+ </div>`;
+ return h;
+}
+let sfV12HrOnlyIssue=false;
+
+// ---- 適正人員計算：日別売上・人件費・適正PA時間シミュレーション（店舗シフト表示のみ）----
+// 深夜割増の厳密な時間帯別加重は行わず、対象日にPAとして勤務する人の時給を単純平均する
+// 簡易計算にしている（モック自身も「加重平均PA時給＝通常時給＋22時以降の深夜割増をシフト構成比で
+// 加重」という設計メモを掲載しているのみで、既存システムに深夜割増の時給テーブルはまだ無いため）
+async function sfV12LaborSimHtml(ctx){
+ const {dates,people,shByUserDate,wageRates,salesTargetByDate}=ctx;
+ const paRate=parseFloat(sfV12PaRate)/100||0.14;
+ const lyDates=dates.map(sfV12LastYearDate);
+ const {data:lyRows}=await sb.from("dash_sales_daily").select("biz_date,sales").eq("store_id",sfMgStore).in("biz_date",lyDates);
+ const lyByDate={};(lyRows||[]).forEach(r=>{lyByDate[r.biz_date]=r.sales});
+ const rows=dates.map((ds,i)=>{
+  const ly=lyByDate[lyDates[i]]||0;
+  const target=salesTargetByDate[ds]||0;
+  const basis=sfV12SalesBasisRule==="ly"?ly:sfV12SalesBasisRule==="high"?Math.max(ly,target):sfV12SalesBasisRule==="avg"?(ly+target)/2:(target||ly);
+  const paBudget=basis*paRate;
+  let paMin=0,paCost=0,empCost=0,paWageSum=0,paWageCount=0;
+  people.forEach(u=>{
+   const s=shByUserDate[u.id+"|"+ds];if(!s||s.is_off)return;
+   const min=sfShiftMinutes(s);const isPA=sfRoleTag(u).cls==="pa";const rate=wageRates[u.id];
+   if(isPA){paMin+=min;if(rate!=null){paCost+=min*rate;paWageSum+=rate;paWageCount++}}
+   else if(rate!=null)empCost+=min*rate;
+  });
+  const avgWage=paWageCount?paWageSum/paWageCount:1300/60; // wageRatesは円/分の単位。フォールバックは時給1300円を分単位に換算
+  const properPaHour=avgWage?paBudget/avgWage/60:0;
+  const curPaHour=paMin/60;
+  const recommend=properPaHour-curPaHour;
+  const paRateNow=basis>0?paCost/basis*100:null;
+  return {ds,ly,target,basis,paBudget,paCost,empCost,total:paCost+empCost,paRateNow,avgWage,properPaHour,curPaHour,recommend};
+ });
+ const sum=(f)=>rows.reduce((a,r)=>a+f(r),0);
+ const fmtY=v=>v>=10000?"¥"+Math.round(v/1000)+"k":"¥"+Math.round(v);
+ let h=`<div class="labor-sim">
+  <div class="labor-sim-head">
+    <div><h2>日別 売上・人件費・適正時間シミュレーション</h2>
+      <div class="sim-note">昨年同週同曜日＋売上目標を参考に、PA予算・適正PA時間・現在シフトとの差を表示。</div>
+    </div>
+    <div class="group"><select class="inp" id="v12-sim-rule" style="margin:0">
+     <option value="target" ${sfV12SalesBasisRule==="target"?"selected":""}>売上目標を優先し、昨年同週同曜日を参考</option>
+     <option value="ly" ${sfV12SalesBasisRule==="ly"?"selected":""}>昨年同週同曜日を優先</option>
+     <option value="high" ${sfV12SalesBasisRule==="high"?"selected":""}>高い方を採用</option>
+     <option value="avg" ${sfV12SalesBasisRule==="avg"?"selected":""}>平均値を採用</option>
+    </select></div>
+  </div>
+  <div class="wrap">
+   <table class="sim-table">
+    <thead><tr><th>指標</th>${rows.map(r=>`<th>${sfV12ShortDate(r.ds)}</th>`).join("")}<th>計</th></tr></thead>
+    <tbody>
+      <tr><td class="rowlabel">昨年同週同曜日 売上</td>${rows.map(r=>`<td class="ly money">${r.ly?fmtY(r.ly):"—"}</td>`).join("")}<td>${fmtY(sum(r=>r.ly))}</td></tr>
+      <tr><td class="rowlabel">売上目標</td>${rows.map(r=>`<td class="target money">${r.target?fmtY(r.target):"—"}</td>`).join("")}<td>${fmtY(sum(r=>r.target))}</td></tr>
+      <tr><td class="rowlabel">基準売上</td>${rows.map(r=>`<td class="money"><b>${fmtY(r.basis)}</b></td>`).join("")}<td><b>${fmtY(sum(r=>r.basis))}</b></td></tr>
+      <tr><td class="rowlabel">PA使用可能人件費</td>${rows.map(r=>`<td>${fmtY(r.paBudget)}</td>`).join("")}<td>${fmtY(sum(r=>r.paBudget))}</td></tr>
+      <tr><td class="rowlabel">現在PA人件費</td>${rows.map(r=>`<td class="${r.paCost>r.paBudget?"rate-bad":""}">${fmtY(r.paCost)}</td>`).join("")}<td>${fmtY(sum(r=>r.paCost))}</td></tr>
+      <tr><td class="rowlabel">現在PA人件費率</td>${rows.map(r=>`<td class="${r.paRateNow==null?"":r.paRateNow<=paRate*100?"rate-good":r.paRateNow<=paRate*100+2?"rate-warn":"rate-bad"}">${r.paRateNow==null?"—":r.paRateNow.toFixed(1)+"%"}</td>`).join("")}<td>—</td></tr>
+      <tr><td class="rowlabel">社員人件費</td>${rows.map(r=>`<td>${fmtY(r.empCost)}</td>`).join("")}<td>${fmtY(sum(r=>r.empCost))}</td></tr>
+      <tr><td class="rowlabel">総人件費</td>${rows.map(r=>`<td>${fmtY(r.total)}</td>`).join("")}<td>${fmtY(sum(r=>r.total))}</td></tr>
+      <tr><td class="rowlabel">加重平均PA時給<br><span class="sub">簡易平均</span></td>${rows.map(r=>`<td>¥${Math.round(r.avgWage*60)}</td>`).join("")}<td>—</td></tr>
+      <tr><td class="rowlabel">適正PA時間</td>${rows.map(r=>`<td class="recommend">${r.properPaHour.toFixed(1)}h</td>`).join("")}<td>${sum(r=>r.properPaHour).toFixed(1)}h</td></tr>
+      <tr><td class="rowlabel">現在PA予定時間</td>${rows.map(r=>`<td>${r.curPaHour.toFixed(1)}h</td>`).join("")}<td>${sum(r=>r.curPaHour).toFixed(1)}h</td></tr>
+      <tr><td class="rowlabel">推奨調整時間</td>${rows.map(r=>`<td class="recommend ${r.recommend>=0?"good":"bad"}">${r.recommend>=0?"+"+r.recommend.toFixed(1)+"h可":r.recommend.toFixed(1)+"h"}</td>`).join("")}<td>${sum(r=>r.recommend).toFixed(1)}h</td></tr>
+    </tbody>
+   </table>
+  </div>
+ </div>
+ <div class="reco-panel">
+   <div class="reco-card">
+     <h3>今日の調整アドバイス</h3>
+     ${rows.filter(r=>Math.abs(r.recommend)>=1).sort((a,b)=>Math.abs(b.recommend)-Math.abs(a.recommend)).slice(0,3).map(r=>`<div class="reco-item"><b>${sfV12ShortDate(r.ds)} PA時間 ${r.recommend>=0?"+"+r.recommend.toFixed(1)+"hまで追加可能":r.recommend.toFixed(1)+"h 推奨"}</b><p>基準売上${fmtY(r.basis)}に対しPA使用可能人件費${fmtY(r.paBudget)}。現在の予定は${r.curPaHour.toFixed(1)}hです。</p></div>`).join("")||'<p class="muted" style="padding:8px 0">大きな過不足はありません。</p>'}
+   </div>
+   <div class="reco-card">
+     <h3>計算ロジック（UI説明用）</h3>
+     <div class="formula-box">
+       ① 基準売上 = 選択ルールにより「売上目標」と「昨年同週同曜日」を参照<br>
+       ② PA使用可能人件費 = 基準売上 × PA目標人件費率<br>
+       ③ 加重平均PA時給 = その日にPAとして勤務する人の時給の単純平均（簡易版。深夜割増の時間帯別加重は今後の対応）<br>
+       ④ 適正PA時間 = PA使用可能人件費 ÷ 加重平均PA時給<br>
+       ⑤ 推奨調整時間 = 適正PA時間 − 現在PA予定時間<br><br>
+       ※必要人数・役割不足を下回る削減案は出しません。まず不足解消を優先し、その範囲内で削減候補を提示します。
+     </div>
+   </div>
+ </div>`;
+ return h;
+}
+let sfV12SalesBasisRule="target",sfV12PaRate="14.0";
+
+
+// ---- ③シフト調整 ----
+function sfV12CellHtml(s){
+ if(!s)return `<td>—</td>`;
+ if(s.is_off)return `<td>休</td>`;
+ const label=sfFmtTime(s.start_time)+"<br>"+sfFmtTime(s.end_time);
+ let cls="";
+ if(s.status==="published")cls=s.smaregi_sync_status==="error"?"err":"";
+ else cls="help"; // draft(未公開)はモックの「ヘルプ」水色枠を代用して目立たせる
+ return `<td><div class="cell edit-cell ${cls}" data-v12cell="${s.user_id}|${s.work_date}"><div class="time">${label}</div></div></td>`;
+}
+async function sfV12AdjustSection(){
+ const ctx=await sfV12LoadCommon();
+ const {dates,people,shByUserDate,adj,filteredPresets,reqs,enteredCount,publishedCount}=ctx;
+ const pickable=sfPickableStores();
+ const hasIssue=adj.checkText!=="問題ありません";
+ let h=`<div class="toolbar">
+  <div class="group"><select class="inp" id="v12-store" style="margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===sfMgStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select><select class="inp" id="v12-period" style="margin:0">${sfPeriodSelectHtml(sfMgPeriodIdx)}</select>
+   <select class="inp" id="v12-periodmode" style="margin:0"><option value="half" ${sfV12PeriodMode==="half"?"selected":""}>半月表示</option><option value="month" ${sfV12PeriodMode==="month"?"selected":""}>1ヶ月表示</option></select>
+   <select class="inp" id="v12-slot" style="margin:0"><option value="all" ${sfSlotFilter==="all"?"selected":""}>全体</option><option value="lunch" ${sfSlotFilter==="lunch"?"selected":""}>ランチ</option><option value="dinner" ${sfSlotFilter==="dinner"?"selected":""}>ディナー</option></select>
+  </div>
+  <div class="group"><button class="btn" id="v12-autoassign">自動配置案</button><button class="btn purple" id="v12-helpcand">ヘルプ候補</button><button class="btn red open-urgent" id="v12-urgent-fromshort">不足枠を急募</button>${(enteredCount>0&&publishedCount<enteredCount)?'<button class="btn primary" id="v12-publish">確定・公開</button>':""}</div>
+ </div>
+ <div class="title">シフト調整</div>
+ <div class="toolbar" style="margin-top:0">
+   <div class="group">
+     <b>表示：</b>
+     <div class="hr-switch" id="v12-hrswitch">
+       <button class="${sfV12HrMode==="store"?"on":""}" data-v12hrmode="store">店舗シフト</button>
+       <button class="${sfV12HrMode==="hr"?"on":""}" data-v12hrmode="hr">人事シフト（全店舗横断）</button>
+     </div>
+     <select class="inp" id="v12-emptype" style="margin:0">
+      <option value="all" ${sfV12EmpType==="all"?"selected":""}>全従業員</option>
+      <option value="emp" ${sfV12EmpType==="emp"?"selected":""}>社員のみ</option>
+      <option value="pa" ${sfV12EmpType==="pa"?"selected":""}>PAのみ</option>
+     </select>
+   </div>
+   <div class="sub">人事シフトでは、所属店舗に関係なく全店舗勤務を合算して連勤・休日数・勤務時間を確認</div>
+ </div>`;
+ if(sfV12HrMode==="hr"){ h+=await sfV12HrPanelHtml(ctx); return h; }
+ const peopleFiltered=sfV12EmpType==="all"?people:people.filter(u=>sfRoleTag(u).cls===sfV12EmpType);
+ h+=`<div class="toolbar" style="margin-top:0">
+   <div class="rulebar"><b>適正人員計算：</b><select class="inp" id="v12-sim-rule2" style="margin:0">
+     <option value="target" ${sfV12SalesBasisRule==="target"?"selected":""}>売上目標を優先し、昨年同週同曜日を参考</option>
+     <option value="ly" ${sfV12SalesBasisRule==="ly"?"selected":""}>昨年同週同曜日を優先</option>
+     <option value="high" ${sfV12SalesBasisRule==="high"?"selected":""}>高い方を採用</option>
+     <option value="avg" ${sfV12SalesBasisRule==="avg"?"selected":""}>平均値を採用</option>
+    </select><label>PA目標人件費率 <input class="inp" id="v12-parate" value="${esc(sfV12PaRate)}%" style="width:70px;margin:0"></label></div>
+   <div class="sub">基準値は店舗設定から変更可能にする想定</div>
+ </div>
+ <div class="kpis">
+   <div class="kpi"><small>売上予想</small><b>${adj.salesTotal?Math.round(adj.salesTotal).toLocaleString()+"円":"未設定"}</b></div>
+   <div class="kpi"><small>社員人件費</small><b>${Math.round(adj.empCost).toLocaleString()}円</b></div>
+   <div class="kpi"><small>PA人件費</small><b>${Math.round(adj.paCost).toLocaleString()}円</b></div>
+   <div class="kpi"><small>総人件費</small><b>${Math.round(adj.totalCost).toLocaleString()}円</b></div>
+   <div class="kpi ${isNaN(parseFloat(adj.rateText))?"":parseFloat(adj.rateText)<=30?"good":parseFloat(adj.rateText)<=33?"":"bad"}"><small>人件費率</small><b>${adj.rateText}</b></div>
+   <div class="kpi ${adj.needCount?"bad":"good"}"><small>不足枠</small><b>${adj.needCount}</b></div>
+ </div>
+ <div class="notice ${hasIssue?"danger":"success"}"><span><b>要確認：</b> ${esc(adj.checkText)}</span>${adj.needCount?`<button class="btn" id="v12-shortonly">${sfShortageOnly?"すべて表示":"不足だけ表示"}</button>`:""}</div>
+ ${await sfV12LaborSimHtml(ctx)}
+ <div class="bulkbar ${sfV12Selected.size?"on":""}" id="v12-bulkbar">
+   <div><b><span id="v12-selcount">${sfV12Selected.size}</span>セル選択中</b>　複数セルをまとめて変更できます</div>
+   <div class="group"><button class="btn" id="v12-bulktime">時間一括変更</button><button class="btn" id="v12-bulkrole">役割一括変更</button><button class="btn" id="v12-clearsel">選択解除</button></div>
+ </div>
+ <div class="card">
+  <div class="cardhead"><div><h2>調整一覧</h2><div class="sub">セルをクリック＝編集 / Ctrl・⌘または「複数選択モード」で一括選択</div></div><div class="group"><button class="btn" id="v12-multimode">複数選択モード ${sfV12MultiMode?"ON":"OFF"}</button></div></div>
+  <div class="wrap">
+   <table>
+    <thead><tr><th>従業員</th>${(sfV12PeriodMode==="month"?dates:dates).map(ds=>`<th>${sfV12ShortDate(ds)}</th>`).join("")}<th>計</th></tr></thead>
+    <tbody>
+      ${peopleFiltered.map(u=>{
+       const tag=sfRoleTag(u);
+       const totalMin=dates.reduce((a,ds)=>a+sfShiftMinutes(shByUserDate[u.id+"|"+ds]),0);
+       return `<tr><td><div class="name">${esc(u.name)}</div><div class="meta">${esc(tag.label)}</div></td>${dates.map(ds=>sfV12CellHtml(shByUserDate[u.id+"|"+ds])).join("")}<td>${(totalMin/60).toFixed(0)}h</td></tr>`;
+      }).join("")}
+      ${filteredPresets.map(pr=>{
+       return `<tr class="footer"><td>${esc(pr.label)}人数</td>${dates.map(ds=>{
+        const wd=new Date(ds+"T00:00:00").getDay();
+        const need=reqs.find(r=>r.preset_id===pr.id&&(r.specific_date===ds||(r.specific_date===null&&r.weekday===wd)));
+        const have=peopleFiltered.filter(u=>{const s=shByUserDate[u.id+"|"+ds];return s&&!s.is_off&&s.preset_id===pr.id}).length;
+        if(!need)return `<td>${have}</td>`;
+        return `<td class="${have<need.required_count?"short":""}">${have}${need.required_count?"/"+need.required_count:""}</td>`;
+       }).join("")}<td>—</td></tr>`;
+      }).join("")}
+    </tbody>
+   </table>
+  </div>
+  <div class="actions"><div class="syncbox"><span class="syncdot"></span>スマレジ同期済　<button class="btn" id="v12-import">スマレジから予定を再取込</button></div><div><button class="btn" id="v12-savedraft">下書き保存</button></div></div>
+ </div>
+ `;
+ return h;
+}
+
+// ---- ④確定シフト ----
+async function sfV12ConfirmedSection(){
+ const ctx=await sfV12LoadCommon();
+ const {dates,people,shByUserDate,p,publishedCount}=ctx;
+ const pickable=sfPickableStores();
+ let h=`<div class="toolbar">
+  <div class="group"><select class="inp" id="v12-store" style="margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===sfMgStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select><select class="inp" id="v12-period" style="margin:0">${sfPeriodSelectHtml(sfMgPeriodIdx)}</select>
+   <select class="inp" id="v12-periodmode" style="margin:0"><option value="half" ${sfV12PeriodMode==="half"?"selected":""}>半月表示</option><option value="month" ${sfV12PeriodMode==="month"?"selected":""}>1ヶ月表示</option></select></div>
+  <div class="group"><button class="btn" id="v12-cf-history">変更履歴</button><button class="btn" id="v12-cf-print">印刷</button></div>
+ </div>
+ <div class="title">確定シフト</div>
+ <div class="toolbar" style="margin-top:0">
+   <div class="group">
+     <b>表示：</b>
+     <div class="hr-switch" id="v12-hrswitch">
+       <button class="${sfV12HrMode==="store"?"on":""}" data-v12hrmode="store">店舗シフト</button>
+       <button class="${sfV12HrMode==="hr"?"on":""}" data-v12hrmode="hr">人事シフト（全店舗横断）</button>
+     </div>
+   </div>
+   <div class="sub">人事シフトでは、所属店舗に関係なく全店舗勤務を合算して連勤・休日数・勤務時間を確認</div>
+ </div>`;
+ if(sfV12HrMode==="hr"){ h+=await sfV12HrPanelHtml(ctx); return h; }
+ if(!publishedCount){
+  h+=`<div class="notice"><span>この期間はまだ公開されていません（③シフト調整タブから確定・公開してください）</span></div>`;
+  return h;
+ }
+ const {data:changeReqs}=await sb.from("sf_change_requests").select("*").eq("store_id",sfMgStore).eq("period_key",p.key).order("created_at",{ascending:false});
+ const pending=(changeReqs||[]).filter(c=>c.status==="pending");
+ const unconfirmed=people.filter(u=>dates.some(ds=>{const s=shByUserDate[u.id+"|"+ds];return s&&s.status==="published"&&!s.confirmed_at}));
+ const helpCells=people.reduce((a,u)=>a+dates.filter(ds=>{const s=shByUserDate[u.id+"|"+ds];return s&&!s.is_off&&s.status==="published"}).length,0);
+ h+=`<div class="notice success"><span><b>公開済：</b> ${people.length}名中${publishedCount}件公開</span><span>変更申請${pending.length}件</span></div>
+ <div class="grid2">
+   <div class="card">
+    <div class="cardhead"><h2>公開済みシフト</h2><span class="sub">公開後変更可 / スマレジへ即時追従</span></div>
+    <div class="wrap"><table>
+     <thead><tr><th>従業員</th>${dates.map(ds=>`<th>${sfV12ShortDate(ds)}</th>`).join("")}</tr></thead>
+     <tbody>${people.map(u=>`<tr><td><div class="name">${esc(u.name)}</div></td>${dates.map(ds=>sfV12CellHtml(shByUserDate[u.id+"|"+ds])).join("")}</tr>`).join("")}</tbody>
+    </table></div>
+   </div>
+   <aside>
+     <div class="side"><h3>公開後の確認</h3>
+      <p><b>未確認 ${unconfirmed.length}名</b><br>${unconfirmed.length?esc(unconfirmed.map(u=>u.name).join("・")):"確定シフトをまだ確認していません"}</p>
+      <p><b>変更申請 ${pending.length}件</b><br>${pending.length?pending.map(c=>{const u=people.find(x=>x.id===c.user_id);return esc((u?u.name:"?")+" "+sfFmtDateShort(c.work_date))}).join("・"):"未対応の申請はありません"}</p>
+      ${unconfirmed.length?`<button class="btn primary" style="width:100%;margin-top:8px" id="v12-cf-notify">未確認者へ再通知</button>`:""}
+      ${pending.length?pending.map(c=>{const u=people.find(x=>x.id===c.user_id);return `<div style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px"><b>${esc(u?u.name:"?")}</b> ${sfFmtDateShort(c.work_date)}<p style="font-size:11px;color:var(--muted);margin:3px 0">${esc(c.reason||"")}</p><button class="btn sm" data-v12-cr-resolve="${c.id}">対応済みにする</button></div>`}).join(""):""}
+     </div>
+     <div class="side"><h3>自分の確定シフト</h3><p>マイページではpublishedのみをカレンダー表示</p><button class="btn" id="v12-cf-preview">従業員表示をプレビュー</button></div>
+   </aside>
+ </div>`;
+ return h;
+}
+
+// ---- ⑤実績・差異 ----
+let sfV12ActSeg="hours"; // 勤務時間数／出退勤時間／予定との差異／叶え率
+async function sfV12ActualSection(){
+ const ctx=await sfV12LoadCommon();
+ const {dates,people,shByUserDate,laborByUserDate,fulData,salesTargetByDate,p}=ctx;
+ const pickable=sfPickableStores();
+ const {data:actualsRows}=await sb.from("dash_sales_daily").select("biz_date,sales,cost,labor").eq("store_id",sfMgStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]);
+ const salesActualByDate={};(actualsRows||[]).forEach(r=>{salesActualByDate[r.biz_date]={sales:r.sales||0,cost:r.cost||0,labor:r.labor||0}});
+ const today=todayStr();
+ let paWishMin=0,paActualMin=0,salesActualSum=0,salesTargetSum=0,laborActualSum=0;
+ dates.forEach(ds=>{
+  const isFuture=ds>today;
+  const target=salesTargetByDate[ds]||0;const actual=isFuture?null:salesActualByDate[ds];
+  if(!isFuture){salesActualSum+=actual?actual.sales:0;salesTargetSum+=target;laborActualSum+=actual?actual.labor:0}
+  people.forEach(u=>{
+   const s=shByUserDate[u.id+"|"+ds];const isPA=sfRoleTag(u).cls==="pa";const lk=laborByUserDate[u.id+"|"+ds];
+   if(s&&!s.is_off&&isPA&&!isFuture)paWishMin+=sfShiftMinutes(s);
+   if(lk&&!isFuture&&isPA)paActualMin+=lk.minutes;
+  });
+ });
+ const actualRateOverall=salesActualSum>0?(laborActualSum/salesActualSum*100):null;
+ const paSaved=Math.max(0,(paWishMin-paActualMin)/60),paOver=Math.max(0,(paActualMin-paWishMin)/60);
+ let h=`<div class="toolbar">
+  <div class="group"><select class="inp" id="v12-store" style="margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===sfMgStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select><select class="inp" id="v12-period" style="margin:0">${sfPeriodSelectHtml(sfMgPeriodIdx)}</select>
+   <select class="inp" id="v12-periodmode" style="margin:0"><option value="half" ${sfV12PeriodMode==="half"?"selected":""}>半月表示</option><option value="month" ${sfV12PeriodMode==="month"?"selected":""}>1ヶ月表示</option></select></div>
+  <div class="group"><div class="seg" id="v12-actualseg">
+    <div class="${sfV12ActSeg==="hours"?"on":""}" data-v12act="hours">勤務時間数</div>
+    <div class="${sfV12ActSeg==="times"?"on":""}" data-v12act="times">出退勤時間</div>
+    <div class="${sfV12ActSeg==="diff"?"on":""}" data-v12act="diff">予定との差異</div>
+    <div class="${sfV12ActSeg==="fulfill"?"on":""}" data-v12act="fulfill">叶え率</div>
+   </div><button class="btn" id="v12-act-csv">CSV</button><button class="btn" id="v12-act-refresh">スマレジ最新取得</button></div>
+ </div>
+ <div class="title">実績・差異</div>
+ <div class="kpis">
+  <div class="kpi"><small>売上実績</small><b>${salesActualSum?"¥"+Math.round(salesActualSum/10000)+"万":"¥0"}</b></div>
+  <div class="kpi"><small>実績人件費率</small><b>${actualRateOverall==null?"—":actualRateOverall.toFixed(1)+"%"}</b></div>
+  <div class="kpi"><small>PA予定時間</small><b>${(paWishMin/60).toFixed(1)}h</b></div>
+  <div class="kpi"><small>PA実績時間</small><b>${(paActualMin/60).toFixed(1)}h</b></div>
+  <div class="kpi good"><small>削減時間</small><b>${paSaved.toFixed(1)}h</b></div>
+  <div class="kpi bad"><small>超過時間</small><b>${paOver.toFixed(1)}h</b></div>
+ </div>`;
+ h+=sfV12AttendanceIssuesHtml(dates,people,shByUserDate,laborByUserDate);
+ h+=`<div class="card"><div class="cardhead"><h2 id="v12-act-title">${sfV12ActSeg==="hours"?"勤務時間数":sfV12ActSeg==="times"?"出退勤時間":sfV12ActSeg==="diff"?"日別 実績差分":"シフト叶え率"}</h2><span class="sub">スマレジ実績を正本として表示 / 予定・実績とも修正可</span></div>
+  <div class="wrap">`;
+ if(sfV12ActSeg==="hours"){
+  h+=`<table><thead><tr><th>従業員</th>${dates.map(ds=>`<th>${sfV12ShortDate(ds)}</th>`).join("")}<th>計</th></tr></thead><tbody>
+   ${people.map(u=>{
+    let tot=0;
+    const cells=dates.map(ds=>{const lk=laborByUserDate[u.id+"|"+ds];const s=shByUserDate[u.id+"|"+ds];if(!lk||!lk.minutes){return s&&!s.is_off&&ds<today?'<td class="err">0.0</td>':"<td>—</td>"}tot+=lk.minutes;return `<td>${(lk.minutes/60).toFixed(1)}</td>`}).join("");
+    return `<tr><td><div class="name">${esc(u.name)}</div></td>${cells}<td>${(tot/60).toFixed(1)}</td></tr>`;
+   }).join("")}
+  </tbody></table>`;
+ }else if(sfV12ActSeg==="diff"){
+  h+=`<table><tr><th>日付</th><th>売上予想</th><th>売上実績</th><th>売上差</th><th>予定時間</th><th>実績時間</th><th>差分</th></tr>
+   ${dates.map(ds=>{
+    const target=salesTargetByDate[ds]||0;const actual=salesActualByDate[ds];
+    const plannedMin=people.reduce((a,u)=>{const s=shByUserDate[u.id+"|"+ds];return a+(s&&!s.is_off?sfShiftMinutes(s):0)},0);
+    const actualMin=people.reduce((a,u)=>{const lk=laborByUserDate[u.id+"|"+ds];return a+(lk?lk.minutes:0)},0);
+    const diff=(actualMin-plannedMin)/60;
+    return `<tr><td>${sfV12ShortDate(ds)}</td><td>${target?Math.round(target).toLocaleString()+"円":"—"}</td><td>${actual?Math.round(actual.sales).toLocaleString()+"円":"—"}</td><td>${actual&&target?(actual.sales-target>=0?"+":"")+Math.round(actual.sales-target).toLocaleString()+"円":"—"}</td><td>${(plannedMin/60).toFixed(1)}h</td><td>${ds<=today?(actualMin/60).toFixed(1)+"h":"—"}</td><td>${ds<=today?(diff>=0?"+":"")+diff.toFixed(1)+"h":"—"}</td></tr>`;
+   }).join("")}
+  </table>`;
+ }else if(sfV12ActSeg==="fulfill"){
+  h+=`</div><div class="grid2"><div class="side"><h3>叶え率ランキング</h3>${sfFulfillmentRankHtml(fulData)}</div><div class="side"><h3>叶え率一覧</h3>${sfFulfillmentTableHtml(fulData)}</div></div><div style="display:none">`;
+ }else{ // times: 出退勤時間
+  h+=`<table><thead><tr><th>従業員</th>${dates.map(ds=>`<th>${sfV12ShortDate(ds)}</th>`).join("")}</tr></thead><tbody>
+   ${people.map(u=>`<tr><td><div class="name">${esc(u.name)}</div></td>${dates.map(ds=>{const s=shByUserDate[u.id+"|"+ds];return s&&!s.is_off?`<td>${sfFmtTime(s.start_time)}<br>${sfFmtTime(s.end_time)}</td>`:"<td>—</td>"}).join("")}</tr>`).join("")}
+  </tbody></table>`;
+ }
+ h+=`</div></div>`;
+ return h;
+}
+// B-1相当: 遅刻・早退・欠勤の自動判定一覧（実績・差異タブの先頭・要確認として表示。既存sfAttendanceIssuesHtmlと同じ判定ロジック）
+function sfV12AttendanceIssuesHtml(dates,people,shByUserDate,laborByUserDate){
+ const today=todayStr();
+ const issues=[];
+ people.forEach(u=>{
+  dates.forEach(ds=>{
+   if(ds>=today)return;
+   const s=shByUserDate[u.id+"|"+ds];
+   if(!s||s.is_off||s.status!=="published")return;
+   const lk=laborByUserDate[u.id+"|"+ds];
+   if(!lk||!lk.minutes){issues.push({u,ds,kind:"absence"});return}
+   if(lk.tardy)issues.push({u,ds,kind:"late"});
+   if(lk.early)issues.push({u,ds,kind:"early_leave"});
+  });
+ });
+ if(!issues.length)return `<div class="notice success"><span>対象期間で検知した遅刻・早退・欠勤はありません</span></div>`;
+ return `<div class="notice danger"><span><b>要確認：</b> ${issues.slice(0,6).map(is=>esc(is.u.name)+" "+sfV12ShortDate(is.ds)+CORRECTION_KIND_LABEL[is.kind]).join("・")}${issues.length>6?" 他":""}</span></div>`;
+}
+
+// ---- モーダル（編集・一括変更・急募）----
+// 「休憩」「役割」は実データ(break_minutes・sf_time_presets)がある項目のみ実装し、
+// 対応するデータの無い「勤務区分」「店舗」は追加しない（既存原則: 見た目だけの偽装フォームは作らない）
+async function sfV12EditModalHtml(){
+ const on=!!sfV12EditCell;
+ let inner="";
+ if(on){
+  const {uid,ds}=sfV12EditCell;
+  const [{data:u}]=await Promise.all([sb.from("users").select("id,name").eq("id",uid).maybeSingle()]);
+  const {data:s}=await sb.from("sf_shifts").select("*").eq("user_id",uid).eq("work_date",ds).maybeSingle();
+  const {data:presets}=await sb.from("sf_time_presets").select("*").eq("store_id",sfMgStore).eq("is_active",true).order("sort_order");
+  inner=`<div class="modalhead"><b>${esc((u&&u.name)||"")} ${sfFmtDateShort(ds)} を編集</b><button class="btn modal-close" id="v12-editclose">×</button></div>
+   <div class="modalbody">
+    <div class="formgrid">
+      <div class="field"><label>開始</label><input class="inp" id="v12-edit-start" type="time" value="${s&&!s.is_off?sfFmtTime(s.start_time):""}"></div>
+      <div class="field"><label>終了</label><input class="inp" id="v12-edit-end" type="time" value="${s&&!s.is_off?sfFmtTime(s.end_time):""}"></div>
+      <div class="field"><label>役割（時間帯）</label><select class="inp" id="v12-edit-preset"><option value="">選択してください</option>${(presets||[]).map(pr=>`<option value="${pr.id}" ${s&&s.preset_id===pr.id?"selected":""}>${esc(pr.label)}</option>`).join("")}</select></div>
+    </div>
+    <div class="audit"><label><input type="checkbox" id="v12-edit-off" ${s&&s.is_off?"checked":""}> 休みにする</label>　｜　スマレジ：${s&&s.smaregi_sync_status==="error"?"エラー（"+esc(s.smaregi_error||"")+"）":s&&s.smaregi_sync_status==="synced"?"同期済":"未同期"}</div>
+   </div>
+   <div class="modalfoot">${s?'<button class="btn" id="v12-edit-delete">削除</button>':"<div></div>"}<div><button class="btn modal-close" id="v12-editcancel">キャンセル</button> <button class="btn primary" id="v12-edit-save">保存してスマレジ同期</button></div></div>`;
+ }
+ return `<div class="modal-bg ${on?"on":""}" id="v12-editModal"><div class="modal">${inner}</div></div>`;
+}
+function sfV12BulkModalHtml(){
+ const on=sfV12BulkOpen;
+ return `<div class="modal-bg ${on?"on":""}" id="v12-bulkModal"><div class="modal">
+  <div class="modalhead"><b>一括変更</b><button class="btn modal-close" id="v12-bulkclose">×</button></div>
+  <div class="modalbody">
+    <div class="notice success"><span><b>${sfV12Selected.size}件</b>を一括変更します</span><span>元の希望・履歴は保持</span></div>
+    <div class="formgrid">
+      <div class="field"><label>開始</label><input class="inp" id="v12-bulk-start" type="time" value="17:00"></div>
+      <div class="field"><label>終了</label><input class="inp" id="v12-bulk-end" type="time" value="23:00"></div>
+    </div>
+  </div>
+  <div class="modalfoot"><button class="btn modal-close" id="v12-bulkcancel">キャンセル</button><button class="btn primary" id="v12-bulk-apply">選択セルへ一括反映</button></div>
+ </div></div>`;
+}
+function sfV12UrgentModalHtml(){
+ const on=sfV12UrgentOpen;
+ const storeName=(()=>{const st=[...stores,...storesHidden].find(x=>x.id===sfMgStore);return st?st.name:""})();
+ return `<div class="modal-bg ${on?"on":""}" id="v12-urgentModal"><div class="modal">
+  <div class="modalhead"><b>急募シフトを作成</b><button class="btn modal-close" id="v12-urgentclose">×</button></div>
+  <div class="modalbody">
+    <div class="formgrid">
+      <div class="field"><label>店舗</label><input class="inp" value="${esc(storeName)}" disabled></div>
+      <div class="field"><label>日付</label><input class="inp" id="v12-urgent-date" type="date" value="${todayStr()}"></div>
+      <div class="field"><label>開始</label><input class="inp" id="v12-urgent-start" value="09:00"></div>
+      <div class="field"><label>終了</label><input class="inp" id="v12-urgent-end" value="12:00"></div>
+      <div class="field"><label>役割</label><input class="inp" id="v12-urgent-role" value="仕込み"></div>
+      <div class="field"><label>募集人数</label><input class="inp" id="v12-urgent-headcount" type="number" value="1"></div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>募集メッセージ</label><input class="inp" id="v12-urgent-msg" style="width:100%" value="人手が足りないため、出られる方はぜひご協力ください"></div>
+    <div class="audit">対象者へLINE通知 → 応募 → 店長確定、の流れは今後の対応予定です。まずは急募の掲示・手動での確定管理までを提供します。</div>
+  </div>
+  <div class="modalfoot"><button class="btn modal-close" id="v12-urgentcancel">キャンセル</button><button class="btn red" id="v12-urgent-create">急募を掲示する</button></div>
+ </div></div>`;
+}
+
+// ---- シェル（黒バー＋タブナビ）----
+async function sfV12View(){
+ sfEnsureReminders();
+ const isManager=sfPickableStores().length>0;
+ if(!isManager)return await sfSubmitView(); // モックは店長以上向け画面のため、一般従業員は従来どおり
+ const pickable=sfPickableStores();
+ if(!sfMgStore||!pickable.find(s=>s.id===sfMgStore))sfMgStore=pickable[0].id;
+ const storeName=(()=>{const s=[...stores,...storesHidden].find(x=>x.id===sfMgStore);return s?s.name:""})();
+ const tab=["dashboard","submit","adjust","confirmed","actual"].includes(sfMgStep)?sfMgStep:"dashboard";
+ let body="";
+ if(tab==="submit")body=await sfV12SubmitSection();
+ else if(tab==="adjust")body=await sfV12AdjustSection();
+ else if(tab==="confirmed")body=await sfV12ConfirmedSection();
+ else if(tab==="actual")body=await sfV12ActualSection();
+ else body=await sfV12DashboardSection();
+ return `<div class="shift-management-reference">
+  <div class="top"><div class="brand">N-Style <small>シフト・勤怠管理</small></div><div>${esc(storeName)} ｜ ${esc(ROLE_NAME[me.role]||me.role)}</div></div>
+  <main class="page">
+   <div class="mainnav">
+    <button class="${tab==="dashboard"?"on":""}" data-v12tab="dashboard">ダッシュボード</button>
+    <button class="${tab==="submit"?"on":""}" data-v12tab="submit">シフト提出</button>
+    <button class="${tab==="adjust"?"on":""}" data-v12tab="adjust">シフト調整</button>
+    <button class="${tab==="confirmed"?"on":""}" data-v12tab="confirmed">確定シフト</button>
+    <button class="${tab==="actual"?"on":""}" data-v12tab="actual">実績・差異</button>
+   </div>
+   <section class="view on">${body}</section>
+  </main>
+  ${await sfV12EditModalHtml()}
+  ${sfV12BulkModalHtml()}
+  ${sfV12UrgentModalHtml()}
+ </div>`;
+}
+
+// ---- 結線 ----
+function bindSfV12Page(){
+ const root=document.querySelector(".shift-management-reference");
+ if(!root)return; // 完成HTML版は店長以上のみ（一般従業員は従来のsfSubmitViewのまま）
+ document.querySelectorAll("[data-v12tab]").forEach(b=>b.onclick=()=>{sfMgStep=b.dataset.v12tab;sfEditDate=null;sfV12EditCell=null;sfV12Selected=new Set();page="shift";render()});
+ // 共通: 店舗・期間・半月/1ヶ月・時間帯
+ if($("v12-store"))$("v12-store").onchange=e=>{sfMgStore=e.target.value;sfEditDate=null;render()};
+ if($("v12-period"))$("v12-period").onchange=e=>{sfMgPeriodIdx=+e.target.value;sfEditDate=null;render()};
+ if($("v12-periodmode"))$("v12-periodmode").onchange=e=>{sfV12PeriodMode=e.target.value;render()};
+ if($("v12-slot"))$("v12-slot").onchange=e=>{sfSlotFilter=e.target.value;render()};
+ if($("v12-emptype"))$("v12-emptype").onchange=e=>{sfV12EmpType={"全従業員":"all","社員のみ":"emp","PAのみ":"pa"}[e.target.selectedOptions[0].text]||e.target.value;render()};
+ // 店舗シフト／人事シフト切替（②③共通）
+ document.querySelectorAll("[data-v12hrmode]").forEach(b=>b.onclick=()=>{sfV12HrMode=b.dataset.v12hrmode;render()});
+ if($("v12-hr-onlyissue"))$("v12-hr-onlyissue").onclick=()=>{sfV12HrOnlyIssue=!sfV12HrOnlyIssue;render()};
+ if($("v12-hr-dayoffcfg"))$("v12-hr-dayoffcfg").onclick=()=>toast("休日基準は現在、半月あたり4日の一律基準です。店舗ごとの個別設定は今後の対応予定です");
+ if($("v12-hr-alertcfg"))$("v12-hr-alertcfg").onclick=()=>toast("勤務時間アラートの個別設定は今後の対応予定です");
+ if($("v12-hr-csv"))$("v12-hr-csv").onclick=()=>toast("人事シフトのCSV出力は今後の対応予定です");
+ // ダッシュボード
+ if($("v12-notify-unsubmitted"))$("v12-notify-unsubmitted").onclick=async()=>{
+  const b=$("v12-notify-unsubmitted");b.disabled=true;
+  const p=sfPeriodFromIdx(sfMgPeriodIdx);const dates=sfDateList(p);
+  const [{data:members},{data:shifts}]=await Promise.all([
+   sb.from("user_stores").select("user_id,users(id,name,line_user_id,is_active)").eq("store_id",sfMgStore),
+   sb.from("sf_shifts").select("user_id,work_date").eq("store_id",sfMgStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1])
+  ]);
+  const submittedIds=new Set((shifts||[]).map(s=>s.user_id));
+  const targets=(members||[]).map(m=>m.users).filter(u=>u&&u.is_active&&!submittedIds.has(u.id));
+  if(!targets.length){toast("未提出の人はいません");b.disabled=false;return}
+  let sent=0;
+  for(const u of targets){if(!u.line_user_id)continue;const r=await lineFn({action:"push_user",user_id:u.id,text:`${u.name}さん\n\nシフト提出のリマインドです。「${p.label}」期間のシフトがまだ提出されていません。`});if(r&&r.ok)sent++}
+  b.disabled=false;toast(`通知を送りました: ${sent}名`);
+ };
+ if($("v12-dash-csv"))$("v12-dash-csv").onclick=()=>toast("ダッシュボードのCSV出力は今後の対応予定です");
+ if($("v12-dash-cond"))$("v12-dash-cond").onclick=()=>toast("集計条件の設定は今後の対応予定です");
+ // 急募
+ const openUrgent=()=>{sfV12UrgentOpen=true;render()};
+ document.querySelectorAll(".open-urgent,[data-v12-open-urgent]").forEach(b=>b.onclick=openUrgent);
+ if($("v12-open-urgent"))$("v12-open-urgent").onclick=openUrgent;
+ if($("v12-urgent-fromshort"))$("v12-urgent-fromshort").onclick=openUrgent;
+ if($("v12-urgentclose"))$("v12-urgentclose").onclick=()=>{sfV12UrgentOpen=false;render()};
+ if($("v12-urgentcancel"))$("v12-urgentcancel").onclick=()=>{sfV12UrgentOpen=false;render()};
+ if($("v12-urgent-create"))$("v12-urgent-create").onclick=async()=>{
+  const payload={store_id:sfMgStore,work_date:$("v12-urgent-date").value,start_time:$("v12-urgent-start").value,end_time:$("v12-urgent-end").value,
+   role_label:$("v12-urgent-role").value.trim()||null,headcount:+$("v12-urgent-headcount").value||1,message:$("v12-urgent-msg").value.trim()||null,status:"open",created_by:me.id};
+  const {error}=await sb.from("sf_urgent_shifts").insert(payload);
+  if(error){toast("急募の作成に失敗しました: "+error.message,true);return}
+  sfV12UrgentOpen=false;toast("急募を掲示しました");render();
+ };
+ document.querySelectorAll("[data-v12-urgent-fill]").forEach(b=>b.onclick=async()=>{
+  const {error}=await sb.from("sf_urgent_shifts").update({status:"filled",filled_at:new Date().toISOString(),filled_by:me.id}).eq("id",b.dataset.v12UrgentFill);
+  if(error){toast("更新エラー: "+error.message,true);return}
+  toast("確定にしました");render();
+ });
+ document.querySelectorAll("[data-v12-urgent-cancel]").forEach(b=>b.onclick=async()=>{
+  if(!confirm("この急募を取り下げますか？"))return;
+  const {error}=await sb.from("sf_urgent_shifts").update({status:"cancelled"}).eq("id",b.dataset.v12UrgentCancel);
+  if(error){toast("更新エラー: "+error.message,true);return}
+  toast("取り下げました");render();
+ });
+ // シフト調整
+ if($("v12-autoassign"))$("v12-autoassign").onclick=()=>toast("自動配置案は準備中の機能です。今は手動でセルを選んで調整してください");
+ if($("v12-helpcand"))$("v12-helpcand").onclick=()=>{sfHelpCandidatesOpen=!sfHelpCandidatesOpen;toast(sfHelpCandidatesOpen?"ヘルプ候補を表示する機能は準備中です":"");};
+ if($("v12-publish"))$("v12-publish").onclick=async()=>{
+  if(!confirm("この期間のシフトを公開します。スマレジ・タイムカードにも反映されます。よろしいですか？"))return;
+  const p=sfPeriodFromIdx(sfMgPeriodIdx);
+  const {error}=await sb.from("sf_shifts").update({status:"published",published_at:new Date().toISOString()}).eq("store_id",sfMgStore).eq("period_key",p.key);
+  if(error){toast("公開エラー: "+error.message,true);return}
+  toast("公開しました。スマレジへの反映を開始します…");
+  const {data:sess}=await sb.auth.getSession();const token=sess&&sess.session?sess.session.access_token:null;
+  try{
+   const r=await fetch(SUPA_URL+"/functions/v1/smaregi-shift-sync",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({period_key:p.key,store_id:sfMgStore})});
+   const j=await r.json().catch(()=>null);
+   if(j&&j.ok)toast(`スマレジ反映: 成功${j.synced||0}件`,!!(j.failed||j.skipped));
+  }catch(e){}
+  render();
+ };
+ if($("v12-import"))$("v12-import").onclick=async()=>{
+  if(!confirm("この期間をスマレジ・タイムカードの内容に合わせます。よろしいですか？"))return;
+  const p=sfPeriodFromIdx(sfMgPeriodIdx);
+  const {data:sess}=await sb.auth.getSession();const token=sess&&sess.session?sess.session.access_token:null;
+  try{
+   const r=await fetch(SUPA_URL+"/functions/v1/smaregi-shift-sync",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({action:"import_from_smaregi",period_key:p.key,store_id:sfMgStore})});
+   const j=await r.json().catch(()=>null);
+   if(j&&j.ok)toast(`スマレジと同期しました: 追加${j.added||0}件／更新${j.updated||0}件`);else toast("同期でエラーが出ました",true);
+  }catch(e){toast("同期に失敗しました",true)}
+  render();
+ };
+ if($("v12-savedraft"))$("v12-savedraft").onclick=()=>toast("下書きは入力のたびに自動保存されています");
+ if($("v12-shortonly"))$("v12-shortonly").onclick=()=>{sfShortageOnly=!sfShortageOnly;render()};
+ if($("v12-sim-rule"))$("v12-sim-rule").onchange=e=>{sfV12SalesBasisRule=e.target.value;render()};
+ if($("v12-sim-rule2"))$("v12-sim-rule2").onchange=e=>{sfV12SalesBasisRule=e.target.value;render()};
+ if($("v12-parate"))$("v12-parate").onchange=e=>{sfV12PaRate=e.target.value.replace("%","")||"14.0";render()};
+ // 複数選択・一括変更
+ if($("v12-multimode"))$("v12-multimode").onclick=()=>{sfV12MultiMode=!sfV12MultiMode;render()};
+ if($("v12-clearsel"))$("v12-clearsel").onclick=()=>{sfV12Selected=new Set();render()};
+ if($("v12-bulktime")||$("v12-bulkrole"))["v12-bulktime","v12-bulkrole"].forEach(id=>{if($(id))$(id).onclick=()=>{if(!sfV12Selected.size){toast("セルを選択してください",true);return}sfV12BulkOpen=true;render()}});
+ if($("v12-bulkclose"))$("v12-bulkclose").onclick=()=>{sfV12BulkOpen=false;render()};
+ if($("v12-bulkcancel"))$("v12-bulkcancel").onclick=()=>{sfV12BulkOpen=false;render()};
+ if($("v12-bulk-apply"))$("v12-bulk-apply").onclick=async()=>{
+  const start=$("v12-bulk-start").value,end=$("v12-bulk-end").value;
+  if(!start||!end){toast("開始・終了を入力してください",true);return}
+  const p=sfPeriodFromIdx(sfMgPeriodIdx);
+  let okCount=0;
+  for(const key of sfV12Selected){
+   const [uid,ds]=key.split("|");
+   const ok=await sfSaveDay(uid,sfMgStore,ds,p.key,null,false,start,end,[]);
+   if(ok)okCount++;
+  }
+  sfV12BulkOpen=false;sfV12Selected=new Set();sfV12MultiMode=false;
+  toast(`${okCount}件を一括変更しました`);render();
+ };
+ // セルクリック（複数選択モード中・Ctrl/Cmd押下時は選択、それ以外は編集モーダル）
+ document.querySelectorAll("[data-v12cell]").forEach(td=>{
+  const el=td;
+  el.onclick=(e)=>{
+   const key=el.dataset.v12cell;
+   if(sfV12MultiMode||e.ctrlKey||e.metaKey){
+    if(sfV12Selected.has(key))sfV12Selected.delete(key);else sfV12Selected.add(key);
+    render();return;
+   }
+   const [uid,ds]=key.split("|");sfV12EditCell={uid,ds};render();
+  };
+ });
+ // 編集モーダル
+ if($("v12-editclose"))$("v12-editclose").onclick=()=>{sfV12EditCell=null;render()};
+ if($("v12-editcancel"))$("v12-editcancel").onclick=()=>{sfV12EditCell=null;render()};
+ if($("v12-edit-save"))$("v12-edit-save").onclick=async()=>{
+  const {uid,ds}=sfV12EditCell;
+  const p=sfPeriodFromIdx(sfMgPeriodIdx);
+  const off=$("v12-edit-off").checked;
+  const presetId=$("v12-edit-preset").value||null;
+  const {data:presets}=await sb.from("sf_time_presets").select("*").eq("store_id",sfMgStore);
+  const ok=await sfSaveDay(uid,sfMgStore,ds,p.key,presetId,off,$("v12-edit-start").value,$("v12-edit-end").value,presets||[]);
+  if(ok){sfV12EditCell=null;toast("保存しました");render()}
+ };
+ if($("v12-edit-delete"))$("v12-edit-delete").onclick=async()=>{
+  if(!confirm("この日の入力を削除しますか？"))return;
+  const {uid,ds}=sfV12EditCell;
+  const ok=await sfDeleteDay(uid,ds);
+  if(ok){sfV12EditCell=null;toast("削除しました");render()}
+ };
+ // 確定シフト
+ if($("v12-cf-notify"))$("v12-cf-notify").onclick=async()=>{
+  const p=sfPeriodFromIdx(sfMgPeriodIdx);
+  const [{data:shifts},{data:members}]=await Promise.all([
+   sb.from("sf_shifts").select("user_id,confirmed_at").eq("store_id",sfMgStore).eq("period_key",p.key).eq("status","published"),
+   sb.from("user_stores").select("user_id,users(id,name,line_user_id)").eq("store_id",sfMgStore)
+  ]);
+  const unconfirmedIds=new Set((shifts||[]).filter(s=>!s.confirmed_at).map(s=>s.user_id));
+  const targets=(members||[]).map(m=>m.users).filter(u=>u&&unconfirmedIds.has(u.id));
+  let sent=0;
+  for(const u of targets){if(!u.line_user_id)continue;const r=await lineFn({action:"push_user",user_id:u.id,text:`${u.name}さん\n\n「${p.label}」の確定シフトをまだ確認していません。ご確認をお願いします。`});if(r&&r.ok)sent++}
+  toast(`再通知: ${sent}件送信`);
+ };
+ document.querySelectorAll("[data-v12-cr-resolve]").forEach(b=>b.onclick=async()=>{
+  const {error}=await sb.from("sf_change_requests").update({status:"resolved",resolved_at:new Date().toISOString(),resolved_by:me.id}).eq("id",b.dataset.v12CrResolve);
+  if(error){toast("更新エラー: "+error.message,true);return}
+  toast("対応済みにしました");render();
+ });
+ if($("v12-cf-history"))$("v12-cf-history").onclick=()=>toast("変更履歴の一覧表示は今後の対応予定です");
+ if($("v12-cf-print"))$("v12-cf-print").onclick=()=>window.print();
+ if($("v12-cf-preview"))$("v12-cf-preview").onclick=()=>toast("従業員表示プレビューは今後の対応予定です");
+ // シフト提出
+ if($("v12-sub-store"))$("v12-sub-store").onchange=e=>{sfSubStore=e.target.value;sfEditDate=null;render()};
+ if($("v12-sub-prev"))$("v12-sub-prev").onclick=()=>{sfMgPeriodIdx--;sfEditDate=null;render()};
+ if($("v12-sub-next"))$("v12-sub-next").onclick=()=>{sfMgPeriodIdx++;sfEditDate=null;render()};
+ if($("v12-sub-half-a"))$("v12-sub-half-a").onclick=()=>{const p=sfPeriodFromIdx(sfMgPeriodIdx);if(p.half==="B")sfMgPeriodIdx--;render()};
+ if($("v12-sub-half-b"))$("v12-sub-half-b").onclick=()=>{const p=sfPeriodFromIdx(sfMgPeriodIdx);if(p.half==="A")sfMgPeriodIdx++;render()};
+ document.querySelectorAll("[data-v12-subday]").forEach(d=>d.onclick=()=>{sfEditDate=d.dataset.v12Subday;render()});
+ if($("v12-sub-save"))$("v12-sub-save").onclick=async()=>{
+  const val=$("v12-sub-preset").value;
+  const off=val==="off";const presetId=off?null:(val||null);
+  const {data:presets}=await sb.from("sf_time_presets").select("*").eq("store_id",sfSubStore);
+  const p=sfPeriodFromIdx(sfMgPeriodIdx);
+  const ok=await sfSaveDay(me.id,sfSubStore,sfEditDate,p.key,presetId,off,$("v12-sub-start").value,$("v12-sub-end").value,presets||[]);
+  if(!ok)return;
+  const helpOn=$("v12-sub-help").value==="1";
+  if(helpOn)await sb.from("sf_help_availability").upsert({user_id:me.id,work_date:sfEditDate},{onConflict:"user_id,work_date"});
+  else await sb.from("sf_help_availability").delete().eq("user_id",me.id).eq("work_date",sfEditDate);
+  toast("反映しました");render();
+ };
+ if($("v12-sub-delete"))$("v12-sub-delete").onclick=async()=>{
+  if(!confirm("この日の入力を削除しますか？"))return;
+  const ok=await sfDeleteDay(me.id,sfEditDate);
+  if(ok){toast("削除しました");render()}
+ };
+ if($("v12-sub-submitall"))$("v12-sub-submitall").onclick=async()=>{
+  if(!confirm("この期間の内容で提出します。締切後は編集できません。よろしいですか？"))return;
+  const p=sfPeriodFromIdx(sfMgPeriodIdx);
+  const {error}=await sb.from("sf_shifts").update({status:"submitted",submitted_at:new Date().toISOString()}).eq("user_id",me.id).eq("period_key",p.key);
+  if(error){toast("提出エラー: "+error.message,true);return}
+  toast("✅ 提出しました");render();
+ };
+ if($("v12-sub-change"))$("v12-sub-change").onclick=()=>{sfChangeDate=sfEditDate;render()};
+ if($("sf-change-close"))$("sf-change-close").onclick=()=>{sfChangeDate=null;render()};
+ if($("sf-change-send"))$("sf-change-send").onclick=async()=>{
+  const reason=$("sf-change-reason").value.trim();
+  const p=sfPeriodFromIdx(sfMgPeriodIdx);
+  const {error}=await sb.from("sf_change_requests").insert({user_id:me.id,store_id:sfSubStore,work_date:sfChangeDate,period_key:p.key,reason:reason||null});
+  if(error){toast("送信エラー: "+error.message,true);return}
+  sfChangeDate=null;toast("変更希望を送信しました");render();
+ };
+ // 実績・差異
+ document.querySelectorAll("[data-v12act]").forEach(d=>d.onclick=()=>{sfV12ActSeg=d.dataset.v12act;render()});
+ if($("v12-act-csv"))$("v12-act-csv").onclick=()=>toast("CSV出力は今後の対応予定です");
+ if($("v12-act-refresh"))$("v12-act-refresh").onclick=()=>toast("スマレジ最新取得は今後の対応予定です（現状は自動連携済みの実績データを表示しています）");
 }
 
 // ===== 設定 =====

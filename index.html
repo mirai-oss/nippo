@@ -3017,6 +3017,15 @@ function sfDateList(p){const arr=[];let d=new Date(p.start);while(d<=p.end){arr.
 function sfFmtDate(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
 function sfFmtDateShort(ds){const d=new Date(ds+"T00:00:00");const w=["日","月","火","水","木","金","土"][d.getDay()];return (d.getMonth()+1)+"/"+d.getDate()+"("+w+")"}
 function sfFmtTime(t){return (t||"").slice(0,5)}
+// 2026-09-08追加: labor_cost_daily.clock_in/clock_out はtimestamptz（日時）であり、
+// sf_shifts.start_time等の素のtime型とは違うため、sfFmtTime(先頭5文字を切るだけ)を使うと
+// "2026-"のような日付部分を拾ってしまう不具合があった。こちらは日時としてJSTの時刻部分を取り出す
+function sfV12FmtClockTime(ts){
+ if(!ts)return "";
+ const d=new Date(ts);
+ if(isNaN(d.getTime()))return "";
+ return d.toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"Asia/Tokyo"});
+}
 
 let sfSubStore=null,sfSubPeriodIdx=null,sfEditDate=null,sfChangeDate=null; // sfChangeDate: B-2 ③変更希望フォームの対象日／A-4(2026-08-29) sfModeは廃止（sfMgStepに統合）
 let sfScrollPending=false; // ユーザー要望（2026-08-25）: 調整グリッドのセルをクリックしても反応が分かりにくいため、編集パネル表示時に自動スクロールする
@@ -7598,7 +7607,7 @@ async function sfV12ActualSection(){
     const lk=laborByUserDate[u.id+"|"+ds];const s=shByUserDate[u.id+"|"+ds];
     if(!lk||(!lk.clockIn&&!lk.clockOut))return (s&&!s.is_off&&ds<today)?'<td class="err">打刻なし</td>':"<td>—</td>";
     const cls=(lk.tardy||lk.early)?"warn":"";
-    return `<td class="${cls}">${lk.clockIn?sfFmtTime(lk.clockIn):"—"}<br>${lk.clockOut?sfFmtTime(lk.clockOut):"—"}</td>`;
+    return `<td class="${cls}">${lk.clockIn?sfV12FmtClockTime(lk.clockIn):"—"}<br>${lk.clockOut?sfV12FmtClockTime(lk.clockOut):"—"}</td>`;
    }).join("")}</tr>`).join("")}
   </tbody></table>`;
  }

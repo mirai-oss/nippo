@@ -7894,7 +7894,29 @@ function bindSfV12Page(){
  // 実績・差異
  document.querySelectorAll("[data-v12act]").forEach(d=>d.onclick=()=>{sfV12ActSeg=d.dataset.v12act;render()});
  if($("v12-act-csv"))$("v12-act-csv").onclick=()=>toast("CSV出力は今後の対応予定です");
- if($("v12-act-refresh"))$("v12-act-refresh").onclick=()=>toast("スマレジ最新取得は今後の対応予定です（現状は自動連携済みの実績データを表示しています）");
+ // 2026-09-08追加: スマレジタイムカードの実績同期を実装。既存のsmaregi-attendance-sync
+ //   （ns-portal・データ基盤担当作成、日次バッチと同じEdge Function）をそのまま呼ぶ。
+ //   全社員ぶんを対象に取得する関数のため、今見ている期間(date_from/date_to)だけ渡す。
+ //   権限はこの関数自体がCEO/HQ/マスターのみに制限しているため、店長・チーム長が押した場合は
+ //   その旨のエラーメッセージがそのままtoastで返る
+ if($("v12-act-refresh"))$("v12-act-refresh").onclick=async()=>{
+  const btn=$("v12-act-refresh");btn.disabled=true;btn.textContent="取得中...";
+  try{
+   const p=sfPeriodFromIdx(sfMgPeriodIdx);
+   const dates=sfV12PeriodMode==="month"?sfV12MonthDates(p):sfDateList(p);
+   const {data:sess}=await sb.auth.getSession();
+   const token=sess&&sess.session?sess.session.access_token:null;
+   const r=await fetch(SUPA_URL+"/functions/v1/smaregi-attendance-sync",{
+    method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},
+    body:JSON.stringify({action:"sync",date_from:dates[0],date_to:dates[dates.length-1]})
+   });
+   const j=await r.json().catch(()=>null);
+   if(j&&j.ok)toast(`スマレジから最新の実績を取得しました: ${j.inserted}件反映${j.errorCount?`／エラー${j.errorCount}件`:""}`,!!j.errorCount);
+   else toast("取得に失敗しました: "+(j&&j.error||"不明なエラー"),true);
+  }catch(e){toast("取得に失敗しました: "+(e&&e.message?e.message:e),true)}
+  btn.disabled=false;btn.textContent="スマレジ最新取得";
+  render();
+ };
 }
 
 // ===== 設定 =====

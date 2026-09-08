@@ -3037,8 +3037,10 @@ let sfMgStep="dashboard",sfReqDate=null; // v2.7 ①希望確認 ②調整（担
 let sfV12HrMode="store"; // 「表示：店舗シフト／人事シフト（全店舗横断）」
 let sfV12EmpType="all"; // 全従業員／社員のみ／PAのみ
 let sfV12PeriodMode="half"; // 半月表示／1ヶ月表示
+let sfV12ActDetailMode="half"; // 実績・差異タブ専用: 半月/1ヶ月/日別/期間指定（2026-09-08追加。既存の日別/期間指定モードを残すため）
 let sfV12MultiMode=false,sfV12Selected=new Set(); // 複数選択モード
 let sfV12BulkOpen=false,sfV12UrgentOpen=false;
+let sfV12UrgentShowApps=null; // 2026-09-08追加: ダッシュボード「現在の急募」で応募者一覧を開いている急募のid
 let sfV12EditCell=null; // {uid,ds} セル編集モーダル用（既存のsfEditDateと役割は同じだが、店舗シフト表専用に持つ）
 let sfShortageOnly=false; // 2026-09-08 v12刷新: シフト調整タブ「不足だけ表示」トグル（表示用フィルタのみ・データ取得は変更しない）
 let sfSlotFilter="all"; // B-2(2026-08-29) "all"|"lunch"|"dinner"。①希望確認・②調整の絞り込み
@@ -3102,13 +3104,17 @@ async function sfSubmitView(){
  const dates=sfDateList(p);
  const now=new Date();
  const isPastDeadline=now>p.deadline;
- const [{data:presets},{data:shifts},{data:changeReqs},{data:helpRows},{data:boostRows}]=await Promise.all([
+ const myStoreIds=myStores.map(s=>s.id);
+ const [{data:presets},{data:shifts},{data:changeReqs},{data:helpRows},{data:boostRows},{data:urgentRows},{data:myApps}]=await Promise.all([
   sb.from("sf_time_presets").select("*").eq("store_id",sfSubStore).eq("is_active",true).order("sort_order"),
   sb.from("sf_shifts").select("*").eq("user_id",me.id).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
   sb.from("sf_change_requests").select("work_date,status").eq("user_id",me.id).eq("period_key",p.key), // B-2 ③
   sb.from("sf_help_availability").select("work_date").eq("user_id",me.id).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]), // A-6
-  sb.from("sf_boost_days").select("*").eq("store_id",sfSubStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]) // B-3(2026-08-29)
+  sb.from("sf_boost_days").select("*").eq("store_id",sfSubStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]), // B-3(2026-08-29)
+  sb.from("sf_urgent_shifts").select("*").in("store_id",myStoreIds).eq("status","open").order("work_date"), // 2026-09-08追加: 急募（応募受付）
+  sb.from("sf_urgent_shift_applications").select("urgent_shift_id,status").eq("user_id",me.id)
  ]);
+ const myAppsByUrgent={};(myApps||[]).forEach(a=>{myAppsByUrgent[a.urgent_shift_id]=a.status});
  const shMap={};(shifts||[]).forEach(s=>shMap[s.work_date]=s);
  const helpSet=new Set((helpRows||[]).map(r=>r.work_date)); // A-6
  const boostByDate={};(boostRows||[]).forEach(b=>{boostByDate[b.work_date]=b}); // B-3
@@ -3126,6 +3132,15 @@ async function sfSubmitView(){
   const inc=b.incentive_type==="hourly"?`（時給+${b.incentive_amount||0}円）`:b.incentive_type==="shift"?`（1勤務+${b.incentive_amount||0}円）`:"";
   return `<p style="margin:6px 0 0">${sfFmtDateShort(b.work_date)}${inc}: ${esc(b.message||"人手が足りないため、出られる方はぜひご協力ください")}</p>`;
  }).join("")}</div>`;
+ // 2026-09-08追加: 急募のお知らせ・応募（不足枠→急募作成→LINE通知→従業員応募、のユーザー指定フロー）
+ if((urgentRows||[]).length){
+  const storeName=id=>{const s=myStores.find(x=>x.id===id);return s?s.name:""};
+  h+=`<div class="card" style="border-color:#c0392b"><b>🚨 急募のお知らせ</b>${urgentRows.map(u=>{
+   const st=myAppsByUrgent[u.id];
+   const btn=st==="applied"?'<span class="sf-badge" style="background:#888">応募済み（結果待ち）</span>':st==="hired"?'<span class="sf-badge green">採用されました</span>':st==="rejected"?'<span class="sf-badge" style="background:#888">今回は見送り</span>':`<button class="btn sm" data-sf-urgent-apply="${u.id}" style="margin-top:4px">この急募に応募する</button>`;
+   return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line,#eee)"><b>${sfFmtDateShort(u.work_date)}（${esc(u.start_time)}〜${esc(u.end_time)}）</b> ${esc(storeName(u.store_id))} ${esc(u.role_label||"")} ${u.headcount}名<div class="muted" style="font-size:12px;margin-top:2px">${esc(u.message||"")}</div><div style="margin-top:4px">${btn}</div></div>`;
+  }).join("")}</div>`;
+ }
  if(unconfirmedCount>0)h+=`<div class="card" style="border-color:var(--blue)"><b>✅ 確定シフトの確認</b><p class="muted" style="margin:6px 0 0">この期間の確定シフトを確認したら、下のボタンを押してください。</p><button class="btn sm" id="sf-confirm" style="margin-top:8px">確認しました</button></div>`;
  if(!presets||!presets.length)h+=`<p class="muted" style="margin-top:10px">この店舗の時間帯設定がまだありません。店長・本部が「⏱ 時間帯設定」から用意します。</p>`;
  // 2026-09-08 v12刷新: モックアップの「半月カレンダー＋右側の編集パネル」レイアウトに変更
@@ -4206,6 +4221,12 @@ function bindShiftPage(){
   const ok=await sfDeleteDay(me.id,sfEditDate);
   if(ok){sfEditDate=null;toast("削除しました");render()}
  };
+ document.querySelectorAll("[data-sf-urgent-apply]").forEach(b=>b.onclick=async()=>{
+  b.disabled=true;
+  const {error}=await sb.rpc("sf_urgent_shift_apply",{p_urgent_id:b.dataset.sfUrgentApply});
+  if(error){toast("応募に失敗しました: "+error.message,true);b.disabled=false;return}
+  toast("応募しました。採用されるとLINEでお知らせします");render();
+ });
  if($("sf-submitall"))$("sf-submitall").onclick=async()=>{
   if(!confirm("この期間の内容で提出します。締切後は編集できません。よろしいですか？"))return;
   const p=sfPeriodFromIdx(sfSubPeriodIdx);
@@ -7005,6 +7026,13 @@ function sfV12ShortDate(ds){ // 表ヘッダー用の短い日付（モックの
  const d=new Date(ds+"T00:00:00");const w=["日","月","火","水","木","金","土"][d.getDay()];
  return d.getDate()+" "+w;
 }
+// 2026-09-08追加: 実績・差異タブの期間モード（半月/1ヶ月＝新UI、日別/期間指定＝既存のactualReportView()）
+function sfV12ActPeriodModeOptions(){
+ return `<option value="half" ${sfV12ActDetailMode==="half"?"selected":""}>半月表示</option>
+ <option value="month" ${sfV12ActDetailMode==="month"?"selected":""}>1ヶ月表示</option>
+ <option value="day" ${sfV12ActDetailMode==="day"?"selected":""}>日別</option>
+ <option value="range" ${sfV12ActDetailMode==="range"?"selected":""}>期間指定</option>`;
+}
 // 店舗横断（人事シフト）用: 1年前の同じ曜日の売上実績を「昨年同週同曜日」の参考値として使う
 function sfV12LastYearDate(ds){
  const d=new Date(ds+"T00:00:00");d.setDate(d.getDate()-364);// 52週間=364日前は同じ曜日になる
@@ -7089,10 +7117,16 @@ async function sfV12DashboardSection(){
   if((storeCountMap[u.id]||1)<=1)return;
   dates.forEach(ds=>{const s=shByUserDate[u.id+"|"+ds];if(s&&!s.is_off){helpShiftCount++;helpShiftMin+=sfShiftMinutes(s)}});
  });
- // 急募対応: 現状は急募機能が実データを持たないため0（後述の急募一覧と連動。実施回数が増えればここに反映される）
+ // 2026-09-08修正: 急募対応回数は「採用され、かつ実勤務（labor_cost_daily.worked_minutes>0）まで
+ //   完了したもの」だけをカウントする（応募・採用だけではカウントしない、というユーザー指定のルール）
  const {data:urgentRows}=await sb.from("sf_urgent_shifts").select("*").eq("store_id",sfMgStore).order("work_date");
  const urgentList=urgentRows||[];
  const urgentOpenList=urgentList.filter(u=>u.status==="open");
+ const {data:appRows}=urgentOpenList.length?await sb.from("sf_urgent_shift_applications").select("*,users(id,name)").in("urgent_shift_id",urgentOpenList.map(u=>u.id)):{data:[]};
+ const appsByUrgent={};(appRows||[]).forEach(a=>{(appsByUrgent[a.urgent_shift_id]=appsByUrgent[a.urgent_shift_id]||[]).push(a)});
+ const filledList=urgentList.filter(u=>u.status==="filled"&&u.hired_user_id);
+ const completedList=filledList.filter(u=>{const lk=ctx.laborByUserDate[u.hired_user_id+"|"+u.work_date];return lk&&lk.minutes>0});
+ const completedByUser={};completedList.forEach(u=>{const lk=ctx.laborByUserDate[u.hired_user_id+"|"+u.work_date];(completedByUser[u.hired_user_id]=completedByUser[u.hired_user_id]||{count:0,min:0}).count++;completedByUser[u.hired_user_id].min+=lk.minutes});
  const contribRows=people.map(u=>{
   const submitted=dates.some(ds=>shByUserDate[u.id+"|"+ds]);
   const onDeadline=(()=>{const mine=ctx.shifts.filter(s=>s.user_id===u.id);if(!mine.length)return null;const mx=mine.reduce((m,s)=>Math.max(m,new Date(s.submitted_at||s.updated_at||s.created_at||0).getTime()),0);return mx?mx<=p.deadline.getTime():null})();
@@ -7100,7 +7134,8 @@ async function sfV12DashboardSection(){
   const rate=ful&&ful.wishDays?Math.round(ful.actualDays/ful.wishDays*1000)/10:null;
   const helpMine=(storeCountMap[u.id]||1)>1?dates.filter(ds=>{const s=shByUserDate[u.id+"|"+ds];return s&&!s.is_off}).length:0;
   const helpMinMine=(storeCountMap[u.id]||1)>1?dates.reduce((a,ds)=>{const s=shByUserDate[u.id+"|"+ds];return a+(s&&!s.is_off?sfShiftMinutes(s):0)},0):0;
-  return {u,submitted,onDeadline,rate,helpMine,helpMinMine};
+  const urgentDone=completedByUser[u.id]||{count:0,min:0};
+  return {u,submitted,onDeadline,rate,helpMine,helpMinMine,urgentDone};
  });
  sfV12LastDashRows=contribRows; // CSV出力用
  let h=`<div class="toolbar">
@@ -7113,7 +7148,7 @@ async function sfV12DashboardSection(){
    <div class="kpi ${notSubmitted.length?"bad":""}"><small>未提出</small><b>${notSubmitted.length}名</b><div class="sub">LINE通知可</div></div>
    <div class="kpi"><small>平均叶え率</small><b>${avgFulfill==null?"—":avgFulfill+"%"}</b><div class="sub">希望日数基準</div></div>
    <div class="kpi purple"><small>ヘルプ貢献</small><b>${helpShiftCount}回</b><div class="sub">計${(helpShiftMin/60).toFixed(1)}h</div></div>
-   <div class="kpi ${urgentOpenList.length?"bad":""}"><small>急募対応</small><b>${urgentList.filter(u=>u.status==="filled").length}回</b><div class="sub">今月 / 対応者数は下記</div></div>
+   <div class="kpi ${urgentOpenList.length?"bad":""}"><small>急募対応</small><b>${completedList.length}回</b><div class="sub">採用・実勤務完了ぶん</div></div>
    <div class="kpi ${adj.needCount?"":""}"><small>人員不足</small><b>${adj.needCount}枠</b><div class="sub">${adj.needCount?"未解消":"解消済み"}</div></div>
  </div>
  <div class="grid2">
@@ -7122,21 +7157,25 @@ async function sfV12DashboardSection(){
       <div class="cardhead"><h2>提出・貢献状況</h2><button class="btn" id="v12-notify-unsubmitted">未提出者へLINE通知</button></div>
       <div class="wrap"><table class="mini-table">
         <thead><tr><th>従業員</th><th>提出</th><th>期限内</th><th>叶え率</th><th>ヘルプ</th><th>急募対応</th><th>貢献スコア</th></tr></thead>
-        <tbody>${contribRows.map(r=>`<tr><td>${esc(r.u.name)}</td><td>${r.submitted?'<span class="badge good">提出済</span>':'<span class="badge bad">未提出</span>'}</td><td>${r.onDeadline==null?"—":r.onDeadline?"○":"×"}</td><td>${r.rate==null?"—":r.rate+"%"}</td><td>${r.helpMine?r.helpMine+"回 / "+(r.helpMinMine/60).toFixed(1)+"h":"0"}</td><td>—</td><td>—</td></tr>`).join("")}</tbody>
+        <tbody>${contribRows.map(r=>`<tr><td>${esc(r.u.name)}</td><td>${r.submitted?'<span class="badge good">提出済</span>':'<span class="badge bad">未提出</span>'}</td><td>${r.onDeadline==null?"—":r.onDeadline?"○":"×"}</td><td>${r.rate==null?"—":r.rate+"%"}</td><td>${r.helpMine?r.helpMine+"回 / "+(r.helpMinMine/60).toFixed(1)+"h":"0"}</td><td>${r.urgentDone.count?r.urgentDone.count+"回 / "+(r.urgentDone.min/60).toFixed(1)+"h":"0"}</td><td>—</td></tr>`).join("")}</tbody>
       </table></div>
     </div>
     <div class="card">
       <div class="cardhead"><h2>現在の急募</h2><button class="btn red open-urgent" id="v12-open-urgent">＋ 急募を作成</button></div>
-      <div style="padding:10px 12px" class="urgent-list">${urgentOpenList.length?urgentOpenList.map(u=>`
-        <div class="urgent-item open"><div class="urgent-head"><b>${sfV12ShortDate(u.work_date)}（${esc(u.start_time)}〜${esc(u.end_time)}）　${esc(u.role_label||"")} ${u.headcount}名</b><span class="badge bad">募集中</span></div>
-         <div class="urgent-meta">${esc(u.message||"")}</div>
-         <div class="urgent-actions"><button class="btn sm sub" data-v12-urgent-fill="${u.id}">確定にする</button><button class="btn sm sub" data-v12-urgent-cancel="${u.id}">取り下げ</button></div>
-        </div>`).join(""):'<p class="muted">現在、募集中の急募はありません</p>'}</div>
+      <div style="padding:10px 12px" class="urgent-list">${urgentOpenList.length?urgentOpenList.map(u=>{
+       const apps=(appsByUrgent[u.id]||[]).filter(a=>a.status==="applied");
+       const showApps=sfV12UrgentShowApps===u.id;
+       return `<div class="urgent-item open"><div class="urgent-head"><b>${sfV12ShortDate(u.work_date)}（${esc(u.start_time)}〜${esc(u.end_time)}）　${esc(u.role_label||"")} ${u.headcount}名</b><span class="badge bad">募集中</span></div>
+         <div class="urgent-meta">${esc(u.message||"")}／応募${apps.length}名</div>
+         <div class="urgent-actions"><button class="btn sm sub" data-v12-urgent-showapps="${u.id}">応募者を見る（${apps.length}）</button><button class="btn sm sub" data-v12-urgent-renotify="${u.id}">再通知</button><button class="btn sm sub" data-v12-urgent-cancel="${u.id}">取り下げ</button></div>
+         ${showApps?`<div style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px">${apps.length?apps.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span>${esc(a.users?a.users.name:"?")}</span><button class="btn sm primary" data-v12-urgent-hire="${u.id}|${a.user_id}">採用する</button></div>`).join(""):'<p class="muted" style="margin:0">まだ応募はありません</p>'}</div>`:""}
+        </div>`;
+      }).join(""):'<p class="muted">現在、募集中の急募はありません</p>'}</div>
     </div>
    </div>
    <div>
      <div class="side"><h3>シフト貢献 TOP</h3>${contribRows.length?"":'<p class="muted">対象者がいません</p>'}</div>
-     <div class="side"><h3>急募対応 TOP</h3><p class="muted">まだ実績がありません</p><div class="sub" style="margin-top:8px">※急募に応募→採用→実勤務まで完了した回数をカウント（今後、急募の応募・採用機能を使うと集計されます）</div></div>
+     <div class="side"><h3>急募対応 TOP</h3>${(()=>{const top=contribRows.filter(r=>r.urgentDone.count>0).sort((a,b)=>b.urgentDone.count-a.urgentDone.count).slice(0,5);return top.length?top.map(r=>`<div class="rank"><div class="ranktop"><b>${esc(r.u.name)}</b><span>${r.urgentDone.count}回 / ${(r.urgentDone.min/60).toFixed(1)}h</span></div></div>`).join(""):'<p class="muted">まだ実績がありません</p>'})()}<div class="sub" style="margin-top:8px">※急募に応募→採用→実勤務まで完了した回数をカウント</div></div>
      <div class="side"><h3>スマレジ同期</h3><div class="syncbox"><span class="syncdot"></span><b>予定シフト同期状況</b></div><div class="sub">${(ctx.shifts.filter(s=>s.status==="published"&&s.smaregi_sync_status==="error").length)}件エラー</div></div>
    </div>
  </div>`;
@@ -7224,7 +7263,24 @@ async function sfV12HrPanelHtml(ctx){
  const primaryStoreOf={};(allUS||[]).forEach(r=>{if(r.is_primary||!primaryStoreOf[r.user_id])primaryStoreOf[r.user_id]=r.store_id});
  const storeCountAll={};(allUS||[]).forEach(r=>{storeCountAll[r.user_id]=(storeCountAll[r.user_id]||0)+1});
  const byUser={};(allShifts||[]).forEach(s=>{(byUser[s.user_id]=byUser[s.user_id]||{}).__push=1;(byUser[s.user_id][s.work_date]=s)});
- const REQUIRED_DAYOFF=4; // 半月あたりの仮の休日基準（社員マスタ未実装のため。モック自身の注記のとおりの仮値）
+ // 2026-09-08修正: 休日必要数をハードコードせず、sf_dayoff_requirements（社員マスタ相当・
+ //   個人＞店舗+役職＞店舗のみ＞役職のみ＞全社共通の優先順）から取得する。該当設定が
+ //   1件も無い場合のみ、半月4日を初期値として使う（テーブルが空でも壊れないためのフォールバック）
+ const {data:reqRows}=await sb.from("sf_dayoff_requirements").select("*");
+ const dayoffReqFor=(uid,storeId,role)=>{
+  const list=reqRows||[];
+  const byUserRow=list.find(r=>r.user_id===uid);
+  if(byUserRow)return byUserRow.required_days_half_month;
+  const byStoreRole=list.find(r=>!r.user_id&&r.store_id===storeId&&r.role===role);
+  if(byStoreRole)return byStoreRole.required_days_half_month;
+  const byStore=list.find(r=>!r.user_id&&r.store_id===storeId&&!r.role);
+  if(byStore)return byStore.required_days_half_month;
+  const byRole=list.find(r=>!r.user_id&&!r.store_id&&r.role===role);
+  if(byRole)return byRole.required_days_half_month;
+  const global=list.find(r=>!r.user_id&&!r.store_id&&!r.role);
+  if(global)return global.required_days_half_month;
+  return 4; // 設定が1件も無いときの初期値
+ };
  const rows=people.map(u=>{
   const map=byUser[u.id]||{};
   let dayoff=0,maxConsec=0,curConsec=0,totalMin=0;
@@ -7235,11 +7291,12 @@ async function sfV12HrPanelHtml(ctx){
    totalMin+=sfShiftMinutes(s);
    return {ds,off:false,s};
   });
-  return {u,cells,dayoff,maxConsec,totalMin,storeCount:storeCountAll[u.id]||1};
+  const reqDayoff=dayoffReqFor(u.id,primaryStoreOf[u.id],u.role);
+  return {u,cells,dayoff,maxConsec,totalMin,storeCount:storeCountAll[u.id]||1,reqDayoff};
  });
  sfV12LastHrRows=rows; // CSV出力用
  const consecBad=rows.filter(r=>r.maxConsec>=7).length;
- const dayoffBad=rows.filter(r=>r.dayoff<REQUIRED_DAYOFF).length;
+ const dayoffBad=rows.filter(r=>r.dayoff<r.reqDayoff).length;
  const multiStore=rows.filter(r=>r.storeCount>1).length;
  const empRows=rows.filter(r=>sfRoleTag(r.u).cls==="emp");
  const avgDayoffEmp=empRows.length?(empRows.reduce((a,r)=>a+r.dayoff,0)/empRows.length).toFixed(1):"0.0";
@@ -7272,53 +7329,104 @@ async function sfV12HrPanelHtml(ctx){
           return `<td><div class="cell"><div class="time">${sfFmtTime(c.s.start_time).slice(0,2)}-${sfFmtTime(c.s.end_time).slice(0,2)}</div><span class="store-chip ${isHelp?"help":"main"}">${esc(storeNameOf(c.s.store_id))}</span></div></td>`;
          }).join("")}
          <td class="${r.maxConsec>=7?"consecutive-bad":r.maxConsec>=5?"consecutive-warn":""}">${r.maxConsec}連勤</td>
-         <td class="${r.dayoff<REQUIRED_DAYOFF?"dayoff-bad":"dayoff-good"}">${r.dayoff} / 必要${REQUIRED_DAYOFF}</td>
+         <td class="${r.dayoff<r.reqDayoff?"dayoff-bad":"dayoff-good"}">${r.dayoff} / 必要${r.reqDayoff}</td>
          <td>${(r.totalMin/60).toFixed(1)}h</td></tr>`;
        }).join("")}</tbody>
      </table>
    </div>
  </div>
  <div class="hr-summary">
-   <div class="hr-alert-list">${alerts.length?alerts.map(a=>`<div class="hr-alert bad"><b>${esc(a.u.name)}：${a.maxConsec}連勤${a.dayoff<REQUIRED_DAYOFF?" / 休日不足見込み":""}</b><p>店舗単位では問題なく見えても、全店舗合算での連勤日数です。調整をご検討ください。</p></div>`).join(""):'<div class="hr-alert"><b>要確認者はいません</b><p>連勤7日以上の対象者はいません。</p></div>'}</div>
+   <div class="hr-alert-list">${alerts.length?alerts.map(a=>`<div class="hr-alert bad"><b>${esc(a.u.name)}：${a.maxConsec}連勤${a.dayoff<a.reqDayoff?" / 休日不足見込み":""}</b><p>店舗単位では問題なく見えても、全店舗合算での連勤日数です。調整をご検討ください。</p></div>`).join(""):'<div class="hr-alert"><b>要確認者はいません</b><p>連勤7日以上の対象者はいません。</p></div>'}</div>
    <div class="side" style="margin-top:0">
      <h3>社員休日チェック</h3>
-     ${empRows.length?empRows.map(r=>`<div class="rank"><div class="ranktop"><b>${esc(r.u.name)}</b><span class="${r.dayoff<REQUIRED_DAYOFF?"dayoff-bad":"dayoff-good"}">${r.dayoff} / ${REQUIRED_DAYOFF}日</span></div><div class="sub">${r.dayoff<REQUIRED_DAYOFF?(REQUIRED_DAYOFF-r.dayoff)+"日不足見込み":"基準内"}</div></div>`).join(""):'<p class="muted">社員がいません</p>'}
-     <div class="sub" style="margin-top:8px">※休日必要数は半月あたり${REQUIRED_DAYOFF}日の仮基準です（社員マスタの「月間休日基準」機能は未実装）。</div>
+     ${empRows.length?empRows.map(r=>`<div class="rank"><div class="ranktop"><b>${esc(r.u.name)}</b><span class="${r.dayoff<r.reqDayoff?"dayoff-bad":"dayoff-good"}">${r.dayoff} / ${r.reqDayoff}日</span></div><div class="sub">${r.dayoff<r.reqDayoff?(r.reqDayoff-r.dayoff)+"日不足見込み":"基準内"}</div></div>`).join(""):'<p class="muted">社員がいません</p>'}
+     <div class="sub" style="margin-top:8px">※休日必要数は「休日基準設定」で店舗・役職・個人ごとに設定できます（未設定の組み合わせは半月4日を初期値として使用）。</div>
    </div>
- </div>`;
+ </div>
+ ${sfV12DayoffCfgOpen?await sfV12DayoffCfgModalHtml():""}`;
  return h;
 }
-let sfV12HrOnlyIssue=false;
+let sfV12HrOnlyIssue=false,sfV12DayoffCfgOpen=false;
+// 2026-09-08追加: 休日基準設定モーダル（sf_dayoff_requirements。店舗・役職・個人ごとに半月の休日必要数を設定）
+async function sfV12DayoffCfgModalHtml(){
+ const [{data:reqRows},{data:allStores}]=await Promise.all([
+  sb.from("sf_dayoff_requirements").select("*,users(name)").order("created_at",{ascending:false}),
+  Promise.resolve({data:[...stores,...storesHidden]})
+ ]);
+ const storeName=id=>{const s=(allStores||[]).find(x=>x.id===id);return s?s.name:""};
+ return `<div class="modal-bg on" id="v12-dayoffModal"><div class="modal">
+  <div class="modalhead"><b>休日基準設定（半月あたりの休日必要数）</b><button class="btn modal-close" id="v12-dayoffclose">×</button></div>
+  <div class="modalbody">
+   <p class="sub">個人＞店舗+役職＞店舗のみ＞役職のみ＞全社共通、の優先順で適用されます。設定が無い組み合わせは半月4日が使われます。</p>
+   <div class="formgrid">
+    <div class="field"><label>店舗（空欄=全店舗）</label><select class="inp" id="v12-dayoff-store"><option value="">全店舗</option>${(allStores||[]).map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join("")}</select></div>
+    <div class="field"><label>役職（空欄=全役職）</label><select class="inp" id="v12-dayoff-role"><option value="">全役職</option>${ROLES_ALL.map(r=>`<option value="${r}">${esc(ROLE_NAME[r]||r)}</option>`).join("")}</select></div>
+    <div class="field"><label>必要日数（半月あたり）</label><input class="inp" id="v12-dayoff-days" type="number" value="4" min="0"></div>
+    <div class="field"><label>&nbsp;</label><button class="btn primary" id="v12-dayoff-add" style="width:100%">この条件で追加</button></div>
+   </div>
+   <div class="audit">個人単位で設定したい場合は、下の一覧で対象者名を確認しながら、対象店舗の人事シフト画面から個別に調整してください（個人指定の新規追加UIは今後拡張予定。現状は店舗・役職単位の設定のみここから追加できます）。</div>
+   <table class="mini-table" style="margin-top:10px"><tr><th>店舗</th><th>役職</th><th>対象者</th><th>必要日数</th><th></th></tr>
+   ${(reqRows||[]).map(r=>`<tr><td>${r.store_id?esc(storeName(r.store_id)):"全店舗"}</td><td>${r.role?esc(ROLE_NAME[r.role]||r.role):"全役職"}</td><td>${r.users?esc(r.users.name):"—"}</td><td>${r.required_days_half_month}日</td><td><button class="btn sm" data-v12-dayoff-del="${r.id}">削除</button></td></tr>`).join("")||'<tr><td colspan="5" class="muted">設定はまだありません（半月4日が全員に適用されます）</td></tr>'}
+   </table>
+  </div>
+  <div class="modalfoot"><button class="btn modal-close" id="v12-dayoffclose2">閉じる</button><div></div></div>
+ </div></div>`;
+}
 let sfV12LastDashRows=null,sfV12LastHrRows=null,sfV12LastActualCtx=null; // 2026-09-08追加: CSV出力用に直近の描画結果を保持
 
 // ---- 適正人員計算：日別売上・人件費・適正PA時間シミュレーション（店舗シフト表示のみ）----
 // 深夜割増の厳密な時間帯別加重は行わず、対象日にPAとして勤務する人の時給を単純平均する
 // 簡易計算にしている（モック自身も「加重平均PA時給＝通常時給＋22時以降の深夜割増をシフト構成比で
 // 加重」という設計メモを掲載しているのみで、既存システムに深夜割増の時給テーブルはまだ無いため）
+// 2026-09-08修正: 深夜割増（22:00〜翌5:00は時給1.25倍。労働基準法の標準的な割増率）を
+// 実際に積み上げて計算するよう変更。休憩時間の按分は「シフト時間帯全体に占める深夜時間帯の
+// 比率」で概算する（休憩を深夜/通常のどちらで取ったかまでは記録が無いための近似）
+function sfV12ShiftMinuteSpan(startT,endT){ // 休憩を引く前の、開始〜終了の生の分数（深夜またぎ対応）
+ const toMin=t=>{const p=(t||"0:0:0").split(":").map(Number);return (p[0]||0)*60+(p[1]||0)};
+ let s=toMin(startT),e=toMin(endT);if(e<=s)e+=24*60;return {s,e,span:e-s};
+}
+function sfV12NightMinutesRatio(startT,endT){ // 22:00〜翌5:00にかかる分の割合（0〜1）
+ const {s,e,span}=sfV12ShiftMinuteSpan(startT,endT);
+ if(span<=0)return 0;
+ let night=0;
+ for(let m=s;m<e;m++){const h=(m%(24*60))/60;if(h>=22||h<5)night++}
+ return night/span;
+}
 async function sfV12LaborSimHtml(ctx){
  const {dates,people,shByUserDate,wageRates,salesTargetByDate}=ctx;
+ const NIGHT_PREMIUM=1.25; // 労働基準法の深夜割増（22:00〜翌5:00・+25%）
  const paRate=parseFloat(sfV12PaRate)/100||0.14;
  const lyDates=dates.map(sfV12LastYearDate);
  const {data:lyRows}=await sb.from("dash_sales_daily").select("biz_date,sales").eq("store_id",sfMgStore).in("biz_date",lyDates);
  const lyByDate={};(lyRows||[]).forEach(r=>{lyByDate[r.biz_date]=r.sales});
+ const needDateSet=new Set(ctx.adj&&ctx.adj.needDates||[]); // 不足枠のある日は削減案を出さないためのガード
  const rows=dates.map((ds,i)=>{
   const ly=lyByDate[lyDates[i]]||0;
   const target=salesTargetByDate[ds]||0;
   const basis=sfV12SalesBasisRule==="ly"?ly:sfV12SalesBasisRule==="high"?Math.max(ly,target):sfV12SalesBasisRule==="avg"?(ly+target)/2:(target||ly);
   const paBudget=basis*paRate;
-  let paMin=0,paCost=0,empCost=0,paWageSum=0,paWageCount=0;
+  let paMin=0,paNightMin=0,paCost=0,empCost=0,paWageSum=0,paWageCount=0;
   people.forEach(u=>{
    const s=shByUserDate[u.id+"|"+ds];if(!s||s.is_off)return;
-   const min=sfShiftMinutes(s);const isPA=sfRoleTag(u).cls==="pa";const rate=wageRates[u.id];
-   if(isPA){paMin+=min;if(rate!=null){paCost+=min*rate;paWageSum+=rate;paWageCount++}}
-   else if(rate!=null)empCost+=min*rate;
+   const min=sfShiftMinutes(s);const isPA=sfRoleTag(u).cls==="pa";const rate=wageRates[u.id]; // 円/分（通常時給相当）
+   const nightRatio=sfV12NightMinutesRatio(s.start_time,s.end_time);
+   const nightMin=Math.round(min*nightRatio),normalMin=min-nightMin;
+   if(isPA){
+    paMin+=min;paNightMin+=nightMin;
+    if(rate!=null){paCost+=normalMin*rate+nightMin*rate*NIGHT_PREMIUM;paWageSum+=rate;paWageCount++}
+   }else if(rate!=null)empCost+=min*rate; // 社員の深夜割増込み厳密計算は今回対象外（既存どおり）
   });
-  const avgWage=paWageCount?paWageSum/paWageCount:1300/60; // wageRatesは円/分の単位。フォールバックは時給1300円を分単位に換算
-  const properPaHour=avgWage?paBudget/avgWage/60:0;
+  const avgWage=paWageCount?paWageSum/paWageCount:1300/60; // wageRatesは円/分の単位（通常時給相当）。フォールバックは時給1300円を分単位に換算
+  // 適正PA時間: 通常時間で埋める前提の目安（当日の深夜比率を保った上での換算時給で概算）
+  const nightRatioDay=paMin>0?paNightMin/paMin:0;
+  const effRate=avgWage*(1-nightRatioDay)+avgWage*NIGHT_PREMIUM*nightRatioDay;
+  const properPaHour=effRate?paBudget/effRate/60:0;
   const curPaHour=paMin/60;
-  const recommend=properPaHour-curPaHour;
+  let recommend=properPaHour-curPaHour;
+  const isShortDay=needDateSet.has(ds);
+  if(isShortDay&&recommend<0)recommend=0; // 不足枠のある日は削減案を出さない（ユーザー指定のルール）
   const paRateNow=basis>0?paCost/basis*100:null;
-  return {ds,ly,target,basis,paBudget,paCost,empCost,total:paCost+empCost,paRateNow,avgWage,properPaHour,curPaHour,recommend};
+  return {ds,ly,target,basis,paBudget,paCost,empCost,total:paCost+empCost,paRateNow,avgWage,properPaHour,curPaHour,recommend,nightRatioDay,isShortDay};
  });
  const sum=(f)=>rows.reduce((a,r)=>a+f(r),0);
  const fmtY=v=>v>=10000?"¥"+Math.round(v/1000)+"k":"¥"+Math.round(v);
@@ -7357,17 +7465,17 @@ async function sfV12LaborSimHtml(ctx){
  <div class="reco-panel">
    <div class="reco-card">
      <h3>今日の調整アドバイス</h3>
-     ${rows.filter(r=>Math.abs(r.recommend)>=1).sort((a,b)=>Math.abs(b.recommend)-Math.abs(a.recommend)).slice(0,3).map(r=>`<div class="reco-item"><b>${sfV12ShortDate(r.ds)} PA時間 ${r.recommend>=0?"+"+r.recommend.toFixed(1)+"hまで追加可能":r.recommend.toFixed(1)+"h 推奨"}</b><p>基準売上${fmtY(r.basis)}に対しPA使用可能人件費${fmtY(r.paBudget)}。現在の予定は${r.curPaHour.toFixed(1)}hです。</p></div>`).join("")||'<p class="muted" style="padding:8px 0">大きな過不足はありません。</p>'}
+     ${rows.filter(r=>Math.abs(r.recommend)>=1).sort((a,b)=>Math.abs(b.recommend)-Math.abs(a.recommend)).slice(0,3).map(r=>`<div class="reco-item"><b>${sfV12ShortDate(r.ds)} PA時間 ${r.recommend>=0?"+"+r.recommend.toFixed(1)+"hまで追加可能":r.recommend.toFixed(1)+"h 推奨"}</b><p>基準売上${fmtY(r.basis)}に対しPA使用可能人件費${fmtY(r.paBudget)}。現在の予定は${r.curPaHour.toFixed(1)}h（うち深夜(22時以降)${(r.curPaHour*r.nightRatioDay).toFixed(1)}h）です。${r.recommend<0?"日中より深夜帯（割増1.25倍）を優先して削るのが効果的です。":""}${r.isShortDay?"※不足枠がある日のため削減案は出していません。":""}</p></div>`).join("")||'<p class="muted" style="padding:8px 0">大きな過不足はありません。</p>'}
    </div>
    <div class="reco-card">
      <h3>計算ロジック（UI説明用）</h3>
      <div class="formula-box">
        ① 基準売上 = 選択ルールにより「売上目標」と「昨年同週同曜日」を参照<br>
        ② PA使用可能人件費 = 基準売上 × PA目標人件費率<br>
-       ③ 加重平均PA時給 = その日にPAとして勤務する人の時給の単純平均（簡易版。深夜割増の時間帯別加重は今後の対応）<br>
-       ④ 適正PA時間 = PA使用可能人件費 ÷ 加重平均PA時給<br>
+       ③ 各PA従業員ごとに「通常時間×通常時給＋22時以降の深夜時間×時給×1.25倍」を積み上げてその日のPA人件費を算出（休憩は時間帯全体に占める深夜比率で按分）<br>
+       ④ 適正PA時間 = PA使用可能人件費 ÷ その日の深夜比率を反映した換算時給<br>
        ⑤ 推奨調整時間 = 適正PA時間 − 現在PA予定時間<br><br>
-       ※必要人数・役割不足を下回る削減案は出しません。まず不足解消を優先し、その範囲内で削減候補を提示します。
+       ※必要人数・役割不足を下回る削減案は出しません（不足枠がある日は自動的に削減提案をゼロにしています）。まず不足解消を優先し、その範囲内で削減候補を提示します。
      </div>
    </div>
  </div>`;
@@ -7539,6 +7647,17 @@ async function sfV12ConfirmedSection(){
 // ---- ⑤実績・差異 ----
 let sfV12ActSeg="hours"; // 勤務時間数／出退勤時間／予定との差異／叶え率
 async function sfV12ActualSection(){
+ // 2026-09-08追加: ユーザー指示により、従来あった日別/期間指定モードを「半月/1ヶ月/日別/期間指定」の
+ //   1つのセレクトに統合して残す（既存機能は削除しない）。日別・期間指定を選んだ場合は、
+ //   従来のactualReportView()（日別/半月/月次/期間の4モードに対応した既存実装）をそのまま呼ぶ
+ if(sfV12ActDetailMode==="day"||sfV12ActDetailMode==="range"){
+  arMode=sfV12ActDetailMode;
+  if(!arStore)arStore=sfMgStore; // v12シェルの店舗選択と初回だけ揃える（以後は下のactualReportView()自身の店舗セレクトで切替）
+  return `<div class="toolbar"><div class="group"><select class="inp" id="v12-act-periodmode" style="margin:0">${sfV12ActPeriodModeOptions()}</select></div></div>
+   <div class="title">実績・差異</div>
+   <p class="muted" style="margin-top:-4px">既存の日別/期間指定モードでの表示です（従来どおり過去へ自由に遡れます。店舗・日付は下の欄で切り替えてください）</p>
+   ${await actualReportView()}`;
+ }
  const ctx=await sfV12LoadCommon();
  const {dates,people,shByUserDate,laborByUserDate,fulData,salesTargetByDate,p}=ctx;
  sfV12LastActualCtx={dates,people,laborByUserDate}; // CSV出力用
@@ -7561,7 +7680,7 @@ async function sfV12ActualSection(){
  const paSaved=Math.max(0,(paWishMin-paActualMin)/60),paOver=Math.max(0,(paActualMin-paWishMin)/60);
  let h=`<div class="toolbar">
   <div class="group"><select class="inp" id="v12-store" style="margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===sfMgStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select><select class="inp" id="v12-period" style="margin:0">${sfPeriodSelectHtml(sfMgPeriodIdx)}</select>
-   <select class="inp" id="v12-periodmode" style="margin:0"><option value="half" ${sfV12PeriodMode==="half"?"selected":""}>半月表示</option><option value="month" ${sfV12PeriodMode==="month"?"selected":""}>1ヶ月表示</option></select></div>
+   <select class="inp" id="v12-act-periodmode" style="margin:0">${sfV12ActPeriodModeOptions()}</select></div>
   <div class="group"><div class="seg" id="v12-actualseg">
     <div class="${sfV12ActSeg==="hours"?"on":""}" data-v12act="hours">勤務時間数</div>
     <div class="${sfV12ActSeg==="times"?"on":""}" data-v12act="times">出退勤時間</div>
@@ -7734,12 +7853,32 @@ function bindSfV12Page(){
  if($("v12-store"))$("v12-store").onchange=e=>{sfMgStore=e.target.value;sfEditDate=null;render()};
  if($("v12-period"))$("v12-period").onchange=e=>{sfMgPeriodIdx=+e.target.value;sfEditDate=null;render()};
  if($("v12-periodmode"))$("v12-periodmode").onchange=e=>{sfV12PeriodMode=e.target.value;render()};
+ if($("v12-act-periodmode"))$("v12-act-periodmode").onchange=e=>{sfV12ActDetailMode=e.target.value;render()};
  if($("v12-slot"))$("v12-slot").onchange=e=>{sfSlotFilter=e.target.value;render()};
  if($("v12-emptype"))$("v12-emptype").onchange=e=>{sfV12EmpType={"全従業員":"all","社員のみ":"emp","PAのみ":"pa"}[e.target.selectedOptions[0].text]||e.target.value;render()};
  // 店舗シフト／人事シフト切替（②③共通）
  document.querySelectorAll("[data-v12hrmode]").forEach(b=>b.onclick=()=>{sfV12HrMode=b.dataset.v12hrmode;render()});
  if($("v12-hr-onlyissue"))$("v12-hr-onlyissue").onclick=()=>{sfV12HrOnlyIssue=!sfV12HrOnlyIssue;render()};
- if($("v12-hr-dayoffcfg"))$("v12-hr-dayoffcfg").onclick=()=>toast("休日基準は現在、半月あたり4日の一律基準です。店舗ごとの個別設定は今後の対応予定です");
+ if($("v12-hr-dayoffcfg"))$("v12-hr-dayoffcfg").onclick=()=>{sfV12DayoffCfgOpen=true;render()};
+ if($("v12-dayoffclose"))$("v12-dayoffclose").onclick=()=>{sfV12DayoffCfgOpen=false;render()};
+ if($("v12-dayoffclose2"))$("v12-dayoffclose2").onclick=()=>{sfV12DayoffCfgOpen=false;render()};
+ if($("v12-dayoff-add"))$("v12-dayoff-add").onclick=async()=>{
+  const storeId=$("v12-dayoff-store").value||null;
+  const role=$("v12-dayoff-role").value||null;
+  const days=+$("v12-dayoff-days").value;
+  if(!(days>=0)){toast("必要日数を入力してください",true);return}
+  // NULL(空欄=全店舗/全役職)同士は一意制約上「重複」とみなされないため、upsertではなくinsertにしている
+  // （同じ条件を重ねて追加した場合は、一覧から古い方を削除してください）
+  const {error}=await sb.from("sf_dayoff_requirements").insert({store_id:storeId,role,user_id:null,required_days_half_month:days,created_by:me.id});
+  if(error){toast("保存エラー: "+error.message,true);return}
+  toast("休日基準を保存しました");render();
+ };
+ document.querySelectorAll("[data-v12-dayoff-del]").forEach(b=>b.onclick=async()=>{
+  if(!confirm("この休日基準を削除しますか？"))return;
+  const {error}=await sb.from("sf_dayoff_requirements").delete().eq("id",b.dataset.v12DayoffDel);
+  if(error){toast("削除エラー: "+error.message,true);return}
+  toast("削除しました");render();
+ });
  if($("v12-hr-alertcfg"))$("v12-hr-alertcfg").onclick=()=>toast("勤務時間アラートの個別設定は今後の対応予定です");
  if($("v12-hr-csv"))$("v12-hr-csv").onclick=()=>{
   if(!sfV12LastHrRows){toast("表示内容がありません",true);return}
@@ -7777,16 +7916,53 @@ function bindSfV12Page(){
  if($("v12-urgentclose"))$("v12-urgentclose").onclick=()=>{sfV12UrgentOpen=false;render()};
  if($("v12-urgentcancel"))$("v12-urgentcancel").onclick=()=>{sfV12UrgentOpen=false;render()};
  if($("v12-urgent-create"))$("v12-urgent-create").onclick=async()=>{
-  const payload={store_id:sfMgStore,work_date:$("v12-urgent-date").value,start_time:$("v12-urgent-start").value,end_time:$("v12-urgent-end").value,
-   role_label:$("v12-urgent-role").value.trim()||null,headcount:+$("v12-urgent-headcount").value||1,message:$("v12-urgent-msg").value.trim()||null,status:"open",created_by:me.id};
+  const b=$("v12-urgent-create");b.disabled=true;
+  const ds=$("v12-urgent-date").value,st=$("v12-urgent-start").value,et=$("v12-urgent-end").value,role=$("v12-urgent-role").value.trim()||null,msg=$("v12-urgent-msg").value.trim()||null;
+  const payload={store_id:sfMgStore,work_date:ds,start_time:st,end_time:et,
+   role_label:role,headcount:+$("v12-urgent-headcount").value||1,message:msg,status:"open",created_by:me.id};
   const {error}=await sb.from("sf_urgent_shifts").insert(payload);
-  if(error){toast("急募の作成に失敗しました: "+error.message,true);return}
-  sfV12UrgentOpen=false;toast("急募を掲示しました");render();
+  if(error){toast("急募の作成に失敗しました: "+error.message,true);b.disabled=false;return}
+  // 2026-09-08追加: 急募作成時、対象店舗の在籍者へLINE即時通知（不足枠→急募作成→LINE通知→従業員応募、のユーザー指定フロー）
+  const {data:members}=await sb.from("user_stores").select("users(id,name,line_user_id,is_active)").eq("store_id",sfMgStore);
+  const targets=(members||[]).map(m=>m.users).filter(u=>u&&u.is_active&&u.line_user_id);
+  let sent=0;
+  for(const u of targets){
+   const text=`🚨 急募のお知らせ\n\n${sfFmtDateShort(ds)}（${st}〜${et}）${role?role+" ":""}が急募です。\n${msg||"人手が足りないため、入れる方はぜひご協力ください。"}\n\n日報アプリの📅シフト＞ダッシュボードから応募できます。`;
+   const r=await lineFn({action:"push_user",user_id:u.id,text});
+   if(r&&r.ok)sent++;
+  }
+  b.disabled=false;
+  sfV12UrgentOpen=false;toast(`急募を掲示し、${sent}名へLINE通知しました`);render();
  };
- document.querySelectorAll("[data-v12-urgent-fill]").forEach(b=>b.onclick=async()=>{
-  const {error}=await sb.from("sf_urgent_shifts").update({status:"filled",filled_at:new Date().toISOString(),filled_by:me.id}).eq("id",b.dataset.v12UrgentFill);
-  if(error){toast("更新エラー: "+error.message,true);return}
-  toast("確定にしました");render();
+ document.querySelectorAll("[data-v12-urgent-showapps]").forEach(b=>b.onclick=()=>{
+  const id=b.dataset.v12UrgentShowapps;
+  sfV12UrgentShowApps=sfV12UrgentShowApps===id?null:id;
+  render();
+ });
+ document.querySelectorAll("[data-v12-urgent-hire]").forEach(b=>b.onclick=async()=>{
+  const [urgentId,userId]=b.dataset.v12UrgentHire.split("|");
+  if(!confirm("この人を採用し、シフトへ反映しますか？"))return;
+  b.disabled=true;
+  const {error}=await sb.rpc("sf_urgent_shift_hire",{p_urgent_id:urgentId,p_user_id:userId});
+  if(error){toast("採用処理に失敗しました: "+error.message,true);b.disabled=false;return}
+  // 採用された本人へLINE通知
+  const {data:u}=await sb.from("users").select("id,name,line_user_id").eq("id",userId).maybeSingle();
+  if(u&&u.line_user_id)await lineFn({action:"push_user",user_id:u.id,text:"急募への応募、採用が決まりました！\n日報アプリの📅シフトからご確認ください。"});
+  sfV12UrgentShowApps=null;toast("採用し、シフトへ反映しました");render();
+ });
+ document.querySelectorAll("[data-v12-urgent-renotify]").forEach(b=>b.onclick=async()=>{
+  const id=b.dataset.v12UrgentRenotify;
+  const {data:u}=await sb.from("sf_urgent_shifts").select("*").eq("id",id).maybeSingle();
+  if(!u){toast("対象が見つかりません",true);return}
+  const {data:members}=await sb.from("user_stores").select("users(id,name,line_user_id,is_active)").eq("store_id",sfMgStore);
+  const targets=(members||[]).map(m=>m.users).filter(x=>x&&x.is_active&&x.line_user_id);
+  let sent=0;
+  for(const x of targets){
+   const text=`🚨 急募のお知らせ（再通知）\n\n${sfFmtDateShort(u.work_date)}（${u.start_time}〜${u.end_time}）${u.role_label?u.role_label+" ":""}が急募です。\n${u.message||"人手が足りないため、入れる方はぜひご協力ください。"}\n\n日報アプリの📅シフト＞ダッシュボードから応募できます。`;
+   const r=await lineFn({action:"push_user",user_id:x.id,text});
+   if(r&&r.ok)sent++;
+  }
+  toast(`${sent}名へ再通知しました`);
  });
  document.querySelectorAll("[data-v12-urgent-cancel]").forEach(b=>b.onclick=async()=>{
   if(!confirm("この急募を取り下げますか？"))return;

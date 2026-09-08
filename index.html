@@ -9,7 +9,30 @@
   /* A-5(2026-08-29) シフト管理だけ、確定モックアップ（docs/mockups/NStyle_シフト管理_UI_v5.html）の
      配色（テラコッタ系アクセント・暖色の背景）に寄せる妥協案。専用サイドバー・ロゴは共通シェル
      （12項目ボトムナビ・共通ヘッダー）を維持するため見送り、CSS変数の上書きだけで実現する */
-  .sf-theme{--blue:#c94728;--bg:#f4f1eb;background:var(--bg);padding:10px;border-radius:14px;margin:0 -2px}
+  .sf-theme{--blue:#3478b8;--bg:#f5f6f7;background:var(--bg);padding:10px;border-radius:0;margin:0 -2px}
+  /* 2026-09-08 v12刷新: 実装指示書_担当B_シフトUIv12刷新_2026-09-08.md／
+     docs/mockups/NStyle_シフト管理_UI_v12_人事シフト全店舗横断.html準拠。
+     色数を5系統（白灰=通常・青=予定・緑=正常・黄=注意・赤=エラー）に絞る・
+     角丸を無くし実務ツールらしい見た目にする・共通ヘッダー(黒バー)＋タブバーを追加。
+     既存のsf-*クラス構造（グリッド・カード）はそのまま活かし、変数(--sfgreen等)を
+     書き換えることでsf-badge/sf-cell/sf-progress等へ一括反映させている */
+  .sf-theme .card,.sf-theme .sf-cell,.sf-theme .sf-day,.sf-theme .sf-stepbtn,.sf-theme .sf-month-day,.sf-theme .sf-mini,.sf-theme .sf-bottom-action{border-radius:2px}
+  .sf-topbar{height:44px;background:#111;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 14px;margin:0 -10px;font-size:13px}
+  .sf-topbar b{font-weight:800}
+  .sf-tabbar{display:flex;background:#fff;border:1px solid var(--line);border-top:0;overflow:auto;margin:0 -10px}
+  .sf-tabbar button{border:0;background:#fff;padding:11px 14px;border-bottom:3px solid transparent;color:#656b71;font-weight:700;white-space:nowrap;font-size:12px;cursor:pointer}
+  .sf-tabbar button.on{color:#222;border-color:var(--sfgreen)}
+  .sf-toolbar2{background:#fff;border:1px solid var(--line);border-top:0;padding:10px 12px;margin:0 -10px 10px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+  .sf-notice2{background:var(--sfambersoft);border:1px solid #e8d4a4;padding:9px 12px;margin:9px 0;font-size:11px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+  .sf-notice2.danger{background:var(--sfredsoft);border-color:#efc5c2;color:#8f3530}
+  .sf-notice2.success{background:var(--sfgreensoft);border-color:#d8e9c4;color:#4b7710}
+  .sf-modal-bg{display:none;position:fixed;inset:0;background:#0007;z-index:200;align-items:center;justify-content:center;padding:15px}
+  .sf-modal-bg.on{display:flex}
+  .sf-modal{width:min(560px,100%);max-height:90vh;overflow:auto;background:#fff;border-radius:6px;box-shadow:0 20px 60px #0005}
+  .sf-modal-head{padding:13px 15px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+  .sf-modal-head b{font-size:14px}
+  .sf-modal-body{padding:15px}
+  .sf-modal-foot{padding:12px 15px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:8px;align-items:center}
   *{box-sizing:border-box}
   body{font-family:-apple-system,"Hiragino Sans",sans-serif;background:var(--bg);margin:0;color:#2d3340;font-size:15px}
   .app{max-width:480px;margin:0 auto;min-height:100vh;background:#fff;padding-bottom:calc(80px + env(safe-area-inset-bottom))}
@@ -120,7 +143,7 @@
      専用サイドバー・ロゴまでは引き続き見送り（共通シェルを維持）だが、コンテンツ部分は
      モックアップのCSS構造（クラス名は sf- 接頭辞で共通シェルと衝突しないようにする）をほぼ移植 */
   .badge.p{background:#6849a8}
-  .sf-theme{--sfgreen:#2f8f63;--sfgreensoft:#e8f5ee;--sfred:#c93f2b;--sfredsoft:#fde9e4;--sfamber:#b77b13;--sfambersoft:#fff3d8;--sfpurple:#6849a8;--sfpurplesoft:#f1ebff}
+  .sf-theme{--sfgreen:#69b80c;--sfgreensoft:#f1f8e9;--sfred:#cf4b45;--sfredsoft:#fff0ef;--sfamber:#a96f09;--sfambersoft:#fff7e5;--sfpurple:#6f5aa8;--sfpurplesoft:#f4f0ff;--sfblue:#3478b8;--sfbluesoft:#eef6fd}
   .sf-badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:10px;font-weight:800;margin-top:4px}
   .sf-badge.green{background:var(--sfgreensoft);color:var(--sfgreen)}
   .sf-badge.red{background:var(--sfredsoft);color:var(--sfred)}
@@ -174,10 +197,15 @@
   .sf-gslot.help{background:#f1ebff;border:1px solid #d9cbf4}
   .sf-role-summary{border-top:2px solid var(--line);margin:0 14px 14px}
   .sf-role-row{display:flex;justify-content:space-between;padding:6px 2px;border-bottom:1px solid #f0f2f5;font-size:12px}
-  .sf-finance{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:10px}
-  .sf-finance .card{padding:13px;margin-bottom:0}
+  .sf-finance{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px}
+  .sf-finance .card{padding:11px 13px;margin-bottom:0;min-height:70px}
   .sf-finance small{display:block;color:#8a93a2;font-size:11px}
-  .sf-finance b{font-size:20px;display:block;margin-top:4px}
+  .sf-finance b{font-size:19px;display:block;margin-top:4px}
+  .sf-finance .card.good{border-left:3px solid var(--sfgreen)}
+  .sf-finance .card.bad{border-left:3px solid var(--sfred)}
+  .sf-finance .card.warn{border-left:3px solid var(--sfamber)}
+  .sf-finance .card.purple{border-left:3px solid var(--sfpurple)}
+  .sf-finance.k6{grid-template-columns:repeat(2,1fr)}
   .sf-adjust-grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px}
   .sf-shift-table-wrap{overflow:auto;padding:14px}
   .sf-shift-table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:11px}
@@ -229,6 +257,7 @@
   .sf-boost{border:2px solid #f59e0b;background:#fffbeb}
   @media(min-width:900px){
    .sf-finance{grid-template-columns:repeat(5,1fr)}
+   .sf-finance.k6{grid-template-columns:repeat(6,1fr)}
    .sf-stepnav{grid-template-columns:repeat(3,1fr)}
   }
   @media(max-width:1099px){
@@ -1690,7 +1719,7 @@ async function loadMe(uid,opts){
  // v2.6.64 応募者詳細への直接リンクで開いたときは、ホームではなくその応募者の詳細を開く
  // v2.7 統合ポータルシェルからの深リンク（?page=）。openApplicantのほうが優先、権限的に見られないページ・未知のキーは無視してホームのまま
  if(openApplicant&&can("recruit")){page="recruit";rcDetail=openApplicant}
- else if(deepLinkPage&&DEEPLINK_PAGES.includes(deepLinkPage)&&!(me.role==="GAIHAN"&&GAIHAN_HIDDEN_PAGES.includes(deepLinkPage))){page=deepLinkPage}
+ else if(deepLinkPage&&DEEPLINK_PAGES.includes(deepLinkPage)&&!(me.role==="GAIHAN"&&GAIHAN_HIDDEN_PAGES.includes(deepLinkPage))){page=deepLinkPage;if(deepLinkPage==="actual")sfMgStep="actual"}
  else{page="home"}
  if(openApplicant)history.replaceState({},"",location.pathname); // 開いたらURLのパラメータは消す（再読み込みで毎回同じ人が開かないように）。?page=はiframeの再読み込みでも同じページを開き続けたいので消さない
  await render();
@@ -1744,7 +1773,7 @@ async function render(){
  else if(page==="list")body=detail?await detailView():await listView();
  else if(page==="check")body=await checkView();
  else if(page==="shift")body=await shiftView();
- else if(page==="actual")body=`<div class="sf-theme">${await actualReportView()}</div>`; // v2.7 実績確認（シフトから分離・過去へ自由に遡れる）／A-5(2026-08-29) シフト系配色を統一
+ else if(page==="actual")body=await shiftView(); // 2026-09-08 v12刷新: シフト画面と統合（5タブの1つ「実績・差異」）。sfMgStepが表示タブを決める（goToPage参照）
  else if(page==="manuals")body=await manualsView(); // v2.6.59
  else if(page==="tasks")body=await tasksView();
  else if(page==="chat")body=await chatView();
@@ -2959,7 +2988,8 @@ let sfSubStore=null,sfSubPeriodIdx=null,sfEditDate=null,sfChangeDate=null; // sf
 let sfScrollPending=false; // ユーザー要望（2026-08-25）: 調整グリッドのセルをクリックしても反応が分かりにくいため、編集パネル表示時に自動スクロールする
 let sfMgStore=null,sfMgPeriodIdx=null;
 let sfPsStore=null;
-let sfMgStep="mysubmit",sfReqDate=null; // v2.7 ①希望確認 ②調整（担当BシフトUIv5）／A-4(2026-08-29) mysubmit/presetsも同じ状態で管理するよう拡張
+let sfMgStep="dashboard",sfReqDate=null; // v2.7 ①希望確認 ②調整（担当BシフトUIv5）／A-4(2026-08-29) mysubmit/presetsも同じ状態で管理するよう拡張／2026-09-08 v12刷新で既定値をdashboardに変更
+let sfShortageOnly=false; // 2026-09-08 v12刷新: シフト調整タブ「不足だけ表示」トグル（表示用フィルタのみ・データ取得は変更しない）
 let sfSlotFilter="all"; // B-2(2026-08-29) "all"|"lunch"|"dinner"。①希望確認・②調整の絞り込み
 let sfHelpCandidatesOpen=false; // 2026-08-29続き（モックアップ準拠）: ②調整「ヘルプ候補」ボタンの開閉
 let sfCorrectionEditKey=null; // B-1(2026-08-29) "uid|ds|kind"。勤怠修正申請フォームの開閉
@@ -3002,20 +3032,31 @@ async function shiftView(){
   if(sfMgStep==="leave"&&canSeeLeaveTile)return `<div class="sf-theme">${h}${await sfLeaveView()}</div>`;
   return `<div class="sf-theme">${h}${await sfSubmitView()}</div>`;
  }
- h+=`<div class="sf-stepnav" style="grid-template-columns:repeat(2,1fr)">
-  <button class="sf-stepbtn ${sfMgStep==="mysubmit"?"active":""}" data-sftile="mysubmit"><b>📝 自分の提出</b><small>自分のシフト希望</small></button>
-  <button class="sf-stepbtn ${sfMgStep==="request"?"active":""}" data-sftile="request"><b>①希望確認</b><small>半月・日別・出勤希望</small></button>
-  <button class="sf-stepbtn ${sfMgStep==="adjust"?"active":""}" data-sftile="adjust"><b>②調整</b><small>不足・人件費を見て調整</small></button>
-  <button class="sf-stepbtn ${sfMgStep==="confirmed"?"active":""}" data-sftile="confirmed"><b>③確定</b><small>未確認・変更申請</small></button>
-  <button class="sf-stepbtn ${sfMgStep==="presets"?"active":""}" data-sftile="presets"><b>⏱ 時間帯設定</b><small>ランチ/ディナー等</small></button>
-  ${leaveTile}
-  <!-- 2026-08-29続き: 「④実績・差分」タイルは削除（ユーザー指摘: サイドバーの「実績確認」と重複するため）。
-       実績確認への導線は左ナビの「実績確認」（?page=actual）に一本化 -->
+ // 2026-09-08 v12刷新: タイル形式のナビを、モックアップどおりの黒バー＋タブバーに変更。
+ //   「①希望確認」はダッシュボードタブに統合（下記sfDashboardTabHtml参照）。
+ //   「⏱時間帯設定」「🌴有給申請」はモックに無いが既存機能を消さないため、タブバー内に
+ //   小さい補助ボタンとして残す（指示書§2.1「補助ボタンは右上にまとめる」に沿った配置）
+ const sfTopStoreName=(()=>{const sid=sfMgStore||(sfPickableStores()[0]||{}).id;const s=[...stores,...storesHidden].find(x=>x.id===sid);return s?s.name:""})();
+ h=`<div class="sf-topbar"><b>📅 シフト・勤怠管理</b><span>${esc(sfTopStoreName)} ｜ ${esc(ROLE_NAME[me.role]||me.role)}</span></div>
+ <div class="sf-tabbar">
+  <button class="${sfMgStep==="dashboard"?"on":""}" data-sftop="dashboard">ダッシュボード</button>
+  <button class="${sfMgStep==="mysubmit"?"on":""}" data-sftop="mysubmit">シフト提出</button>
+  <button class="${sfMgStep==="adjust"?"on":""}" data-sftop="adjust">シフト調整</button>
+  <button class="${sfMgStep==="confirmed"?"on":""}" data-sftop="confirmed">確定シフト</button>
+  <button class="${sfMgStep==="actual"?"on":""}" data-sftop="actual">実績・差異</button>
+ </div>
+ <div class="sf-toolbar2">
+  <div class="muted" style="font-size:11px">店長以上・本部向け（アルバイト・社員には表示されません）</div>
+  <div class="group" style="display:flex;gap:6px;flex-wrap:wrap">
+   <button class="btn sm sub" data-sftop="presets">⏱ 時間帯設定</button>
+   ${canSeeLeaveTile?'<button class="btn sm sub" data-sftop="leave">🌴 有給申請</button>':""}
+  </div>
  </div>`;
  if(sfMgStep==="mysubmit")return `<div class="sf-theme">${h}${await sfSubmitView()}</div>`;
  if(sfMgStep==="presets")return `<div class="sf-theme">${h}${await sfPresetsView()}</div>`;
  if(sfMgStep==="leave"&&canSeeLeaveTile)return `<div class="sf-theme">${h}${await sfLeaveView()}</div>`;
- return `<div class="sf-theme">${h}${await sfManageView()}</div>`; // request/adjust/confirmedはsfManageView内部で分岐（KPIカードも共通で出す）
+ if(sfMgStep==="actual")return `<div class="sf-theme">${h}${await actualReportView()}</div>`;
+ return `<div class="sf-theme">${h}${await sfManageView()}</div>`; // dashboard/adjust/confirmedはsfManageView内部で分岐（KPIカードも共通で出す）
 }
 
 // ---- 提出（自分） ----
@@ -3350,19 +3391,24 @@ function sfAdjustStepHtml(ctx){
  const checkMsgs=[];
  if(needDays.length)checkMsgs.push(`不足枠 ${needDays.length}件`);
  if(unlinkedCount)checkMsgs.push(`スマレジ未連携 ${unlinkedCount}名`);
- let h=`<div class="sf-finance">
+ // 2026-09-08 v12刷新: モックアップの6枚KPIバー（売上予想・社員人件費・PA人件費・総人件費・
+ //   人件費率(色分け)・不足枠(色分け)）に合わせて6枚目「不足枠」を追加（値はneedDaysを流用）
+ const rateNum=parseFloat(rateText);
+ const rateCls=isNaN(rateNum)?"":rateNum<=30?"good":rateNum<=33?"warn":"bad";
+ let h=`<div class="sf-finance k6">
   <div class="card"><small>売上予想</small><b>${salesTotal?Math.round(salesTotal).toLocaleString()+"円":"未設定"}</b></div>
   <div class="card"><small>社員人件費</small><b>${Math.round(empCost).toLocaleString()}円</b></div>
   <div class="card"><small>PA人件費</small><b>${Math.round(paCost).toLocaleString()}円</b></div>
   <div class="card"><small>総人件費</small><b>${Math.round(totalCost).toLocaleString()}円</b></div>
-  <div class="card"><small>想定人件費率</small><b>${rateText}</b></div>
+  <div class="card ${rateCls}"><small>人件費率</small><b>${rateText}</b></div>
+  <div class="card ${needDays.length?"bad":"good"}"><small>不足枠</small><b>${needDays.length}</b></div>
  </div>`;
  if(unknownWage.size)h+=`<div class="sf-note">⚠️ ${unknownWage.size}名は勤怠実績・給与データがまだ無いため人件費の概算に含めていません（実績が貯まる、またはスマレジ給与明細が同期されると自動的に反映されます）</div>`;
  if(autoFallback.size)h+=`<div class="sf-note">🧮 ${autoFallback.size}名は店舗別の振り分けが未設定のため、スマレジ給与明細（課税対象額＋通勤手当）の半月分を自動概算で入れています。管理画面の「給与・インセンティブ配分」で店舗ごとに金額を設定すると、そちらが優先されます</div>`;
  // 2026-08-29続き: モックアップの「調整グリッド」レイアウト（シフト表＋右に調整が必要な日）
  const reqboxHtml=`<div class="card sf-reqbox"><b>調整が必要な日</b>${needDays.length?needDays.map(d=>`<div class="sf-reqday"><b>${sfFmtDateShort(d.ds)}</b><p>${esc(d.label)} ${d.short}名不足</p></div>`).join(""):'<p class="muted" style="margin-top:6px">現在、不足している時間帯はありません</p>'}</div>`;
  // A-1(2026-08-29) KPIカードから再利用できるよう、算出済みの数値も一緒に返す
- return {html:h,reqboxHtml,checkText:checkMsgs.length?checkMsgs.join("・"):"問題ありません",totalCost,salesTotal,rateText,needCount:needDays.length};
+ return {html:h,reqboxHtml,checkText:checkMsgs.length?checkMsgs.join("・"):"問題ありません",totalCost,salesTotal,rateText,needCount:needDays.length,needDates:[...new Set(needDays.map(d=>d.ds))]}; // needDatesは2026-09-08追加（v12「不足だけ表示」トグル用）
 }
 // ③確定: 公開後の未確認者一覧・再通知・変更申請の受付一覧（実装指示書_担当B_シフトUIv5_2026-08-24.md B-2）
 // A-3(2026-08-29) ③確定シフトをモックアップ同様の日付プライマリ表示に変更
@@ -3775,22 +3821,33 @@ async function sfManageView(){
    <option value="dinner" ${sfSlotFilter==="dinner"?"selected":""}>🌙 ディナー</option>
   </select>
  </div>`;
- // A-1: KPIカード5枚（提出済み／未提出／ヘルプ可能／不足時間帯／想定人件費率）。モックアップどおり
- //   カード下にバッジ（達成率・要確認等）を出す。「入力済み◯件／公開済み◯件」はバッジ側に統合
- const submitPct=people.length?Math.round((people.length-notSubmitted.length)/people.length*100):0;
- const laborRatePct=parseFloat(adj.rateText); // "28.4%"→28.4、"算出不可"→NaN
- h+=`<div class="sf-finance">
-  <div class="card"><small>提出済み</small><b>${people.length-notSubmitted.length} / ${people.length}</b><span class="sf-badge ${submitPct>=100?"green":submitPct>=80?"amber":"red"}">${submitPct}%</span></div>
-  <div class="card"><small>未提出</small><b style="color:${notSubmitted.length?"var(--sfred,#c0392b)":"inherit"}">${notSubmitted.length}</b>${notSubmitted.length?'<span class="sf-badge red">要確認</span>':'<span class="sf-badge green">なし</span>'}</div>
-  <div class="card"><small>ヘルプ可能</small><b>${helpCount}人</b><span class="sf-badge blue">他店舗含む</span></div>
-  <div class="card"><small>不足時間帯</small><b style="color:${adj.needCount?"var(--sfamber,#b58a00)":"inherit"}">${adj.needCount}</b>${adj.needCount?'<span class="sf-badge amber">要調整</span>':'<span class="sf-badge green">充足</span>'}</div>
-  <div class="card"><small>想定人件費率</small><b>${adj.rateText}</b>${isNaN(laborRatePct)?"":`<span class="sf-badge ${laborRatePct<=30?"green":laborRatePct<=33?"amber":"red"}">${laborRatePct<=30?"基準内":laborRatePct<=33?"やや高め":"要注意"}</span>`}</div>
- </div>
- <div class="muted" style="font-size:11px;margin:-6px 0 8px">入力済み${enteredCount}件／公開済み${publishedCount}件</div>`;
- if(notSubmitted.length)h+=`<div class="card" style="border-color:#b58a00"><b>⚠️ 未提出（1日も入力なし）</b>: ${notSubmitted.map(u=>esc(u.name)+(u.line_user_id?"":"（⚠️LINE未連携）")).join("・")}<button class="btn sm sub" id="sfmg-notify-unsubmitted" style="margin-top:6px">🔔 未提出者に通知</button></div>`;
+ // 2026-09-08 v12刷新: ダッシュボードタブ専用のKPI5枚（指示書§2.3のユーザー指定5項目
+ //   ＝提出済み／未提出／必要人数との差(不足枠)／予定人件費／スマレジ未反映）。
+ //   以前は全タブ共通で表示していたが、モックアップに合わせてダッシュボードタブだけの表示にした
+ //   （②調整タブは既存のadj.html＝6枚KPIバーの方をそのまま使う）
+ if(sfMgStep==="dashboard"){
+  const submitPct=people.length?Math.round((people.length-notSubmitted.length)/people.length*100):0;
+  const smaregiUnsynced=(shifts||[]).filter(s=>s.status==="published"&&s.smaregi_sync_status==="error").length;
+  h+=`<div class="sf-finance">
+   <div class="card good"><small>提出済み</small><b>${people.length-notSubmitted.length} / ${people.length}</b><span class="sf-badge ${submitPct>=100?"green":submitPct>=80?"amber":"red"}">${submitPct}%</span></div>
+   <div class="card ${notSubmitted.length?"bad":"good"}"><small>未提出</small><b>${notSubmitted.length}名</b>${notSubmitted.length?'<button class="btn sm sub" id="sfmg-notify-unsubmitted" style="margin-top:4px;padding:4px 8px;font-size:10px">🔔 LINE通知</button>':'<span class="sf-badge green">なし</span>'}</div>
+   <div class="card ${adj.needCount?"bad":"good"}"><small>必要人数との差</small><b>${adj.needCount}枠</b>${adj.needCount?'<span class="sf-badge red">不足</span>':'<span class="sf-badge green">充足</span>'}</div>
+   <div class="card"><small>予定人件費</small><b>${Math.round(adj.totalCost).toLocaleString()}円</b></div>
+   <div class="card ${smaregiUnsynced?"warn":"good"}"><small>スマレジ未反映</small><b>${smaregiUnsynced}件</b>${smaregiUnsynced?'<span class="sf-badge amber">要確認</span>':'<span class="sf-badge green">なし</span>'}</div>
+  </div>
+  <div class="muted" style="font-size:11px;margin:-6px 0 8px">入力済み${enteredCount}件／公開済み${publishedCount}件／ヘルプ可能${helpCount}人（他店舗含む）</div>`;
+  if(notSubmitted.length)h+=`<div class="card" style="border-color:#b58a00"><b>⚠️ 未提出（1日も入力なし）</b>: ${notSubmitted.map(u=>esc(u.name)+(u.line_user_id?"":"（⚠️LINE未連携）")).join("・")}</div>`;
+  // 「①希望確認」（半月・日別・出勤希望の確認）はタブを分けず、ダッシュボードの詳細としてそのまま統合表示
+  h+=await sfRequestStepHtml(dates,people,shByUserDate,filteredPresets,reqs||[],storeCountMap);
+  return h;
+ }
  // A-4(2026-08-29) ①②③の切替は上位のシフトタブ（shiftView）へ移動したため、ここでは内容だけ出す
  if(sfMgStep==="adjust"){
   h+=adj.html;
+  // 2026-09-08 v12刷新: モックアップの「要確認」通知バー＋「不足だけ表示」トグルを追加。
+  //   表示のフィルタのみ（データ取得・保存ロジックは変更しない）
+  h+=`<div class="sf-notice2 ${adj.needCount?"danger":"success"}"><span><b>要確認：</b> ${esc(adj.checkText)}</span>${adj.needCount?`<button class="btn sm sub" id="sfmg-shortonly">${sfShortageOnly?"すべて表示":"不足だけ表示"}</button>`:""}</div>`;
+  const tableDates=(sfShortageOnly&&adj.needDates&&adj.needDates.length)?dates.filter(ds=>adj.needDates.includes(ds)):dates;
   // 2026-08-29続き: モックアップの調整グリッド（シフト表＋右に調整が必要な日）に合わせる。
   //   「自動配置案」は自動割当エンジンが未実装のため準備中トースト、「ヘルプ候補」は
   //   実データ（sf_help_availability）のヘルプ可能一覧を開閉する（①希望確認と同じ仕組み）
@@ -3798,24 +3855,27 @@ async function sfManageView(){
    <div class="card">
     <div class="sf-section-head"><div><b>シフト調整</b><div class="muted" style="font-size:11px;margin-top:2px">希望シフトをベースに、不足・役割を調整</div></div>
      <div><button class="btn sm sub" id="sfmg-autoassign">自動配置案</button> <button class="btn sm sub" id="sfmg-helpcandidates">ヘルプ候補</button></div></div>
-    <div class="sf-shift-table-wrap">${sfShiftTableHtml(dates,people,shByUserDate)}</div>
+    <div class="sf-shift-table-wrap">${sfShiftTableHtml(tableDates,people,shByUserDate)}</div>
    </div>
    ${adj.reqboxHtml}
   </div>`;
-  h+=sfHeadcountTableHtml(dates,filteredPresets,reqs||[],people,shByUserDate);
+  h+=sfHeadcountTableHtml(tableDates,filteredPresets,reqs||[],people,shByUserDate);
   if(sfHelpCandidatesOpen){
    const {data:helpRows}=await sb.from("sf_help_availability").select("user_id,work_date,users!sf_help_availability_user_id_fkey(id,name,role)").gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]);
    const byUser={};(helpRows||[]).forEach(r=>{if(!r.users)return;const k=r.user_id;(byUser[k]=byUser[k]||{u:r.users,dates:[]}).dates.push(r.work_date)});
    const list=Object.values(byUser);
    h+=`<div class="card"><h3 style="margin:0 0 8px">🤝 ヘルプ候補（この期間・全社）</h3>${list.length?list.map(x=>`<div class="sf-todo"><b>${esc(x.u.name)}（${esc(ROLE_NAME[x.u.role]||x.u.role)}）</b><p>${x.dates.map(d=>sfFmtDateShort(d)).join("・")}</p></div>`).join(""):'<p class="muted">この期間、ヘルプ可能を宣言している人はいません</p>'}</div>`;
   }
+  // 2026-09-08 v12刷新: セル編集を画面下部の突然のカードではなくモーダルで開く（指示書§2.4指定）
+  h+=`<div class="sf-modal-bg ${sfEditDate?"on":""}" id="sfmg-editmodal"><div class="sf-modal">`;
   if(sfEditDate){
    const [uid,ds]=sfEditDate.split("|");
    const u=people.find(x=>x.id===uid);
    const {data:helpRow}=await sb.from("sf_help_availability").select("work_date").eq("user_id",uid).eq("work_date",ds).maybeSingle(); // A-6
-   h+=`<div class="card" id="sfmg-editpanel" style="border-color:var(--accent,#c8401f)"><h3>${esc(u?u.name:"")}｜${sfFmtDateShort(ds)}</h3>`+sfEditDayHtml(ds,presets||[],shByUserDate[uid+"|"+ds],uid,!!helpRow).replace('id="sf-daysave"','id="sfmg-daysave" data-sfmguid="'+uid+'"').replace('id="sf-daydelete"','id="sfmg-daydelete" data-sfmguid="'+uid+'"').replace('id="sf-dayclose"','id="sfmg-dayclose"');
-   h+=`</div>`;
+   h+=`<div class="sf-modal-head"><b>${esc(u?u.name:"")}｜${sfFmtDateShort(ds)}を編集</b><button class="btn sm sub" id="sfmg-dayclose">×</button></div>
+    <div class="sf-modal-body">`+sfEditDayHtml(ds,presets||[],shByUserDate[uid+"|"+ds],uid,!!helpRow).replace('id="sf-daysave"','id="sfmg-daysave" data-sfmguid="'+uid+'"').replace('id="sf-daydelete"','id="sfmg-daydelete" data-sfmguid="'+uid+'"').replace('<button class="btn sm sub" id="sf-dayclose">閉じる</button>','')+`</div>`;
   }
+  h+=`</div></div>`;
   h+=`<div class="sf-bottom-action"><div><b>公開前チェック（U8）</b><div class="muted">${esc(adj.checkText)}</div></div><div>
    ${enteredCount>0&&publishedCount<enteredCount?'<button class="btn" id="sfmg-publish">📣 このシフトで確定・公開（スマレジにも反映）</button>':""}
    <button class="btn sm sub" id="sfmg-import">🔄 スマレジと同期する</button></div></div>`;
@@ -3981,9 +4041,12 @@ function bindShiftPage(){
  // A-4(2026-08-29) 「提出／管理・公開／時間帯設定」の中間モードは廃止し、シフトタブ（shiftView）の
  //   横並びタイル（data-sftile）で直接sfMgStepを切り替えるようにした
  document.querySelectorAll("[data-sftile]").forEach(b=>b.onclick=()=>{sfMgStep=b.dataset.sftile;sfEditDate=null;render()});
+ // 2026-09-08 v12刷新: 黒バー配下のタブバー＋補助ボタン（data-sftop）。data-sftileと同じ考え方
+ document.querySelectorAll("[data-sftop]").forEach(b=>b.onclick=()=>{sfMgStep=b.dataset.sftop;sfEditDate=null;sfShortageOnly=false;page="shift";render()}); // page="shift"に統一（?page=actualから来た場合でも以後のタブ切替を正しく反映させるため
  // 2026-08-29続き（モックアップ準拠）: ②調整の「自動配置案」「ヘルプ候補」
  if($("sfmg-autoassign"))$("sfmg-autoassign").onclick=()=>toast("自動配置案は準備中の機能です。今は手動でセルを選んで調整してください");
  if($("sfmg-helpcandidates"))$("sfmg-helpcandidates").onclick=()=>{sfHelpCandidatesOpen=!sfHelpCandidatesOpen;render()};
+ if($("sfmg-shortonly"))$("sfmg-shortonly").onclick=()=>{sfShortageOnly=!sfShortageOnly;render()}; // 2026-09-08 v12刷新
  // 2026-08-31追加（B-17）: 有給申請
  (()=>{ // 開始日・終了日から日数を自動計算（半休等は手で上書きしてよい）
   const recalc=()=>{
@@ -7538,7 +7601,7 @@ async function resetFmt(){
 
 // ===== イベント =====
 // トップレベルのページ切替（nav・統合ポータルシェルからのpostMessageで共用）。各種モーダル的な状態をリセットしてから移動する
-function goToPage(p){page=p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;smBulkSel=new Set();smBulkPanel=false;smBulkResults=null;smStoreFilter="";smLinkFilter="";tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";chatReply=null;chatInvite=false;chatInviteSel=[];rcDetail=null;rcJobs=false;rcMsgs=null;rcDup=false;rcSimilar=[];rcPast=[];rcCal=false;rcCalDay=null;unlockedScoreKeys={};cashDetail=null;cashList=null;cashRecords=null;cashStoreFilter="";render()} // v2.6.76 予算ロック解除の状態もリセット／2026-09-08 現金手渡し画面の状態もリセット
+function goToPage(p){page=p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;smBulkSel=new Set();smBulkPanel=false;smBulkResults=null;smStoreFilter="";smLinkFilter="";tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";chatReply=null;chatInvite=false;chatInviteSel=[];rcDetail=null;rcJobs=false;rcMsgs=null;rcDup=false;rcSimilar=[];rcPast=[];rcCal=false;rcCalDay=null;unlockedScoreKeys={};cashDetail=null;cashList=null;cashRecords=null;cashStoreFilter="";if(p==="actual")sfMgStep="actual";render()} // v2.6.76 予算ロック解除の状態もリセット／2026-09-08 現金手渡し画面の状態もリセット／実績確認への遷移時はシフト画面の「実績・差異」タブを開く(v12刷新でshiftViewに統合)
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>goToPage(b.dataset.p));
 // 統合ポータルシェル(portal.html)からのタブ切替メッセージを受け取り、iframeをリロードせず画面だけ切り替える。
 // tori-dashboard向けに担当Fが用意したpostMessage({type:'nsPortalSetTab', tab:...})と同じ契約に合わせてある
@@ -7555,8 +7618,9 @@ window.addEventListener("message",e=>{
 function bindPage(){
  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=()=>{page=el.dataset.nav;detail=null;editId=null;render()});
  if(page==="check")bindCheckPage();
- if(page==="shift")bindShiftPage();
- if(page==="actual")bindActualPage();
+ // 2026-09-08 v12刷新: シフト画面に「実績・差異」タブを統合したため、page="shift"/"actual"どちらでも
+ //   両方の結線を行う（各bind関数は自分に関係するidが無ければ何もしないため安全）
+ if(page==="shift"||page==="actual"){bindShiftPage();bindActualPage()}
  if(page==="manuals")bindManualsPage(); // v2.6.59
  if(page==="cashhandoff")bindCashHandoffPage(); // 2026-09-08追加
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};

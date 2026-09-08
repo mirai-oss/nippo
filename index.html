@@ -6754,7 +6754,7 @@ function cashExportPrint(){
  <table><thead><tr><th>店舗</th><th>氏名</th><th>金額</th><th>引き出し</th><th>渡した側</th><th>受け取った側</th><th>受け渡し完了</th></tr></thead><tbody>
  ${rows.map(r=>`<tr><td>${esc(r.store)}</td><td>${esc(r.name)}</td><td>${r.amount.toLocaleString()}円</td><td>${esc(r.withdrawn)}</td><td>${esc(r.payer)}</td><td>${esc(r.receiver)}</td><td>${esc(r.completed)}</td></tr>`).join("")}
  </tbody></table>
- <script>window.onload=function(){window.print()}</script>
+ <script>window.onload=function(){window.print()}<\/script>
  </body></html>`);
  w.document.close();
 }

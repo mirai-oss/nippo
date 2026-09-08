@@ -3043,6 +3043,7 @@ let sfV12PeriodMode="half"; // 半月表示／1ヶ月表示
 let sfV12ActDetailMode="half"; // 実績・差異タブ専用: 半月/1ヶ月/日別/期間指定（2026-09-08追加。既存の日別/期間指定モードを残すため）
 let sfV12MultiMode=false,sfV12Selected=new Set(); // 複数選択モード
 let sfV12BulkOpen=false,sfV12UrgentOpen=false;
+let sfV12BulkMode="time"; // 2026-09-08追加: 一括変更モーダルが「時間」用か「役割」用かの切替
 let sfV12UrgentShowApps=null; // 2026-09-08追加: ダッシュボード「現在の急募」で応募者一覧を開いている急募のid
 let sfV12EditCell=null; // {uid,ds} セル編集モーダル用（既存のsfEditDateと役割は同じだが、店舗シフト表専用に持つ）
 let sfShortageOnly=false; // 2026-09-08 v12刷新: シフト調整タブ「不足だけ表示」トグル（表示用フィルタのみ・データ取得は変更しない）
@@ -7984,16 +7985,23 @@ async function sfV12EditModalHtml(){
  }
  return `<div class="modal-bg ${on?"on":""}" id="v12-editModal"><div class="modal">${inner}</div></div>`;
 }
-function sfV12BulkModalHtml(){
+async function sfV12BulkModalHtml(){
  const on=sfV12BulkOpen;
- return `<div class="modal-bg ${on?"on":""}" id="v12-bulkModal"><div class="modal">
-  <div class="modalhead"><b>一括変更</b><button class="btn modal-close" id="v12-bulkclose">×</button></div>
-  <div class="modalbody">
-    <div class="notice success"><span><b>${sfV12Selected.size}件</b>を一括変更します</span><span>元の希望・履歴は保持</span></div>
-    <div class="formgrid">
+ const isRole=sfV12BulkMode==="role";
+ let fields=`<div class="formgrid">
       <div class="field"><label>開始</label><input class="inp" id="v12-bulk-start" type="time" value="17:00"></div>
       <div class="field"><label>終了</label><input class="inp" id="v12-bulk-end" type="time" value="23:00"></div>
-    </div>
+    </div>`;
+ if(isRole&&on){
+  const {data:roles}=await sb.from("sf_store_roles").select("*").eq("store_id",sfMgStore).eq("is_active",true).order("sort_order");
+  fields=(roles&&roles.length)?`<div class="formgrid"><div class="field"><label>役割</label><select class="inp" id="v12-bulk-role"><option value="">未設定にする</option>${roles.map(r=>`<option value="${esc(r.name)}">${esc(r.name)}</option>`).join("")}</select></div></div>`
+   :`<p class="muted">この店舗にはまだ役割が登録されていません。先に「設定」タブの①役割設定から追加してください。</p>`;
+ }
+ return `<div class="modal-bg ${on?"on":""}" id="v12-bulkModal"><div class="modal">
+  <div class="modalhead"><b>${isRole?"役割":"時間"}一括変更</b><button class="btn modal-close" id="v12-bulkclose">×</button></div>
+  <div class="modalbody">
+    <div class="notice success"><span><b>${sfV12Selected.size}件</b>を一括変更します</span><span>元の希望・履歴は保持</span></div>
+    ${fields}
   </div>
   <div class="modalfoot"><button class="btn modal-close" id="v12-bulkcancel">キャンセル</button><button class="btn primary" id="v12-bulk-apply">選択セルへ一括反映</button></div>
  </div></div>`;
@@ -8056,7 +8064,7 @@ async function sfV12View(){
    <section class="view on">${body}</section>
   </main>
   ${await sfV12EditModalHtml()}
-  ${sfV12BulkModalHtml()}
+  ${await sfV12BulkModalHtml()}
   ${sfV12UrgentModalHtml()}
  </div>`;
 }
@@ -8299,18 +8307,30 @@ function bindSfV12Page(){
  // 複数選択・一括変更
  if($("v12-multimode"))$("v12-multimode").onclick=()=>{sfV12MultiMode=!sfV12MultiMode;render()};
  if($("v12-clearsel"))$("v12-clearsel").onclick=()=>{sfV12Selected=new Set();render()};
- if($("v12-bulktime")||$("v12-bulkrole"))["v12-bulktime","v12-bulkrole"].forEach(id=>{if($(id))$(id).onclick=()=>{if(!sfV12Selected.size){toast("セルを選択してください",true);return}sfV12BulkOpen=true;render()}});
+ if($("v12-bulktime"))$("v12-bulktime").onclick=()=>{if(!sfV12Selected.size){toast("セルを選択してください",true);return}sfV12BulkMode="time";sfV12BulkOpen=true;render()};
+ if($("v12-bulkrole"))$("v12-bulkrole").onclick=()=>{if(!sfV12Selected.size){toast("セルを選択してください",true);return}sfV12BulkMode="role";sfV12BulkOpen=true;render()};
  if($("v12-bulkclose"))$("v12-bulkclose").onclick=()=>{sfV12BulkOpen=false;render()};
  if($("v12-bulkcancel"))$("v12-bulkcancel").onclick=()=>{sfV12BulkOpen=false;render()};
  if($("v12-bulk-apply"))$("v12-bulk-apply").onclick=async()=>{
-  const start=$("v12-bulk-start").value,end=$("v12-bulk-end").value;
-  if(!start||!end){toast("開始・終了を入力してください",true);return}
-  const p=sfPeriodFromIdx(sfMgPeriodIdx);
   let okCount=0;
-  for(const key of sfV12Selected){
-   const [uid,ds]=key.split("|");
-   const ok=await sfSaveDay(uid,sfMgStore,ds,p.key,null,false,start,end,[]);
-   if(ok)okCount++;
+  if(sfV12BulkMode==="role"){
+   const roleEl=$("v12-bulk-role");
+   if(!roleEl){toast("先に役割を登録してください",true);return}
+   const roleName=roleEl.value||null;
+   for(const key of sfV12Selected){
+    const [uid,ds]=key.split("|");
+    const {error}=await sb.from("sf_shifts").update({role_name:roleName}).eq("user_id",uid).eq("work_date",ds);
+    if(!error)okCount++;
+   }
+  }else{
+   const start=$("v12-bulk-start").value,end=$("v12-bulk-end").value;
+   if(!start||!end){toast("開始・終了を入力してください",true);return}
+   const p=sfPeriodFromIdx(sfMgPeriodIdx);
+   for(const key of sfV12Selected){
+    const [uid,ds]=key.split("|");
+    const ok=await sfSaveDay(uid,sfMgStore,ds,p.key,null,false,start,end,[]);
+    if(ok)okCount++;
+   }
   }
   sfV12BulkOpen=false;sfV12Selected=new Set();sfV12MultiMode=false;
   toast(`${okCount}件を一括変更しました`);render();

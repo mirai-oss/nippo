@@ -7029,7 +7029,7 @@ async function sfV12LoadCommon(){
   sb.from("sf_help_availability").select("user_id,work_date").gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]),
   sb.from("sf_payroll_sync").select("user_id,fixed_salary_amount,commute_allowance").eq("year_month",payrollYm).in("user_id",idsForIn),
   sb.from("sf_payroll_allocations").select("user_id,kind,amount").eq("store_id",sfMgStore).eq("period_key",payrollYm).in("user_id",idsForIn),
-  sb.from("labor_cost_daily").select("user_id,work_date,worked_minutes,computed_cost,smaregi_estimate_cost").eq("store_id",sfMgStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1])
+  sb.from("labor_cost_daily").select("user_id,work_date,worked_minutes,computed_cost,smaregi_estimate_cost,clock_in,clock_out,tardy,early_leaving").eq("store_id",sfMgStore).gte("work_date",dates[0]).lte("work_date",dates[dates.length-1])
  ]);
  const storeCountMap={};(allUS||[]).forEach(r=>{storeCountMap[r.user_id]=(storeCountMap[r.user_id]||0)+1});
  const salesTargetByDate={};(targets||[]).forEach(r=>{salesTargetByDate[r.biz_date]=r.sales_target||0});
@@ -7040,8 +7040,10 @@ async function sfV12LoadCommon(){
  const payrollByUser={};(payrollRows||[]).forEach(r=>{payrollByUser[r.user_id]=r});
  const allocByUser={};(allocRows||[]).forEach(r=>{(allocByUser[r.user_id]=allocByUser[r.user_id]||[]).push(r)});
  const laborByUserDate={};(laborRows||[]).forEach(r=>{
-  const key=r.user_id+"|"+r.work_date;const a=laborByUserDate[key]||(laborByUserDate[key]={minutes:0,cost:0});
+  const key=r.user_id+"|"+r.work_date;const a=laborByUserDate[key]||(laborByUserDate[key]={minutes:0,cost:0,clockIn:null,clockOut:null,tardy:false,early:false});
   a.minutes+=r.worked_minutes||0;a.cost+=(r.computed_cost!=null?r.computed_cost:r.smaregi_estimate_cost)||0;
+  if(r.clock_in)a.clockIn=r.clock_in;if(r.clock_out)a.clockOut=r.clock_out; // 2026-09-08追加: 実際の打刻時刻（出退勤時間タブ用）
+  if(r.tardy)a.tardy=true;if(r.early_leaving)a.early=true;
  });
  const adj=sfAdjustStepHtml({dates,people,shByUserDate,presets:filteredPresets,reqs:reqs||[],storeCountMap,salesTotal,wageRates,unlinkedCount,payrollByUser,allocByUser});
  const helpCount=new Set((helpRowsPeriod||[]).map(r=>r.user_id)).size;
@@ -7091,6 +7093,7 @@ async function sfV12DashboardSection(){
   const helpMinMine=(storeCountMap[u.id]||1)>1?dates.reduce((a,ds)=>{const s=shByUserDate[u.id+"|"+ds];return a+(s&&!s.is_off?sfShiftMinutes(s):0)},0):0;
   return {u,submitted,onDeadline,rate,helpMine,helpMinMine};
  });
+ sfV12LastDashRows=contribRows; // CSV出力用
  let h=`<div class="toolbar">
   <div class="group"><select class="inp" id="v12-store" style="margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===sfMgStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select><select class="inp" id="v12-period" style="margin:0">${sfPeriodSelectHtml(sfMgPeriodIdx)}</select></div>
   <div class="group"><button class="btn" id="v12-dash-csv">CSV</button><button class="btn" id="v12-dash-cond">集計条件</button></div>
@@ -7225,6 +7228,7 @@ async function sfV12HrPanelHtml(ctx){
   });
   return {u,cells,dayoff,maxConsec,totalMin,storeCount:storeCountAll[u.id]||1};
  });
+ sfV12LastHrRows=rows; // CSV出力用
  const consecBad=rows.filter(r=>r.maxConsec>=7).length;
  const dayoffBad=rows.filter(r=>r.dayoff<REQUIRED_DAYOFF).length;
  const multiStore=rows.filter(r=>r.storeCount>1).length;
@@ -7276,6 +7280,7 @@ async function sfV12HrPanelHtml(ctx){
  return h;
 }
 let sfV12HrOnlyIssue=false;
+let sfV12LastDashRows=null,sfV12LastHrRows=null,sfV12LastActualCtx=null; // 2026-09-08追加: CSV出力用に直近の描画結果を保持
 
 // ---- 適正人員計算：日別売上・人件費・適正PA時間シミュレーション（店舗シフト表示のみ）----
 // 深夜割増の厳密な時間帯別加重は行わず、対象日にPAとして勤務する人の時給を単純平均する
@@ -7372,6 +7377,21 @@ function sfV12CellHtml(s){
  else cls="help"; // draft(未公開)はモックの「ヘルプ」水色枠を代用して目立たせる
  return `<td><div class="cell edit-cell ${cls}" data-v12cell="${s.user_id}|${s.work_date}"><div class="time">${label}</div></div></td>`;
 }
+// 2026-09-08追加: ヘルプ候補（他店舗ヘルプ可能を宣言している人・全社対象。旧sf-*実装と同じデータ）
+async function sfV12HelpCandidatesHtml(dates){
+ const {data:helpRows}=await sb.from("sf_help_availability").select("user_id,work_date,users!sf_help_availability_user_id_fkey(id,name,role)").gte("work_date",dates[0]).lte("work_date",dates[dates.length-1]);
+ const byUser={};(helpRows||[]).forEach(r=>{if(!r.users)return;const k=r.user_id;(byUser[k]=byUser[k]||{u:r.users,dates:[]}).dates.push(r.work_date)});
+ const list=Object.values(byUser);
+ return `<div class="card"><div class="cardhead"><h2>🤝 ヘルプ候補（この期間・全社）</h2></div><div style="padding:12px 16px">${list.length?list.map(x=>`<p style="margin:6px 0"><b>${esc(x.u.name)}</b>（${esc(ROLE_NAME[x.u.role]||x.u.role)}）: ${x.dates.map(d=>sfFmtDateShort(d)).join("・")}</p>`).join(""):'<p class="muted">この期間、ヘルプ可能を宣言している人はいません</p>'}</div></div>`;
+}
+// CSV出力（既存のexportEmployeeCsv等と同じ、その場でBlob生成してダウンロードする方式）
+function sfV12CsvDownload(filename,rows){
+ const csv=rows.map(row=>row.map(v=>`"${String(v==null?"":v).replace(/"/g,'""')}"`).join(",")).join("\r\n");
+ const blob=new Blob(["﻿"+csv],{type:"text/csv"});
+ const url=URL.createObjectURL(blob);
+ const a=document.createElement("a");a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();
+ setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
 async function sfV12AdjustSection(){
  const ctx=await sfV12LoadCommon();
  const {dates,people,shByUserDate,adj,filteredPresets,reqs,enteredCount,publishedCount}=ctx;
@@ -7420,6 +7440,7 @@ async function sfV12AdjustSection(){
    <div class="kpi ${adj.needCount?"bad":"good"}"><small>不足枠</small><b>${adj.needCount}</b></div>
  </div>
  <div class="notice ${hasIssue?"danger":"success"}"><span><b>要確認：</b> ${esc(adj.checkText)}</span>${adj.needCount?`<button class="btn" id="v12-shortonly">${sfShortageOnly?"すべて表示":"不足だけ表示"}</button>`:""}</div>
+ ${sfHelpCandidatesOpen?await sfV12HelpCandidatesHtml(dates):""}
  ${await sfV12LaborSimHtml(ctx)}
  <div class="bulkbar ${sfV12Selected.size?"on":""}" id="v12-bulkbar">
    <div><b><span id="v12-selcount">${sfV12Selected.size}</span>セル選択中</b>　複数セルをまとめて変更できます</div>
@@ -7511,6 +7532,7 @@ let sfV12ActSeg="hours"; // 勤務時間数／出退勤時間／予定との差�
 async function sfV12ActualSection(){
  const ctx=await sfV12LoadCommon();
  const {dates,people,shByUserDate,laborByUserDate,fulData,salesTargetByDate,p}=ctx;
+ sfV12LastActualCtx={dates,people,laborByUserDate}; // CSV出力用
  const pickable=sfPickableStores();
  const {data:actualsRows}=await sb.from("dash_sales_daily").select("biz_date,sales,cost,labor").eq("store_id",sfMgStore).gte("biz_date",dates[0]).lte("biz_date",dates[dates.length-1]);
  const salesActualByDate={};(actualsRows||[]).forEach(r=>{salesActualByDate[r.biz_date]={sales:r.sales||0,cost:r.cost||0,labor:r.labor||0}});
@@ -7570,9 +7592,14 @@ async function sfV12ActualSection(){
   </table>`;
  }else if(sfV12ActSeg==="fulfill"){
   h+=`</div><div class="grid2"><div class="side"><h3>叶え率ランキング</h3>${sfFulfillmentRankHtml(fulData)}</div><div class="side"><h3>叶え率一覧</h3>${sfFulfillmentTableHtml(fulData)}</div></div><div style="display:none">`;
- }else{ // times: 出退勤時間
+ }else{ // times: 出退勤時間（2026-09-08修正: シフト予定ではなく、スマレジタイムカードの実際の打刻(labor_cost_daily.clock_in/clock_out)を表示する）
   h+=`<table><thead><tr><th>従業員</th>${dates.map(ds=>`<th>${sfV12ShortDate(ds)}</th>`).join("")}</tr></thead><tbody>
-   ${people.map(u=>`<tr><td><div class="name">${esc(u.name)}</div></td>${dates.map(ds=>{const s=shByUserDate[u.id+"|"+ds];return s&&!s.is_off?`<td>${sfFmtTime(s.start_time)}<br>${sfFmtTime(s.end_time)}</td>`:"<td>—</td>"}).join("")}</tr>`).join("")}
+   ${people.map(u=>`<tr><td><div class="name">${esc(u.name)}</div></td>${dates.map(ds=>{
+    const lk=laborByUserDate[u.id+"|"+ds];const s=shByUserDate[u.id+"|"+ds];
+    if(!lk||(!lk.clockIn&&!lk.clockOut))return (s&&!s.is_off&&ds<today)?'<td class="err">打刻なし</td>':"<td>—</td>";
+    const cls=(lk.tardy||lk.early)?"warn":"";
+    return `<td class="${cls}">${lk.clockIn?sfFmtTime(lk.clockIn):"—"}<br>${lk.clockOut?sfFmtTime(lk.clockOut):"—"}</td>`;
+   }).join("")}</tr>`).join("")}
   </tbody></table>`;
  }
  h+=`</div></div>`;
@@ -7705,7 +7732,12 @@ function bindSfV12Page(){
  if($("v12-hr-onlyissue"))$("v12-hr-onlyissue").onclick=()=>{sfV12HrOnlyIssue=!sfV12HrOnlyIssue;render()};
  if($("v12-hr-dayoffcfg"))$("v12-hr-dayoffcfg").onclick=()=>toast("休日基準は現在、半月あたり4日の一律基準です。店舗ごとの個別設定は今後の対応予定です");
  if($("v12-hr-alertcfg"))$("v12-hr-alertcfg").onclick=()=>toast("勤務時間アラートの個別設定は今後の対応予定です");
- if($("v12-hr-csv"))$("v12-hr-csv").onclick=()=>toast("人事シフトのCSV出力は今後の対応予定です");
+ if($("v12-hr-csv"))$("v12-hr-csv").onclick=()=>{
+  if(!sfV12LastHrRows){toast("表示内容がありません",true);return}
+  const header=["従業員","区分","連勤","休日","時間(h)"];
+  const rows=sfV12LastHrRows.map(r=>[r.u.name,sfRoleTag(r.u).label,r.maxConsec,r.dayoff,(r.totalMin/60).toFixed(1)]);
+  sfV12CsvDownload(`人事シフト_${sfMgStore}.csv`,[header,...rows]);
+ };
  // ダッシュボード
  if($("v12-notify-unsubmitted"))$("v12-notify-unsubmitted").onclick=async()=>{
   const b=$("v12-notify-unsubmitted");b.disabled=true;
@@ -7721,7 +7753,12 @@ function bindSfV12Page(){
   for(const u of targets){if(!u.line_user_id)continue;const r=await lineFn({action:"push_user",user_id:u.id,text:`${u.name}さん\n\nシフト提出のリマインドです。「${p.label}」期間のシフトがまだ提出されていません。`});if(r&&r.ok)sent++}
   b.disabled=false;toast(`通知を送りました: ${sent}名`);
  };
- if($("v12-dash-csv"))$("v12-dash-csv").onclick=()=>toast("ダッシュボードのCSV出力は今後の対応予定です");
+ if($("v12-dash-csv"))$("v12-dash-csv").onclick=()=>{
+  if(!sfV12LastDashRows){toast("表示内容がありません",true);return}
+  const header=["従業員","提出","期限内","叶え率","ヘルプ回数","ヘルプ時間(h)"];
+  const rows=sfV12LastDashRows.map(r=>[r.u.name,r.submitted?"提出済":"未提出",r.onDeadline==null?"—":r.onDeadline?"○":"×",r.rate==null?"—":r.rate+"%",r.helpMine,(r.helpMinMine/60).toFixed(1)]);
+  sfV12CsvDownload(`シフトダッシュボード_${sfMgStore}.csv`,[header,...rows]);
+ };
  if($("v12-dash-cond"))$("v12-dash-cond").onclick=()=>toast("集計条件の設定は今後の対応予定です");
  // 急募
  const openUrgent=()=>{sfV12UrgentOpen=true;render()};
@@ -7750,7 +7787,7 @@ function bindSfV12Page(){
  });
  // シフト調整
  if($("v12-autoassign"))$("v12-autoassign").onclick=()=>toast("自動配置案は準備中の機能です。今は手動でセルを選んで調整してください");
- if($("v12-helpcand"))$("v12-helpcand").onclick=()=>{sfHelpCandidatesOpen=!sfHelpCandidatesOpen;toast(sfHelpCandidatesOpen?"ヘルプ候補を表示する機能は準備中です":"");};
+ if($("v12-helpcand"))$("v12-helpcand").onclick=()=>{sfHelpCandidatesOpen=!sfHelpCandidatesOpen;render()};
  if($("v12-publish"))$("v12-publish").onclick=async()=>{
   if(!confirm("この期間のシフトを公開します。スマレジ・タイムカードにも反映されます。よろしいですか？"))return;
   const p=sfPeriodFromIdx(sfMgPeriodIdx);
@@ -7893,7 +7930,17 @@ function bindSfV12Page(){
  };
  // 実績・差異
  document.querySelectorAll("[data-v12act]").forEach(d=>d.onclick=()=>{sfV12ActSeg=d.dataset.v12act;render()});
- if($("v12-act-csv"))$("v12-act-csv").onclick=()=>toast("CSV出力は今後の対応予定です");
+ if($("v12-act-csv"))$("v12-act-csv").onclick=()=>{
+  if(!sfV12LastActualCtx){toast("表示内容がありません",true);return}
+  const {dates,people,laborByUserDate}=sfV12LastActualCtx;
+  const header=["従業員",...dates.map(sfV12ShortDate),"計(h)"];
+  const rows=people.map(u=>{
+   let tot=0;
+   const cells=dates.map(ds=>{const lk=laborByUserDate[u.id+"|"+ds];if(!lk||!lk.minutes)return "";tot+=lk.minutes;return (lk.minutes/60).toFixed(1)});
+   return [u.name,...cells,(tot/60).toFixed(1)];
+  });
+  sfV12CsvDownload(`実績_勤務時間数_${sfMgStore}.csv`,[header,...rows]);
+ };
  // 2026-09-08追加: スマレジタイムカードの実績同期を実装。既存のsmaregi-attendance-sync
  //   （ns-portal・データ基盤担当作成、日次バッチと同じEdge Function）をそのまま呼ぶ。
  //   全社員ぶんを対象に取得する関数のため、今見ている期間(date_from/date_to)だけ渡す。

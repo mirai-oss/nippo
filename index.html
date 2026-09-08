@@ -866,7 +866,7 @@ const openApplicant=new URLSearchParams(location.search).get("a"); // v2.6.64 �
 // 例: ?page=shift で開けば、ホームではなくシフト画面が最初から開く。埋め込みiframe用のためURLはクリアしない
 const deepLinkPage=new URLSearchParams(location.search).get("page");
 const embedMode=new URLSearchParams(location.search).get("embed")==="1"; // v2.7 統合ポータルシェルのiframe埋め込み用。自前のnav・headerを隠す（担当F依頼・tori-dashboardのembed=1と同じ考え方）
-const DEEPLINK_PAGES=["home","write","weekly","list","check","shift","actual","tasks","chat","manuals","recruit","admin","settings","dash"]; // render()が分岐できるpage値のみ許可
+const DEEPLINK_PAGES=["home","write","weekly","list","check","shift","actual","tasks","chat","manuals","recruit","admin","settings","dash","cashhandoff"]; // render()が分岐できるpage値のみ許可（2026-09-08 現金手渡し画面を追加。統合ポータル(portal.html)のnippoPage("cashhandoff")リンクからここへ来る）
 const GAIHAN_HIDDEN_PAGES=["check","chat","weekly","manuals","shift"]; // 1533行目付近のnav非表示ロジックと同じ基準（外販には深リンクさせない）
 // v2.7 統合ポータルシェル（ns-portal）とのSSO。同一Supabaseプロジェクト・同一オリジンなので、
 // ポータル側が保存しているトークンでnippo自身のセッションを黙って復元できる（担当F調査・依頼分）。

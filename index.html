@@ -201,10 +201,10 @@
   .sf-finance .card{padding:11px 13px;margin-bottom:0;min-height:70px}
   .sf-finance small{display:block;color:#8a93a2;font-size:11px}
   .sf-finance b{font-size:19px;display:block;margin-top:4px}
-  .sf-finance .card.good{border-left:3px solid var(--sfgreen)}
-  .sf-finance .card.bad{border-left:3px solid var(--sfred)}
-  .sf-finance .card.warn{border-left:3px solid var(--sfamber)}
-  .sf-finance .card.purple{border-left:3px solid var(--sfpurple)}
+  .sf-theme .card.good{border-left:3px solid var(--sfgreen)}
+  .sf-theme .card.bad{border-left:3px solid var(--sfred)}
+  .sf-theme .card.warn{border-left:3px solid var(--sfamber)}
+  .sf-theme .card.purple{border-left:3px solid var(--sfpurple)}
   .sf-finance.k6{grid-template-columns:repeat(2,1fr)}
   .sf-adjust-grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px}
   .sf-shift-table-wrap{overflow:auto;padding:14px}
@@ -261,7 +261,9 @@
    .sf-stepnav{grid-template-columns:repeat(3,1fr)}
   }
   @media(max-width:1099px){
-   .sf-layout,.sf-adjust-grid,.sf-confirmed-layout,.sf-two-col{grid-template-columns:1fr}
+   /* 2026-09-08 v12刷新中に発見: 素の1frは自動最小サイズがauto(content基準)のため、内側にsf-halfgrid等の
+      広いコンテンツがあるとグリッド全体が横に伸びてしまう不具合を修正（minmax(0,1fr)にして最小0に固定） */
+   .sf-layout,.sf-adjust-grid,.sf-confirmed-layout,.sf-two-col{grid-template-columns:minmax(0,1fr)}
    .sf-sidepanel{position:static}
    .sf-actual-top{grid-template-columns:repeat(2,1fr)}
   }
@@ -3095,25 +3097,44 @@ async function sfSubmitView(){
  }).join("")}</div>`;
  if(unconfirmedCount>0)h+=`<div class="card" style="border-color:var(--blue)"><b>✅ 確定シフトの確認</b><p class="muted" style="margin:6px 0 0">この期間の確定シフトを確認したら、下のボタンを押してください。</p><button class="btn sm" id="sf-confirm" style="margin-top:8px">確認しました</button></div>`;
  if(!presets||!presets.length)h+=`<p class="muted" style="margin-top:10px">この店舗の時間帯設定がまだありません。店長・本部が「⏱ 時間帯設定」から用意します。</p>`;
- h+=`<div class="card">`;
- dates.forEach(ds=>{
-  const s=shMap[ds];
-  const locked=isPastDeadline||anyPublished;
-  const label=s?(s.is_off?"🌙 休み":`${sfFmtTime(s.start_time)}〜${sfFmtTime(s.end_time)}`):"未入力";
-  const cr=crMap[ds];
-  const crBadge=cr?`<br><span class="badge ${cr.status==="pending"?"":"g"}" style="font-size:9px">${cr.status==="pending"?"変更申請中":cr.status==="resolved"?"変更対応済み":"変更申請却下"}</span>`:"";
-  const helpBadge=helpSet.has(ds)?` <span class="muted" title="他店舗のヘルプにも入れます">🤝</span>`:""; // A-6
-  const isBoost=!!boostByDate[ds]; // B-3
-  h+=`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line,#eee);${isBoost?"background:#fffbeb":""}">
-   <div style="width:64px;flex-shrink:0">${isBoost?"🔥 ":""}${sfFmtDateShort(ds)}</div>
-   <div style="flex:1">${esc(label)}${helpBadge}${crBadge}</div>
-   ${locked?(s&&s.status==="published"&&!cr?`<button class="btn sm sub" data-sfchange="${ds}">🔁変更希望</button>`:""):`<button class="btn sm sub" data-sfedit="${ds}">編集</button>`}
-  </div>`;
- });
- h+=`</div>`;
+ // 2026-09-08 v12刷新: モックアップの「半月カレンダー＋右側の編集パネル」レイアウトに変更
+ //   （従来の縦一列リストから変更。日ごとの状態・操作(data-sfedit/data-sfchange)は無改修）
+ const locked=isPastDeadline||anyPublished;
+ const enteredCount=dates.filter(ds=>shMap[ds]).length;
+ h+=`<div class="sf-layout">
+  <div class="card">
+   <div class="sf-section-head"><b>半月カレンダー</b><div class="muted" style="font-size:11px;margin-top:2px">日付をタップすると編集できます</div></div>
+   <div style="padding:14px"><div class="sf-halfgrid">
+   ${dates.map(ds=>{
+    const s=shMap[ds];
+    const label=s?(s.is_off?"🌙 休み":`${sfFmtTime(s.start_time)}〜${sfFmtTime(s.end_time)}`):"未入力";
+    const cr=crMap[ds];
+    const helpTag=helpSet.has(ds)?'<span class="sf-tag help">🤝ヘルプ可</span>':"";
+    const crTag=cr?`<span class="sf-tag ${cr.status==="pending"?"short":"ok"}">${cr.status==="pending"?"変更申請中":cr.status==="resolved"?"変更対応済み":"変更申請却下"}</span>`:"";
+    const isBoost=!!boostByDate[ds];
+    const clickable=locked?(s&&s.status==="published"&&!cr):true;
+    const attr=clickable?(locked?`data-sfchange="${ds}"`:`data-sfedit="${ds}"`):"";
+    const selected=ds===sfEditDate||ds===sfChangeDate;
+    return `<div class="sf-day ${selected?"active":""} ${isBoost?"sf-boost":""}" ${attr} style="${clickable?"cursor:pointer":"cursor:default;opacity:.7"}">
+     <b>${isBoost?"🔥 ":""}${sfFmtDateShort(ds)}</b>
+     <div class="sf-coverage"><strong style="font-size:12px">${esc(label)}</strong>
+      <div class="sf-tags">${crTag}${helpTag}</div></div>
+    </div>`;
+   }).join("")}
+   </div></div>
+  </div>
+  <div class="card sf-sidepanel"><div style="padding:14px">
+    ${sfChangeDate?sfChangeRequestHtml(sfChangeDate,shMap[sfChangeDate]).replace(/^<div class="card"[^>]*>/,"<div>").replace(/<h3>[^<]*<\/h3>/,`<h3 style="margin:0 0 8px">${sfFmtDateShort(sfChangeDate)}の変更希望</h3>`):sfEditDate?`<h3 style="margin:0 0 8px">${sfFmtDateShort(sfEditDate)}を編集</h3>`+sfEditDayHtml(sfEditDate,presets||[],shMap[sfEditDate],me.id,helpSet.has(sfEditDate)).replace(/^<div class="card"[^>]*>/,"<div>").replace(/<h3>[^<]*<\/h3>/,""):`<h3 style="margin:0">編集する日を選んでください</h3><p class="muted" style="font-size:12px">左のカレンダーの日付をタップすると、ここで時間・役割を入力できます</p>`}
+   <div style="margin-top:16px;border-top:1px solid var(--line,#eee);padding-top:12px">
+    <h3 style="margin:0">提出状況</h3>
+    <p style="margin:8px 0 0;font-size:13px">入力済 ${enteredCount} / ${dates.length}日</p>
+    <p style="margin:4px 0 0;font-size:13px">未入力 ${dates.length-enteredCount}日</p>
+    <p style="margin:4px 0 0;font-size:13px">提出期限 ${p.deadline.getMonth()+1}/${p.deadline.getDate()}</p>
+    <p style="margin:8px 0 0">${me.line_user_id?'<span class="sf-badge green">LINE連携済</span>':'<span class="sf-badge red">LINE未連携</span>'}</p>
+   </div>
+  </div></div>
+ </div>`;
  if(!isPastDeadline&&!anyPublished&&presets&&presets.length)h+=`<button class="btn" id="sf-submitall" style="margin-top:10px">✅ この内容で提出する</button>`;
- if(sfEditDate)h+=sfEditDayHtml(sfEditDate,presets||[],shMap[sfEditDate],me.id,helpSet.has(sfEditDate));
- if(sfChangeDate)h+=sfChangeRequestHtml(sfChangeDate,shMap[sfChangeDate]);
  return h;
 }
 // B-2 ③ 公開後の変更希望フォーム（受付のみ。反映は店長・本部が代理編集＋再公開で対応）
@@ -3617,14 +3638,17 @@ function sfAttendanceIssuesHtml(dates,people,shByUserDate,laborByUserDate,storeI
  });
  const canManage=sfCanManage(storeId);
  const pending=(corrections||[]).filter(c=>c.status==="pending");
- let h=`<div class="card"><h3 style="margin:0 0 8px">⏰ 遅刻・早退・欠勤（自動判定）</h3>`;
+ // 2026-09-08 v12刷新: 指示書§2.5「異常を優先表示・色付き（黄/赤）」に対応。
+ //   欠勤=赤・遅刻早退=黄で行全体に背景色を付け、正常時（0件）は従来どおり白背景のまま
+ let h=`<div class="card ${issues.length?"":"good"}"><h3 style="margin:0 0 8px">⏰ 遅刻・早退・欠勤（自動判定）</h3>`;
  if(!issues.length){
   h+=`<p class="muted" style="margin:0">対象期間・対象店舗で検知した遅刻・早退・欠勤はありません</p>`;
  }else{
   h+=issues.map(is=>{
    const mine=is.u.id===me.id;
    const already=(corrections||[]).find(c=>c.user_id===is.u.id&&c.work_date===is.ds&&c.kind===is.kind);
-   return `<div class="row" style="cursor:default"><span><b>${esc(is.u.name)}</b>　${sfFmtDateShort(is.ds)}　<span class="badge" style="background:${is.kind==="absence"?"#c0392b":"#d97706"}">${CORRECTION_KIND_LABEL[is.kind]}</span>${already?` <span class="muted" style="font-size:11px">（申請${already.status==="pending"?"中":already.status==="approved"?"承認済み":"却下"}）</span>`:""}</span>
+   const isAbsence=is.kind==="absence";
+   return `<div class="row" style="cursor:default;background:${isAbsence?"var(--sfredsoft,#fff0ef)":"var(--sfambersoft,#fff7e5)"};border-radius:2px;margin-bottom:4px;padding:8px"><span><b>${esc(is.u.name)}</b>　${sfFmtDateShort(is.ds)}　<span class="sf-badge ${isAbsence?"red":"amber"}">${CORRECTION_KIND_LABEL[is.kind]}</span>${already?` <span class="muted" style="font-size:11px">（申請${already.status==="pending"?"中":already.status==="approved"?"承認済み":"却下"}）</span>`:""}</span>
     ${mine&&!already?`<button class="btn sm sub" data-sfcorr-open="${is.u.id}|${is.ds}|${is.kind}" style="margin:0">修正申請</button>`:""}</div>`;
   }).join("");
  }
@@ -3670,14 +3694,14 @@ function arComputeRange(){
 }
 async function actualReportView(){
  const pickable=sfPickableStores();
- if(!pickable.length)return `<h2>📊 実績確認</h2><p class="muted">確認できる店舗がありません。</p>`;
+ if(!pickable.length)return `<p class="muted">確認できる店舗がありません。</p>`;
  if(!arStore||!pickable.find(s=>s.id===arStore))arStore=pickable[0].id;
  if(!arMonth){const t=new Date();arMonth=t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0");arHalf=t.getDate()<=15?"A":"B"}
  if(!arDate)arDate=todayStr();
  if(!arFrom){const t=new Date();const f=new Date(t.getFullYear(),t.getMonth(),t.getDate()-14);arFrom=sfFmtDate(f);arTo=todayStr()}
  const range=arComputeRange();
- let h=`<h2>📊 実績確認</h2>
- <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+ // 2026-09-08 v12刷新: タブバー側で「実績・差異」と表示されるため、独自の見出し(<h2>)は削除
+ let h=`<div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
   <select class="inp" id="ar-store" style="flex:1;min-width:140px;margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===arStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select>
  </div>
  <div class="seg" id="ar-mode">
@@ -3730,8 +3754,10 @@ async function actualReportView(){
  });
  const salesTargetByDate={};(targets||[]).forEach(r=>{salesTargetByDate[r.biz_date]=r.sales_target||0});
  const salesActualByDate={};(actualsRows||[]).forEach(r=>{salesActualByDate[r.biz_date]={sales:r.sales||0,cost:r.cost||0,labor:r.labor||0}});
- h+=sfActualStepHtml({dates,people,shByUserDate,laborByUserDate,salesTargetByDate,salesActualByDate,wageRates});
+ // 2026-09-08 v12刷新: 指示書§2.5「異常を優先表示」に対応し、遅刻・早退・欠勤の一覧を
+ //   KPI・サブタブより前（画面の一番目立つ位置）に出すよう順序を入れ替えた（中身は無改修）
  h+=sfAttendanceIssuesHtml(dates,people,shByUserDate,laborByUserDate,arStore,corrections||[]); // B-1(2026-08-29)
+ h+=sfActualStepHtml({dates,people,shByUserDate,laborByUserDate,salesTargetByDate,salesActualByDate,wageRates});
  return h;
 }
 function bindActualPage(){
@@ -3881,6 +3907,10 @@ async function sfManageView(){
    <button class="btn sm sub" id="sfmg-import">🔄 スマレジと同期する</button></div></div>`;
  }else if(sfMgStep==="confirmed"){
   const {data:changeReqs}=await sb.from("sf_change_requests").select("*").eq("store_id",sfMgStore).eq("period_key",p.key).order("created_at",{ascending:false});
+  // 2026-09-08 v12刷新: モックアップの「公開済み」通知バーを追加（既存算出済みのpublishedCount/peopleを流用）
+  h+=publishedCount>0
+   ?`<div class="sf-notice2 success"><span><b>公開済：</b> ${esc(p.publish.getMonth()+1)}/${esc(p.publish.getDate())}公開　${people.length}名中${publishedCount}件</span></div>`
+   :`<div class="sf-notice2"><span>この期間はまだ公開されていません（②シフト調整タブから確定・公開してください）</span></div>`;
   // A-3(2026-08-29) モックアップ同様の日付プライマリ表示／続き: 2カラムのconfirmed-layoutに合わせる
   h+=`<div class="sf-confirmed-layout">
    ${sfConfirmedCalendarHtml(dates,people,shByUserDate,storeCountMap)}

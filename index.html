@@ -198,7 +198,7 @@
   .sf-role-summary{border-top:2px solid var(--line);margin:0 14px 14px}
   .sf-role-row{display:flex;justify-content:space-between;padding:6px 2px;border-bottom:1px solid #f0f2f5;font-size:12px}
   .sf-finance{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px}
-  .sf-finance .card{padding:11px 13px;margin-bottom:0;min-height:70px}
+  .sf-finance .card{padding:11px 13px;margin-bottom:0;min-height:70px;box-shadow:0 1px 3px rgba(20,30,40,.06);border-color:#ccd2d7}
   .sf-finance small{display:block;color:#8a93a2;font-size:11px}
   .sf-finance b{font-size:19px;display:block;margin-top:4px}
   .sf-theme .card.good{border-left:3px solid var(--sfgreen)}
@@ -3872,7 +3872,11 @@ async function sfManageView(){
   h+=adj.html;
   // 2026-09-08 v12刷新: モックアップの「要確認」通知バー＋「不足だけ表示」トグルを追加。
   //   表示のフィルタのみ（データ取得・保存ロジックは変更しない）
-  h+=`<div class="sf-notice2 ${adj.needCount?"danger":"success"}"><span><b>要確認：</b> ${esc(adj.checkText)}</span>${adj.needCount?`<button class="btn sm sub" id="sfmg-shortonly">${sfShortageOnly?"すべて表示":"不足だけ表示"}</button>`:""}</div>`;
+  // 2026-09-08修正: 「不足枠」だけでなく「スマレジ未連携」等の要確認メッセージがある場合も
+  //   危険色(黄/赤)にする（従来はneedCountだけを見ていたため、不足0件だがスマレジ未連携ありの
+  //   ときに緑=success表示になってしまっていた）
+  const hasIssue=adj.checkText!=="問題ありません";
+  h+=`<div class="sf-notice2 ${hasIssue?"danger":"success"}"><span><b>要確認：</b> ${esc(adj.checkText)}</span>${adj.needCount?`<button class="btn sm sub" id="sfmg-shortonly">${sfShortageOnly?"すべて表示":"不足だけ表示"}</button>`:""}</div>`;
   const tableDates=(sfShortageOnly&&adj.needDates&&adj.needDates.length)?dates.filter(ds=>adj.needDates.includes(ds)):dates;
   // 2026-08-29続き: モックアップの調整グリッド（シフト表＋右に調整が必要な日）に合わせる。
   //   「自動配置案」は自動割当エンジンが未実装のため準備中トースト、「ヘルプ候補」は

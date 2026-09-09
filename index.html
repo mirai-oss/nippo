@@ -6896,7 +6896,15 @@ async function cashHandoffDetailView(){
   h+=`<button class="btn" id="cash-complete">✅ 両者確認済み・この受け渡しを完了にする</button>`;
  }
  if(rec&&rec.completed_at){
-  h+=`<div class="info">🎉 ${new Date(rec.completed_at).toLocaleString("ja-JP")} に完了しました。給与仕訳・会計ダッシュボードの状態も「振込完了」に更新されています。</div>`;
+  // 2026-09-09追加: ユーザー要望「間違えて手渡し。サイン完了したときに取り消しできるように
+  // してほしい」に対応。完了フラグ（completed_at）だけを取り消すボタンを追加（引き出し確認の
+  // 取り消し＝cash-withdraw-undoと同じ考え方）。給与仕訳側の「振込完了」（payroll_journal_records.
+  // paid_at）や本部タスクのチェックは、この操作では自動的には戻らない（会計側の操作を伴うため、
+  // ここ（現場・店長側の画面）から直接いじらず、必要なら給与仕訳タブ側の「振込完了を取り消す」を
+  // 別途使ってもらう設計）。その旨をボタンの下に案内文として明記する
+  h+=`<div class="info">🎉 ${new Date(rec.completed_at).toLocaleString("ja-JP")} に完了しました。給与仕訳・会計ダッシュボードの状態も「振込完了」に更新されています。</div>
+  <button class="btn sm sub" id="cash-complete-undo" style="margin-top:6px">↩️ 完了を取り消す（間違えて完了にした場合）</button>
+  <p class="muted" style="font-size:11px;margin:4px 0 0">※ここでの取り消しは「サイン完了」の状態だけを戻します。給与仕訳側で既に「振込完了」扱いになっている場合は、そちらは別途、給与仕訳タブの「振込完了を取り消す」から取り消してください。</p>`;
  }
  return h;
 }
@@ -6970,6 +6978,20 @@ function bindCashHandoffPage(){
    if(error)throw error;
    await refreshCashRecord(cashDetail,cashMonth);
    toast("引き出し確認を取り消しました");
+   render();
+  }catch(e){toast("取り消しエラー: "+(e&&e.message?e.message:e),true)}
+ };
+ // 2026-09-09追加: 完了（サイン完了）の取り消し。completed_atだけを戻す（給与仕訳側のpaid_atや
+ // 本部タスクのチェックはここでは触らない＝画面上の案内文どおり）
+ if($("cash-complete-undo"))$("cash-complete-undo").onclick=async()=>{
+  if(!confirm("この受け渡しの「完了」を取り消しますか？\n（渡した側・受け取った側それぞれの確認・サインは残ります。「両者確認済み・完了処理待ち」の状態に戻ります）"))return;
+  try{
+   const {error}=await sb.from("sf_cash_handoff_signatures").update({
+    completed_at:null,updated_at:new Date().toISOString()
+   }).eq("user_id",cashDetail).eq("year_month",cashMonth);
+   if(error)throw error;
+   await refreshCashRecord(cashDetail,cashMonth);
+   toast("完了を取り消しました");
    render();
   }catch(e){toast("取り消しエラー: "+(e&&e.message?e.message:e),true)}
  };

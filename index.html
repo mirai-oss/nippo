@@ -3047,6 +3047,7 @@ let sfV12BulkMode="time"; // 2026-09-08追加: 一括変更モーダルが「時
 let sfV12UrgentShowApps=null; // 2026-09-08追加: ダッシュボード「現在の急募」で応募者一覧を開いている急募のid
 let sfV12GanttOpenAdjust=false,sfV12GanttOpenActual=false,sfV12GanttDate=null; // 2026-09-08追加: 日別ガンチャート表示
 let sfV12SettingsApplyStores=null; // 2026-09-09追加: 設定タブ「適用先店舗（複数選択可）」。nullなら未初期化(sfV12SettingsSectionで現在店舗のみに初期化)
+let sfV12RoleEditId=null,sfV12HcEditId=null,sfV12PresetEditId=null; // 2026-09-09追加: 設定タブの各一覧「編集」中の行id
 let sfV12EditCell=null; // {uid,ds} セル編集モーダル用（既存のsfEditDateと役割は同じだが、店舗シフト表専用に持つ）
 let sfShortageOnly=false; // 2026-09-08 v12刷新: シフト調整タブ「不足だけ表示」トグル（表示用フィルタのみ・データ取得は変更しない）
 let sfSlotFilter="all"; // B-2(2026-08-29) "all"|"lunch"|"dinner"。①希望確認・②調整の絞り込み
@@ -7090,11 +7091,14 @@ function sfV12WeekdayColor(ds){
  if(dow===6)return "#2a5da0"; // 土曜=青
  return null; // 平日=既定（黒）のまま
 }
-function sfV12ShortDate(ds){ // 表ヘッダー用の短い日付（モックの「1 火」形式）。曜日色・祝日名を付与
+function sfV12ShortDatePlain(ds){ // 2026-09-09追加: CSV出力用（HTMLタグを含まないプレーンテキスト版）
  const d=new Date(ds+"T00:00:00");const w=["日","月","火","水","木","金","土"][d.getDay()];
+ return d.getDate()+" "+w;
+}
+function sfV12ShortDate(ds){ // 表ヘッダー用の短い日付（モックの「1 火」形式）。曜日色・祝日名を付与（画面表示専用。CSV出力にはsfV12ShortDatePlainを使うこと）
  const color=sfV12WeekdayColor(ds);
  const hol=sfV12JpHolidayName(ds);
- const label=d.getDate()+" "+w;
+ const label=sfV12ShortDatePlain(ds);
  return color?`<span style="color:${color}">${label}</span>${hol?`<br><small style="color:${color};font-size:8px">${esc(hol)}</small>`:""}`:label;
 }
 // 2026-09-08追加: ユーザー指示「何月分かすぐわかるように目立つようにプルダウンで年月を選べるように」。
@@ -7483,7 +7487,7 @@ async function sfV12DayoffCfgModalHtml(){
   <div class="modalfoot"><button class="btn modal-close" id="v12-dayoffclose2">閉じる</button><div></div></div>
  </div></div>`;
 }
-let sfV12LastDashRows=null,sfV12LastHrRows=null,sfV12LastActualCtx=null; // 2026-09-08追加: CSV出力用に直近の描画結果を保持
+let sfV12LastDashRows=null,sfV12LastHrRows=null,sfV12LastActualCtx=null,sfV12LastConfirmedCtx=null; // 2026-09-08追加: CSV出力用に直近の描画結果を保持（sfV12LastConfirmedCtxは2026-09-09追加）
 
 // ---- 適正人員計算：日別売上・人件費・適正PA時間シミュレーション（店舗シフト表示のみ）----
 // 深夜割増の厳密な時間帯別加重は行わず、対象日にPAとして勤務する人の時給を単純平均する
@@ -7570,7 +7574,7 @@ async function sfV12DayFooterRowsHtml(ctx,dates,includeTotalCol=true,useActual=f
    attendCount++;
    const isPA=sfRoleTag(u).cls==="pa";
    if(isPA)paCount++;else empCount++;
-   if(s&&s.role_name&&Object.prototype.hasOwnProperty.call(roleCounts,s.role_name))roleCounts[s.role_name]++;
+   sfV12RoleNamesOf(s).forEach(n=>{if(Object.prototype.hasOwnProperty.call(roleCounts,n))roleCounts[n]++}); // 2026-09-09修正: 1シフトに複数役割（例: キッチン+ホール）を持てるため、それぞれの人数へ加算する
    if(isPA){
     if(useActual){
      paMin+=lk.minutes;paCost+=lk.cost; // 実際の打刻分・実際の原価をそのまま使う（時給再計算はしない）
@@ -7701,6 +7705,9 @@ let sfV12SalesBasisRule="target",sfV12PaRate="14.0";
 
 
 // ---- ③シフト調整 ----
+// 2026-09-09追加: ユーザー指示「シフト調整の役割を複数選択できるように（ランチでキッチン・ホール両方必要な場合がある）」。
+//   role_nameは引き続きtext列のまま、カンマ区切りで複数役割を保持する
+function sfV12RoleNamesOf(s){return (s&&s.role_name)?s.role_name.split(",").map(x=>x.trim()).filter(Boolean):[]}
 function sfV12EmpPaBadge(u){ // 2026-09-08追加: 従業員名の横に社員/PAの区分を必ず表示する
  const t=sfRoleTag(u);
  return `<span class="badge ${t.cls==="pa"?"":"blue"}" style="font-size:9px;margin-left:4px;vertical-align:middle">${t.cls==="pa"?"PA":"社員"}</span>`;
@@ -7819,11 +7826,12 @@ async function sfV12AdjustSection(){
 async function sfV12ConfirmedSection(){
  const ctx=await sfV12LoadCommon();
  const {dates,people,shByUserDate,p,publishedCount}=ctx;
+ sfV12LastConfirmedCtx={dates,people,shByUserDate}; // 2026-09-09追加: CSV出力用
  const pickable=sfPickableStores();
  let h=`<div class="toolbar">
   <div class="group"><select class="inp" id="v12-store" style="margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===sfMgStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select><select class="inp" id="v12-period" style="margin:0">${sfPeriodSelectHtml(sfMgPeriodIdx)}</select>
    <select class="inp" id="v12-periodmode" style="margin:0"><option value="half" ${sfV12PeriodMode==="half"?"selected":""}>半月表示</option><option value="month" ${sfV12PeriodMode==="month"?"selected":""}>1ヶ月表示</option></select></div>
-  <div class="group"><button class="btn" id="v12-cf-history">変更履歴</button><button class="btn" id="v12-cf-print">印刷</button></div>
+  <div class="group"><button class="btn" id="v12-cf-csv">CSV</button><button class="btn" id="v12-cf-history">変更履歴</button><button class="btn" id="v12-cf-print">印刷</button></div>
  </div>
  <div class="title">確定シフト</div>
  <div class="toolbar" style="margin-top:0">
@@ -7911,7 +7919,10 @@ async function sfV12SettingsSection(){
   <div class="cardhead"><h2>① 役割設定</h2><div class="sub">シフト表・日別集計の「キッチン人数」「ホール人数」等の集計はここで設定した役割を使います。追加は上の「適用先店舗」すべてに反映されます</div></div>
   <div class="wrap"><table class="mini-table">
    <thead><tr><th>役割名</th><th>並び順</th><th>状態</th><th></th></tr></thead>
-   <tbody>${(roles||[]).map(r=>`<tr><td>${esc(r.name)}</td><td>${r.sort_order}</td><td>${r.is_active?'<span class="badge good">有効</span>':'<span class="badge">無効</span>'}</td><td><button class="btn sm" data-v12-role-toggle="${r.id}">${r.is_active?"無効にする":"有効にする"}</button> <button class="btn sm" data-v12-role-del="${r.id}">削除</button></td></tr>`).join("")||'<tr><td colspan="4" class="muted">まだ役割がありません。下から追加してください（例: キッチン・ホール・仕込み・ドリンク・ランチ）</td></tr>'}</tbody>
+   <tbody>${(roles||[]).map(r=>{
+    if(sfV12RoleEditId===r.id)return `<tr><td><input class="inp" id="v12-role-edit-name" value="${esc(r.name)}" style="margin:0"></td><td><input class="inp" id="v12-role-edit-order" type="number" value="${r.sort_order}" style="margin:0;width:80px"></td><td>${r.is_active?'<span class="badge good">有効</span>':'<span class="badge">無効</span>'}</td><td><button class="btn sm primary" data-v12-role-save="${r.id}">保存</button> <button class="btn sm" id="v12-role-editcancel">キャンセル</button></td></tr>`;
+    return `<tr><td>${esc(r.name)}</td><td>${r.sort_order}</td><td>${r.is_active?'<span class="badge good">有効</span>':'<span class="badge">無効</span>'}</td><td><button class="btn sm" data-v12-role-edit="${r.id}">編集</button> <button class="btn sm" data-v12-role-toggle="${r.id}">${r.is_active?"無効にする":"有効にする"}</button> <button class="btn sm" data-v12-role-del="${r.id}">削除</button></td></tr>`;
+   }).join("")||'<tr><td colspan="4" class="muted">まだ役割がありません。下から追加してください（例: キッチン・ホール・仕込み・ドリンク・ランチ）</td></tr>'}</tbody>
   </table></div>
   <div class="actions"><div class="formgrid" style="flex:1"><div class="field"><label>役割名</label><input class="inp" id="v12-role-name" placeholder="例: キッチン"></div><div class="field"><label>&nbsp;</label><button class="btn primary" id="v12-role-add" style="width:100%">追加</button></div></div></div>
  </div>
@@ -7940,7 +7951,15 @@ async function sfV12SettingsSection(){
   <div class="cardhead"><h2>③ 必要人数設定（時間帯別）</h2><div class="sub">シフト調整・確定シフトの「配置／必要」欄の基準です（既存機能）。時間帯（プリセット）が店舗ごとの登録のため、この項目のみ現在表示中の店舗だけに追加されます</div></div>
   <div class="wrap"><table class="mini-table">
    <thead><tr><th>時間帯</th><th>曜日／祝日等／日付</th><th>必要人数</th><th></th></tr></thead>
-   <tbody>${(reqRows||[]).map(r=>{const pr=(presets||[]).find(p=>p.id===r.preset_id);const wdLabel=r.specific_date?r.specific_date:r.special_day_type==="holiday"?"祝日":r.special_day_type==="holiday_eve"?"祝前日":(r.weekday!=null?["日","月","火","水","木","金","土"][r.weekday]+"曜":"—");return `<tr><td>${pr?esc(pr.label):"—"}</td><td>${wdLabel}</td><td>${r.required_count}名</td><td><button class="btn sm" data-v12-hc-del="${r.id}">削除</button></td></tr>`}).join("")||'<tr><td colspan="4" class="muted">まだ設定がありません</td></tr>'}</tbody>
+   <tbody>${(reqRows||[]).map(r=>{
+    const pr=(presets||[]).find(p=>p.id===r.preset_id);
+    const wdLabel=r.specific_date?r.specific_date:r.special_day_type==="holiday"?"祝日":r.special_day_type==="holiday_eve"?"祝前日":(r.weekday!=null?["日","月","火","水","木","金","土"][r.weekday]+"曜":"—");
+    if(sfV12HcEditId===r.id&&!r.specific_date){
+     const curVal=r.special_day_type||("wd"+r.weekday);
+     return `<tr><td><select class="inp" id="v12-hc-edit-preset" style="margin:0">${(presets||[]).map(p=>`<option value="${p.id}" ${p.id===r.preset_id?"selected":""}>${esc(p.label)}</option>`).join("")}</select></td><td><select class="inp" id="v12-hc-edit-weekday" style="margin:0">${["日","月","火","水","木","金","土"].map((w,i)=>`<option value="wd${i}" ${curVal==="wd"+i?"selected":""}>${w}曜</option>`).join("")}<option value="holiday" ${curVal==="holiday"?"selected":""}>祝日（毎回）</option><option value="holiday_eve" ${curVal==="holiday_eve"?"selected":""}>祝前日（毎回）</option></select></td><td><input class="inp" id="v12-hc-edit-count" type="number" value="${r.required_count}" min="0" style="margin:0;width:80px"></td><td><button class="btn sm primary" data-v12-hc-save="${r.id}">保存</button> <button class="btn sm" id="v12-hc-editcancel">キャンセル</button></td></tr>`;
+    }
+    return `<tr><td>${pr?esc(pr.label):"—"}</td><td>${wdLabel}</td><td>${r.required_count}名</td><td>${r.specific_date?"":`<button class="btn sm" data-v12-hc-edit="${r.id}">編集</button> `}<button class="btn sm" data-v12-hc-del="${r.id}">削除</button></td></tr>`;
+   }).join("")||'<tr><td colspan="4" class="muted">まだ設定がありません</td></tr>'}</tbody>
   </table></div>
   <div class="actions"><div class="formgrid" style="flex:1">
    <div class="field"><label>時間帯</label><select class="inp" id="v12-hc-preset">${(presets||[]).map(p=>`<option value="${p.id}">${esc(p.label)}</option>`).join("")}</select></div>
@@ -7980,7 +7999,10 @@ async function sfV12SettingsSection(){
   <div class="cardhead"><h2>⑤b 勤務時間プリセット（ランチ・ディナー等の時間定義）</h2><div class="sub">シフト提出・シフト調整のプリセット選択に反映されます。追加は上の「適用先店舗」すべてに反映されます</div></div>
   <div class="wrap"><table class="mini-table">
    <thead><tr><th>名称</th><th>開始</th><th>終了</th><th>休憩</th><th>区分</th><th>状態</th><th></th></tr></thead>
-   <tbody>${(presets||[]).map(pr=>`<tr><td>${esc(pr.label)}</td><td>${sfFmtTime(pr.start_time)}</td><td>${sfFmtTime(pr.end_time)}</td><td>${pr.break_minutes||0}分</td><td>${pr.slot_kind==="lunch"?"ランチ":pr.slot_kind==="dinner"?"ディナー":"—"}</td><td>${pr.is_active?'<span class="badge good">有効</span>':'<span class="badge">無効</span>'}</td><td><button class="btn sm" data-v12-preset-toggle="${pr.id}">${pr.is_active?"無効にする":"有効にする"}</button></td></tr>`).join("")||'<tr><td colspan="7" class="muted">まだ登録されていません</td></tr>'}</tbody>
+   <tbody>${(presets||[]).map(pr=>{
+    if(sfV12PresetEditId===pr.id)return `<tr><td><input class="inp" id="v12-preset-edit-label" value="${esc(pr.label)}" style="margin:0"></td><td><input class="inp" id="v12-preset-edit-start" type="time" value="${sfFmtTime(pr.start_time)}" style="margin:0"></td><td><input class="inp" id="v12-preset-edit-end" type="time" value="${sfFmtTime(pr.end_time)}" style="margin:0"></td><td><input class="inp" id="v12-preset-edit-break" type="number" value="${pr.break_minutes||0}" min="0" style="margin:0;width:70px"></td><td><select class="inp" id="v12-preset-edit-slot" style="margin:0"><option value="" ${!pr.slot_kind?"selected":""}>—</option><option value="lunch" ${pr.slot_kind==="lunch"?"selected":""}>ランチ</option><option value="dinner" ${pr.slot_kind==="dinner"?"selected":""}>ディナー</option></select></td><td>${pr.is_active?'<span class="badge good">有効</span>':'<span class="badge">無効</span>'}</td><td><button class="btn sm primary" data-v12-preset-save="${pr.id}">保存</button> <button class="btn sm" id="v12-preset-editcancel">キャンセル</button></td></tr>`;
+    return `<tr><td>${esc(pr.label)}</td><td>${sfFmtTime(pr.start_time)}</td><td>${sfFmtTime(pr.end_time)}</td><td>${pr.break_minutes||0}分</td><td>${pr.slot_kind==="lunch"?"ランチ":pr.slot_kind==="dinner"?"ディナー":"—"}</td><td>${pr.is_active?'<span class="badge good">有効</span>':'<span class="badge">無効</span>'}</td><td><button class="btn sm" data-v12-preset-edit="${pr.id}">編集</button> <button class="btn sm" data-v12-preset-toggle="${pr.id}">${pr.is_active?"無効にする":"有効にする"}</button> <button class="btn sm" data-v12-preset-del="${pr.id}">削除</button></td></tr>`;
+   }).join("")||'<tr><td colspan="7" class="muted">まだ登録されていません</td></tr>'}</tbody>
   </table></div>
   <div class="actions"><div class="formgrid" style="flex:1">
    <div class="field"><label>名称</label><input class="inp" id="v12-preset-label" placeholder="例: ランチ"></div>
@@ -8150,7 +8172,7 @@ async function sfV12EditModalHtml(){
       <div class="field"><label>開始</label><input class="inp" id="v12-edit-start" type="time" value="${s&&!s.is_off?sfFmtTime(s.start_time):""}"></div>
       <div class="field"><label>終了</label><input class="inp" id="v12-edit-end" type="time" value="${s&&!s.is_off?sfFmtTime(s.end_time):""}"></div>
       <div class="field"><label>時間帯（プリセット）</label><select class="inp" id="v12-edit-preset"><option value="">選択してください</option>${(presets||[]).map(pr=>`<option value="${pr.id}" ${s&&s.preset_id===pr.id?"selected":""}>${esc(pr.label)}</option>`).join("")}</select></div>
-      <div class="field"><label>役割</label><select class="inp" id="v12-edit-role"><option value="">未設定</option>${(roles||[]).map(r=>`<option value="${esc(r.name)}" ${s&&s.role_name===r.name?"selected":""}>${esc(r.name)}</option>`).join("")}</select></div>
+      <div class="field" style="grid-column:1/-1"><label>役割（複数選択可。ランチでキッチン・ホール両方必要な場合など）</label><div style="display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:4px">${(roles||[]).length?(roles||[]).map(r=>`<label style="font-size:12px;white-space:nowrap"><input type="checkbox" class="v12-edit-role-cb" value="${esc(r.name)}" ${sfV12RoleNamesOf(s).includes(r.name)?"checked":""}> ${esc(r.name)}</label>`).join(""):'<span class="muted" style="font-size:11px">設定タブ①で役割を追加してください</span>'}</div></div>
     </div>
     <div class="audit"><label><input type="checkbox" id="v12-edit-off" ${s&&s.is_off?"checked":""}> 休みにする</label>　｜　スマレジ：${s&&s.smaregi_sync_status==="error"?"エラー（"+esc(s.smaregi_error||"")+"）":s&&s.smaregi_sync_status==="synced"?"同期済":"未同期"}</div>
    </div>
@@ -8167,7 +8189,7 @@ async function sfV12BulkModalHtml(){
     </div>`;
  if(isRole&&on){
   const {data:roles}=await sb.from("sf_store_roles").select("*").eq("store_id",sfMgStore).eq("is_active",true).order("sort_order");
-  fields=(roles&&roles.length)?`<div class="formgrid"><div class="field"><label>役割</label><select class="inp" id="v12-bulk-role"><option value="">未設定にする</option>${roles.map(r=>`<option value="${esc(r.name)}">${esc(r.name)}</option>`).join("")}</select></div></div>`
+  fields=(roles&&roles.length)?`<div class="field"><label>役割（複数選択可。何もチェックしなければ未設定にする）</label><div style="display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:6px">${roles.map(r=>`<label style="font-size:12px;white-space:nowrap"><input type="checkbox" class="v12-bulk-role-cb" value="${esc(r.name)}"> ${esc(r.name)}</label>`).join("")}</div></div>`
    :`<p class="muted">この店舗にはまだ役割が登録されていません。先に「設定」タブの①役割設定から追加してください。</p>`;
  }
  return `<div class="modal-bg ${on?"on":""}" id="v12-bulkModal"><div class="modal">
@@ -8326,6 +8348,17 @@ function bindSfV12Page(){
   if(error){toast("削除エラー: "+error.message,true);return}
   toast("削除しました");render();
  });
+ // 2026-09-09追加: ①役割設定の編集
+ document.querySelectorAll("[data-v12-role-edit]").forEach(b=>b.onclick=()=>{sfV12RoleEditId=b.dataset.v12RoleEdit;render()});
+ if($("v12-role-editcancel"))$("v12-role-editcancel").onclick=()=>{sfV12RoleEditId=null;render()};
+ document.querySelectorAll("[data-v12-role-save]").forEach(b=>b.onclick=async()=>{
+  const name=$("v12-role-edit-name").value.trim();
+  const order=+$("v12-role-edit-order").value||0;
+  if(!name){toast("役割名を入力してください",true);return}
+  const {error}=await sb.from("sf_store_roles").update({name,sort_order:order}).eq("id",b.dataset.v12RoleSave);
+  if(error){toast("保存エラー: "+(error.message.includes("duplicate")?"同じ名前の役割が既にあります":error.message),true);return}
+  sfV12RoleEditId=null;toast("保存しました");render();
+ });
  document.querySelectorAll("[data-v12-emprole-save]").forEach(b=>b.onclick=async()=>{
   const uid=b.dataset.v12EmproleSave;
   const row=document.querySelector(`[data-emprolerow="${uid}"]`);
@@ -8363,6 +8396,19 @@ function bindSfV12Page(){
   const {error}=await sb.from("sf_required_headcounts").delete().eq("id",b.dataset.v12HcDel);
   if(error){toast("削除エラー: "+error.message,true);return}
   toast("削除しました");render();
+ });
+ // 2026-09-09追加: ③必要人数設定の編集
+ document.querySelectorAll("[data-v12-hc-edit]").forEach(b=>b.onclick=()=>{sfV12HcEditId=b.dataset.v12HcEdit;render()});
+ if($("v12-hc-editcancel"))$("v12-hc-editcancel").onclick=()=>{sfV12HcEditId=null;render()};
+ document.querySelectorAll("[data-v12-hc-save]").forEach(b=>b.onclick=async()=>{
+  const presetId=$("v12-hc-edit-preset").value;
+  const val=$("v12-hc-edit-weekday").value;
+  const count=+$("v12-hc-edit-count").value;
+  const payload={preset_id:presetId,weekday:null,special_day_type:null,specific_date:null,required_count:count};
+  if(val==="holiday"||val==="holiday_eve")payload.special_day_type=val;else payload.weekday=+val.replace("wd","");
+  const {error}=await sb.from("sf_required_headcounts").update(payload).eq("id",b.dataset.v12HcSave);
+  if(error){toast("保存エラー: "+error.message,true);return}
+  sfV12HcEditId=null;toast("保存しました");render();
  });
  if($("v12-set-save"))$("v12-set-save").onclick=async()=>{
   const base={
@@ -8404,6 +8450,25 @@ function bindSfV12Page(){
   const {error}=await sb.from("sf_time_presets").update({is_active:!(cur&&cur.is_active)}).eq("id",b.dataset.v12PresetToggle);
   if(error){toast("更新エラー: "+error.message,true);return}
   render();
+ });
+ // 2026-09-09追加: ⑤b勤務時間プリセットの編集・削除
+ document.querySelectorAll("[data-v12-preset-edit]").forEach(b=>b.onclick=()=>{sfV12PresetEditId=b.dataset.v12PresetEdit;render()});
+ if($("v12-preset-editcancel"))$("v12-preset-editcancel").onclick=()=>{sfV12PresetEditId=null;render()};
+ document.querySelectorAll("[data-v12-preset-save]").forEach(b=>b.onclick=async()=>{
+  const label=$("v12-preset-edit-label").value.trim();
+  const start=$("v12-preset-edit-start").value,end=$("v12-preset-edit-end").value;
+  const brk=+$("v12-preset-edit-break").value||0;
+  const slot=$("v12-preset-edit-slot").value||null;
+  if(!label||!start||!end){toast("名称・開始・終了を入力してください",true);return}
+  const {error}=await sb.from("sf_time_presets").update({label,start_time:start,end_time:end,break_minutes:brk,slot_kind:slot}).eq("id",b.dataset.v12PresetSave);
+  if(error){toast("保存エラー: "+error.message,true);return}
+  sfV12PresetEditId=null;toast("保存しました");render();
+ });
+ document.querySelectorAll("[data-v12-preset-del]").forEach(b=>b.onclick=async()=>{
+  if(!confirm("この時間帯プリセットを削除しますか？（この時間帯を条件にした必要人数設定も一緒に削除されます。過去のシフト記録は残ります）"))return;
+  const {error}=await sb.from("sf_time_presets").delete().eq("id",b.dataset.v12PresetDel);
+  if(error){toast("削除エラー: "+error.message,true);return}
+  toast("削除しました");render();
  });
  if($("v12-hr-alertcfg"))$("v12-hr-alertcfg").onclick=()=>toast("勤務時間アラートの個別設定は今後の対応予定です");
  if($("v12-hr-csv"))$("v12-hr-csv").onclick=()=>{
@@ -8547,9 +8612,9 @@ function bindSfV12Page(){
  if($("v12-bulk-apply"))$("v12-bulk-apply").onclick=async()=>{
   let okCount=0;
   if(sfV12BulkMode==="role"){
-   const roleEl=$("v12-bulk-role");
-   if(!roleEl){toast("先に役割を登録してください",true);return}
-   const roleName=roleEl.value||null;
+   const roleCbs=document.querySelectorAll(".v12-bulk-role-cb");
+   if(!roleCbs.length){toast("先に役割を登録してください",true);return}
+   const roleName=[...roleCbs].filter(cb=>cb.checked).map(cb=>cb.value).join(", ")||null;
    for(const key of sfV12Selected){
     const [uid,ds]=key.split("|");
     const {error}=await sb.from("sf_shifts").update({role_name:roleName}).eq("user_id",uid).eq("work_date",ds);
@@ -8588,7 +8653,8 @@ function bindSfV12Page(){
   const p=sfPeriodFromIdx(sfMgPeriodIdx);
   const off=$("v12-edit-off").checked;
   const presetId=$("v12-edit-preset").value||null;
-  const roleName=$("v12-edit-role")?$("v12-edit-role").value||null:undefined;
+  const checkedRoles=[...document.querySelectorAll(".v12-edit-role-cb:checked")].map(cb=>cb.value);
+  const roleName=document.querySelector(".v12-edit-role-cb")?(checkedRoles.join(", ")||null):undefined; // チェックボックスが1つも無い(役割未登録)場合はundefined=変更しない扱い
   const {data:presets}=await sb.from("sf_time_presets").select("*").eq("store_id",sfMgStore);
   const ok=await sfSaveDay(uid,sfMgStore,ds,p.key,presetId,off,$("v12-edit-start").value,$("v12-edit-end").value,presets||[],roleName);
   if(ok){sfV12EditCell=null;toast("保存しました");render()}
@@ -8617,6 +8683,21 @@ function bindSfV12Page(){
   if(error){toast("更新エラー: "+error.message,true);return}
   toast("対応済みにしました");render();
  });
+ if($("v12-cf-csv"))$("v12-cf-csv").onclick=()=>{ // 2026-09-09追加
+  if(!sfV12LastConfirmedCtx){toast("表示内容がありません（公開済みの期間を選んでください）",true);return}
+  const {dates,people,shByUserDate}=sfV12LastConfirmedCtx;
+  const header=["従業員","区分",...dates.map(sfV12ShortDatePlain)];
+  const rows=people.map(u=>{
+   const cells=dates.map(ds=>{
+    const s=shByUserDate[u.id+"|"+ds];
+    if(!s)return "";
+    if(s.is_off)return "休";
+    return sfFmtTime(s.start_time)+"〜"+sfFmtTime(s.end_time)+(s.role_name?"（"+s.role_name+"）":"");
+   });
+   return [u.name,sfRoleTag(u).cls==="pa"?"PA":"社員",...cells];
+  });
+  sfV12CsvDownload(`確定シフト_${sfMgStore}.csv`,[header,...rows]);
+ };
  if($("v12-cf-history"))$("v12-cf-history").onclick=()=>toast("変更履歴の一覧表示は今後の対応予定です");
  if($("v12-cf-print"))$("v12-cf-print").onclick=()=>window.print();
  if($("v12-cf-preview"))$("v12-cf-preview").onclick=()=>toast("従業員表示プレビューは今後の対応予定です");
@@ -8665,7 +8746,7 @@ function bindSfV12Page(){
  if($("v12-act-csv"))$("v12-act-csv").onclick=()=>{
   if(!sfV12LastActualCtx){toast("表示内容がありません",true);return}
   const {dates,people,laborByUserDate}=sfV12LastActualCtx;
-  const header=["従業員",...dates.map(sfV12ShortDate),"計(h)"];
+  const header=["従業員",...dates.map(sfV12ShortDatePlain),"計(h)"]; // 2026-09-09修正: sfV12ShortDateはHTML(曜日色)を返すためCSVには不適切だった
   const rows=people.map(u=>{
    let tot=0;
    const cells=dates.map(ds=>{const lk=laborByUserDate[u.id+"|"+ds];if(!lk||!lk.minutes)return "";tot+=lk.minutes;return (lk.minutes/60).toFixed(1)});
@@ -8682,7 +8763,7 @@ function bindSfV12Page(){
   const btn=$("v12-act-refresh");btn.disabled=true;btn.textContent="取得中...";
   try{
    const p=sfPeriodFromIdx(sfMgPeriodIdx);
-   const dates=sfV12PeriodMode==="month"?sfV12MonthDates(p):sfDateList(p);
+   const dates=sfV12ActDetailMode==="month"?sfV12MonthDates(p):sfDateList(p); // 2026-09-09修正: 実績タブ自身の期間モードを見る（sfV12PeriodModeはシフト調整用で別物）
    const {data:sess}=await sb.auth.getSession();
    const token=sess&&sess.session?sess.session.access_token:null;
    const r=await fetch(SUPA_URL+"/functions/v1/smaregi-attendance-sync",{
@@ -8690,8 +8771,15 @@ function bindSfV12Page(){
     body:JSON.stringify({action:"sync",date_from:dates[0],date_to:dates[dates.length-1]})
    });
    const j=await r.json().catch(()=>null);
-   if(j&&j.ok)toast(`スマレジから最新の実績を取得しました: ${j.inserted}件反映${j.errorCount?`／エラー${j.errorCount}件`:""}`,!!j.errorCount);
-   else toast("取得に失敗しました: "+(j&&j.error||"不明なエラー"),true);
+   if(j&&j.ok){
+    // 2026-09-09修正: エラー件数だけでなく内訳（店舗未対応／その他）も分かるようにする
+    const storeErrCount=(j.errors||[]).filter(e=>e.startsWith("store未対応")).length;
+    let msg=`スマレジから最新の実績を取得しました: ${j.inserted}件反映`;
+    if(j.errorCount)msg+=`／エラー${j.errorCount}件${storeErrCount?`（うち店舗未対応${storeErrCount}件。設定タブから店舗のスマレジ連携をご確認ください）`:""}`;
+    if(j.staffNotFoundCount)msg+=`／スマレジ未登録${j.staffNotFoundCount}名はスキップ`;
+    toast(msg,!!j.errorCount);
+    if(j.errorCount)console.warn("スマレジ同期エラー詳細:",j.errors);
+   }else toast("取得に失敗しました: "+(j&&j.error||"不明なエラー"),true);
   }catch(e){toast("取得に失敗しました: "+(e&&e.message?e.message:e),true)}
   btn.disabled=false;btn.textContent="スマレジ最新取得";
   render();

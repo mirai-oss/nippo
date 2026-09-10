@@ -7888,7 +7888,7 @@ async function sfV12ConfirmedSection(){
  let h=`<div class="toolbar">
   <div class="group"><select class="inp" id="v12-store" style="margin:0">${pickable.map(s=>`<option value="${s.id}" ${s.id===sfMgStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select><select class="inp" id="v12-period" style="margin:0">${sfPeriodSelectHtml(sfMgPeriodIdx)}</select>
    <select class="inp" id="v12-periodmode" style="margin:0"><option value="half" ${sfV12PeriodMode==="half"?"selected":""}>半月表示</option><option value="month" ${sfV12PeriodMode==="month"?"selected":""}>1ヶ月表示</option></select></div>
-  <div class="group"><button class="btn" id="v12-cf-csv">CSV</button><button class="btn" id="v12-cf-history">変更履歴</button><button class="btn" id="v12-cf-print">印刷</button></div>
+  <div class="group"><button class="btn" id="v12-cf-sync">スマレジへ同期</button><button class="btn" id="v12-cf-csv">CSV</button><button class="btn" id="v12-cf-history">変更履歴</button><button class="btn" id="v12-cf-print">印刷</button></div>
  </div>
  <div class="title">確定シフト</div>
  <div class="toolbar" style="margin-top:0">
@@ -8650,7 +8650,8 @@ function bindSfV12Page(){
   try{
    const r=await fetch(SUPA_URL+"/functions/v1/smaregi-shift-sync",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({action:"import_from_smaregi",period_key:p.key,store_id:sfMgStore})});
    const j=await r.json().catch(()=>null);
-   if(j&&j.ok)toast(`スマレジと同期しました: 追加${j.added||0}件／更新${j.updated||0}件`);else toast("同期でエラーが出ました",true);
+   if(j&&j.ok)toast(`スマレジと同期しました: 追加${j.added||0}件／更新${j.updated||0}件${j.removed?`／削除${j.removed}件`:""}${j.conflictCount?`／他店舗と重複のためスキップ${j.conflictCount}件（掛け持ち勤務の可能性）`:""}`,!!j.conflictCount);
+   else toast("同期でエラーが出ました: "+(j&&j.error||"不明なエラー"),true);
   }catch(e){toast("同期に失敗しました",true)}
   render();
  };
@@ -8740,6 +8741,19 @@ function bindSfV12Page(){
   if(error){toast("更新エラー: "+error.message,true);return}
   toast("対応済みにしました");render();
  });
+ if($("v12-cf-sync"))$("v12-cf-sync").onclick=async()=>{ // 2026-09-10追加: 確定シフトから直接スマレジへ再同期（公開後に個別修正した分もまとめて反映）
+  const btn=$("v12-cf-sync");btn.disabled=true;btn.textContent="同期中...";
+  try{
+   const p=sfPeriodFromIdx(sfMgPeriodIdx);
+   const {data:sess}=await sb.auth.getSession();const token=sess&&sess.session?sess.session.access_token:null;
+   const r=await fetch(SUPA_URL+"/functions/v1/smaregi-shift-sync",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({period_key:p.key,store_id:sfMgStore})});
+   const j=await r.json().catch(()=>null);
+   if(j&&j.ok)toast(`スマレジへ同期しました: 成功${j.synced||0}件${j.failed?`／失敗${j.failed}件`:""}${j.skipped?`／スキップ${j.skipped}件（スマレジ未連携）`:""}`,!!(j.failed||j.skipped));
+   else toast("同期でエラーが出ました: "+(j&&j.error||"不明なエラー"),true);
+  }catch(e){toast("同期に失敗しました",true)}
+  btn.disabled=false;btn.textContent="スマレジへ同期";
+  render();
+ };
  if($("v12-cf-csv"))$("v12-cf-csv").onclick=()=>{ // 2026-09-09追加
   if(!sfV12LastConfirmedCtx){toast("表示内容がありません（公開済みの期間を選んでください）",true);return}
   const {dates,people,shByUserDate}=sfV12LastConfirmedCtx;

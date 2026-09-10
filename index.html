@@ -6730,7 +6730,7 @@ async function adminToggle(){
 // 電子サインできるようにしたい。会計・給与仕訳が見れない権限の人でも、店長以上ならこの
 // タブと電子サインの場所を使えるようにしたい」に対応。invoices.html（会計）とは別に、
 // nippo側の独立した画面として作る（cash_handoff_manageフィーチャーで店長以上に開放）。
-let cashMonth=null,cashList=null,cashRecords=null,cashDetail=null,cashPayerSaving=false,cashReceiverSaving=false,cashStoreFilter="",cashWithdrawSaving=false;
+let cashMonth=null,cashList=null,cashRecords=null,cashDetail=null,cashPayerSaving=false,cashReceiverSaving=false,cashStoreFilter="",cashWithdrawSaving=false,cashTimer=null;
 function cashMonthSelectHtml(ym){
  const [y,m]=ym.split("-").map(Number);
  const nowY=new Date().getFullYear();
@@ -6932,6 +6932,26 @@ async function refreshCashRecord(uid,ym){
  if(!cashRecords)cashRecords={};
  if(data)cashRecords[uid]=data;
 }
+// 2026-09-10追加: ユーザー報告「他の人が現金手渡しのサインをもらったのに、他の人の画面では
+// 反映されてなくて、2重になることはできないのに避けて欲しい（リアルタイムに反映させること）」
+// への対応。渡した側／受け取った側／引き出し確認の保存はいずれも「今開いている画面の状態を
+// そのままupsertする」実装だったため、2人が同時にこの画面を開いていると、片方が既に確認・
+// サイン済みのところへもう片方が古い画面のまま保存ボタンを押すと、その場のチェック・サイン
+// で黙って上書きしてしまう（元の確認者・サイン画像が消えてしまう）という不具合があった。
+// 保存の直前にDBを読み直し、対象の項目が既に埋まっていたら保存せず「既に確認済み」と案内して
+// 画面を最新化する（サーバー側のcash_handoff_completeは元々completed_atをcoalesceする作りで
+// この問題は無かったため、直接upsertしている3箇所だけに追加する）
+async function cashGuardAlreadyDone(field,label){
+ const {data}=await sb.from("sf_cash_handoff_signatures").select("*").eq("user_id",cashDetail).eq("year_month",cashMonth).maybeSingle();
+ if(!cashRecords)cashRecords={};
+ if(data)cashRecords[cashDetail]=data;
+ if(data&&data[field]){
+  toast(`すでに他の人が${label}を確認・サイン済みです（${new Date(data[field]).toLocaleString("ja-JP")}）。画面を更新しました`,true);
+  render();
+  return true;
+ }
+ return false;
+}
 function bindCashHandoffPage(){
  if($("cashback"))$("cashback").onclick=()=>{cashDetail=null;render()};
  ["cash-year","cash-monthsel"].forEach(id=>{if($(id))$(id).onchange=()=>{cashMonth=$("cash-year").value+"-"+String($("cash-monthsel").value).padStart(2,"0");render()}});
@@ -6958,6 +6978,7 @@ function bindCashHandoffPage(){
  // 2026-09-08追加: 引き出し確認（写真は任意添付。汎用画像ファイル、拡張子はアップロード元のものをそのまま使う）
  if($("cash-withdraw-save"))$("cash-withdraw-save").onclick=async()=>{
   if(!$("cash-withdrawncb").checked){toast("「現金を引き出しました」にチェックしてください",true);return}
+  if(await cashGuardAlreadyDone("withdrawn_at","引き出し"))return;
   cashWithdrawSaving=true;render();
   try{
    const file=$("cash-withdraw-photo").files[0];
@@ -7010,6 +7031,7 @@ function bindCashHandoffPage(){
  if($("cash-payer-save"))$("cash-payer-save").onclick=async()=>{
   if(!$("cash-paidcb").checked){toast("「現金を渡しました」にチェックしてください",true);return}
   if(!$("sig-payer").dataset.sigDrawn){toast("サインを書いてください",true);return}
+  if(await cashGuardAlreadyDone("payer_checked_at","渡した側の確認"))return;
   cashPayerSaving=true;render();
   try{
    const blob=await sigToBlob("sig-payer");
@@ -7039,6 +7061,7 @@ function bindCashHandoffPage(){
  if($("cash-receiver-save"))$("cash-receiver-save").onclick=async()=>{
   if(!$("cash-recvcb").checked){toast("「現金を受け取りました」にチェックしてください",true);return}
   if(!$("sig-receiver").dataset.sigDrawn){toast("サインを書いてください",true);return}
+  if(await cashGuardAlreadyDone("receiver_checked_at","受け取った側の確認"))return;
   cashReceiverSaving=true;render();
   try{
    const blob=await sigToBlob("sig-receiver");
@@ -9675,6 +9698,29 @@ function bindPage(){
     if(count!=null&&count!==cnt){if($("chatbox"))chatDraft=$("chatbox").value;render()}
    }catch(e){}
   },7000);
+ }
+ // 2026-09-10追加: ユーザー報告「他の人が現金手渡しのサインをもらったのに、他の人の画面では
+ // 反映されてなくて…リアルタイムに手渡し・サインを反映させること」への対応。一覧画面を
+ // 開いている間、チャットの新着ポーリングと同じ考え方で定期的にsf_cash_handoff_signatures
+ // を読み直し、状態（誰が確認・完了したか）が変わっていたら自動で再描画する。詳細画面
+ // （サイン記入中の可能性がある）では行わない＝保存直前の再確認（cashGuardAlreadyDone）で
+ // 上書き事故そのものは別途防いでいるので、詳細画面はここでは対象外にしてサイン入力中の
+ // キャンバスを誤って消さないようにする
+ if(cashTimer){clearInterval(cashTimer);cashTimer=null}
+ if(page==="cashhandoff"&&!cashDetail&&cashMonth){
+  const ym=cashMonth;
+  const fp=JSON.stringify((cashRecords?Object.values(cashRecords):[]).map(r=>[r.user_id,r.payer_checked_at,r.receiver_checked_at,r.completed_at,r.withdrawn_at]).sort());
+  cashTimer=setInterval(async()=>{
+   if(page!=="cashhandoff"||cashDetail||cashMonth!==ym){clearInterval(cashTimer);cashTimer=null;return}
+   try{
+    const {data:recs}=await sb.from("sf_cash_handoff_signatures").select("*").eq("year_month",ym);
+    const newFp=JSON.stringify((recs||[]).map(r=>[r.user_id,r.payer_checked_at,r.receiver_checked_at,r.completed_at,r.withdrawn_at]).sort());
+    if(newFp!==fp){
+     cashRecords={};(recs||[]).forEach(r=>cashRecords[r.user_id]=r);
+     render();
+    }
+   }catch(e){}
+  },8000);
  }
  document.querySelectorAll("[data-croom]").forEach(rw=>rw.onclick=()=>{chatRoom=rw.dataset.croom;chatDraft="";chatFiles=[];chatDescEdit=false;chatRename=false;chatReply=null;chatInvite=false;chatInviteSel=[];render()});
  // v2.1 検索・メッセージ操作

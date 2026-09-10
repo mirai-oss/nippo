@@ -6666,7 +6666,7 @@ async function adminEditView(){
  h+=`<div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
  <div class="card"><h3>所属チーム</h3><span class="chip euteam ${!euTeam?"on":""}" data-t="">なし</span>${teams.map(t=>`<span class="chip euteam ${euTeam===t.id?"on":""}" data-t="${t.id}">${esc(t.name)}</span>`).join("")}
   <p class="muted" style="margin:6px 0 0">チームを設定すると、日報のLark通知をチーム単位で振り分けられます</p></div>
- <div class="card"><h3>所属店舗（複数可）</h3>${[...stores,...storesHidden].map(s=>`<span class="chip eustore ${euStores.includes(s.id)?"on":""}" data-s="${s.id}">${esc(s.name)}</span>`).join("")}</div>
+ <div class="card"><h3>所属店舗（複数可）</h3>${[...stores,...storesHidden].map(s=>`<span class="chip eustore ${euStores.includes(s.id)?"on":""}" data-s="${s.id}">${esc(s.name)}</span>`).join("")}${euRole==="TEAM"?`<p class="muted" style="margin:6px 0 0">チーム長はここで選んだ店舗が「担当店舗」になります（現金手渡し・売上等、チーム単位の画面すべてに反映されます）。${euTeam?"":"※先に上の「所属チーム」でチームを選んでください"}</p>`:""}</div>
  <button class="btn" id="eu-save">変更を保存する</button>
  <div class="card" style="margin-top:16px"><h3>パスワード再設定</h3>
   <input type="text" id="eu-pw" placeholder="新しいパスワード（8文字以上）">
@@ -6694,6 +6694,18 @@ async function adminSave(){
  const {error:e2}=await sb.from("user_stores").delete().eq("user_id",u.id);
  if(!e2&&euStores.length){
   await sb.from("user_stores").insert(euStores.map((s,i)=>({user_id:u.id,store_id:s,is_primary:i===0})));
+ }
+ // v2.6.87 チーム長（role=TEAM）の担当店舗は team_stores（=team_store_ids()）で決まり、
+ // user_stores は現金手渡し・サイン等のチーム単位の画面では参照されない。
+ // ここまでは「所属店舗」を編集してもuser_storesしか更新されず、チーム長本人には反映されて
+ // いなかった（ユーザー報告：チーム長の手渡し給料で対象者が出てこない）。
+ // team_storesを編集するUIが他に存在しないため、このチーム編集画面をteam_storesの
+ // 正本編集UIとして扱い、保存のたびにteam_stores側も同じ店舗一覧で作り直す。
+ if(euRole==="TEAM"&&euTeam){
+  const {error:e3}=await sb.from("team_stores").delete().eq("team_id",euTeam);
+  if(!e3&&euStores.length){
+   await sb.from("team_stores").insert(euStores.map(s=>({team_id:euTeam,store_id:s})));
+  }
  }
  toast("保存しました");
  if(u.id===me.id)await loadMe(me.id);else{adminMode="list";render()}

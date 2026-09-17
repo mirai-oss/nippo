@@ -6748,13 +6748,25 @@ function cashStatusOf(rec){
  if(rec.withdrawn_at)return {label:"🏧引き出し済み・未対応",cls:"b",withdrawn:true};
  return {label:"未対応",cls:"b",withdrawn:false};
 }
+// 2026-09-17追加: ユーザー指示「月を間違えて給料手渡しサインをしてしまう事故があるので、
+//   対象月が終わるまで（翌月になるまで）表示させないでほしい（例: 9月分は10月に入ってから）」。
+//   会計側(invoices.html・給与仕訳タブ、担当C)にも同じ考え方の表示ガードを別途入れてもらう予定
+//   （判定ロジックは「対象月が今月以降なら非表示＝先月以前だけ表示」で担当Cと合わせ済み）
+function cashMonthIsAllowed(ym){
+ const t=new Date();
+ const curYm=t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0");
+ return ym<curYm; // 先月以前のみtrue
+}
 async function cashHandoffView(){
  if(!can("cash_handoff_manage"))return `<p class="muted">この画面を利用する権限がありません。</p>`;
  if(cashDetail)return await cashHandoffDetailView();
- if(!cashMonth){const t=new Date();cashMonth=t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0")}
+ if(!cashMonth){const t=new Date();const lm=new Date(t.getFullYear(),t.getMonth()-1,1);cashMonth=lm.getFullYear()+"-"+String(lm.getMonth()+1).padStart(2,"0")} // 既定は前月（今月はまだ表示できないため）
  let h=`<h2>💴 現金手渡し・サイン</h2>
  <p class="muted" style="margin-top:-8px">現金手渡しで給料を渡す方の一覧です。渡すときにこの画面を開き、渡した側・受け取った側それぞれで確認とサインをしてください。</p>
  <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">${cashMonthSelectHtml(cashMonth)}</div>`;
+ if(!cashMonthIsAllowed(cashMonth)){
+  return h+`<div class="alert" style="margin-top:16px">この月の給料はまだ確定していません。月が終わって翌月になってから（給料月の翌月1日以降）表示されます。月を間違えてのサイン・処理を防ぐための制限です。</div>`;
+ }
  const [{data:targets,error:e1},{data:recs,error:e2}]=await Promise.all([
   sb.rpc("cash_handoff_targets",{p_year_month:cashMonth}),
   sb.from("sf_cash_handoff_signatures").select("*").eq("year_month",cashMonth)

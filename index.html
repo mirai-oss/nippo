@@ -1676,6 +1676,19 @@ async function smaregiTerminate(uid,date,opts){ // v2.6.8 退職日をスマレ�
   return await res.json();
  }catch(e){return {ok:false,error:String(e)}}
 }
+// 2026-10-03 v4: 「退職日を過ぎていて源泉徴収票を待たなくてよい」ときだけ停止する（DB側 hr_finalize_retirement）。
+//   停止した場合はスマレジにも退職日と打刻OFFを送る。待つ場合は何もしない（毎朝の自動停止、または源泉徴収票の登録後に停止）。
+//   戻り値: {stopped, reason, sync}（sync=スマレジ反映の結果。停止したときだけ）
+async function hrFinalizeRetirement(uid){
+ const {data,error}=await sb.rpc("hr_finalize_retirement",{p_user:uid});
+ if(error)return {stopped:false,reason:"error",error:error.message};
+ if(!data||!data.stopped)return {stopped:false,reason:data?data.reason:"unknown"};
+ let status="error",result={};
+ try{const r=await smaregiTerminate(uid,data.date,{deactivate:true});result=r||{};status=r&&r.ok?"synced":"unsynced";if(r&&!r.ok&&r.error)status="error"}catch(e){result={error:String(e)}}
+ if(data.request_id)await sb.rpc("hr_record_retirement_sync",{p_request:data.request_id,p_status:status,p_result:result});
+ return {stopped:true,reason:"stopped",sync:{status,result}};
+}
+const HR_HOLD_TEXT={slip_pending:"源泉徴収票の工程が終わるまで停止を待ちます",not_due:"退職日の翌日の朝に停止します"};
 async function smaregiStaffs(){ // スマレジ登録済みスタッフ一覧を取得（CEO/HQのみ）
  try{
   const {data:{session}}=await sb.auth.getSession();
@@ -6757,11 +6770,20 @@ async function adminEditView(){
   h+=`<div class="card"><h3>📄 配布した書類（源泉徴収票など）</h3>`;
   if(!hrDocs.length)h+=`<p class="muted" style="margin:0">まだ配布した書類はありません。退職手続きの本部タスクで源泉徴収票をアップロードすると、ここに保管されます（本人のマイページ「📄 書類」にも表示されます）。</p>`;
   hrDocs.forEach(d=>{h+=`<div class="row" data-mydoc="${esc(d.path)}"><span><b>${esc(HR_DOC_KIND_LABEL[d.kind]||d.kind)}${d.year?`（${d.year}年分）`:""}</b><br><span class="muted">登録 ${new Date(d.uploaded_at).toLocaleDateString("ja-JP")}${d.line_notified_at?" ／ 本人へLINE案内済み":" ／ LINE案内なし"}</span></span><span class="muted">開く ›</span></div>`});
+  const yNow=new Date().getFullYear();
+  h+=`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+   <div style="font-size:13px;font-weight:600">源泉徴収票をアップロードして保管（PDF・10MBまで）</div>
+   <p class="muted" style="margin:2px 0 6px;font-size:11.5px">退職手続きの本部タスクを使わずに直接退職処理するときは、ここから登録します。本人のマイページ「📄 書類」に表示され、退職日を過ぎていればこの登録のあと停止します。</p>
+   <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+    <select class="inp" id="eu-doc-year" style="width:auto;margin:0">${[yNow+1,yNow,yNow-1,yNow-2].map(y=>`<option value="${y}" ${y===yNow?"selected":""}>${y}年分</option>`).join("")}</select>
+    <input type="file" id="eu-doc-file" accept="application/pdf,.pdf" style="flex:1;min-width:160px">
+   </div>
+   <button class="btn sm" id="eu-doc-upload" style="margin-top:8px">📎 アップロードして保管する</button></div>`;
   h+=`</div>`;
  }
  if(u.id!==me.id){
   h+=`<div class="card"><h3>🗓 退職日</h3>
-   <p class="muted" style="margin:0">退職日を入れると、スマレジ・タイムカードにも退職日が登録されます。<b>退職日の翌日の朝から</b>、アカウントが使えなくなり打刻もできなくなります（退職日が昨日以前の場合は、保存してすぐ止まります）。応募者管理に記録がある方は、状況が自動で「退職」になります。</p>
+   <p class="muted" style="margin:0">退職日を入れると、<b>退職日の翌日の朝以降</b>に、アカウントが使えなくなり打刻もできなくなります（スマレジ・タイムカードへの退職日の反映もそのとき）。ただし、退職手続きの本部タスクの<b>源泉徴収票の工程が終わる（または下の「配布した書類」から源泉徴収票を登録する）まで</b>は止まりません。応募者管理に記録がある方は、状況が自動で「退職」になります。</p>
    <input type="date" id="eu-term" value="${(prof&&prof.termination_date)||""}">
    <button class="btn sm" id="eu-termsave">退職日を保存する</button>
    ${(prof&&prof.termination_date)?`<button class="btn sm sub" id="eu-termclear">退職を取り消す（復職）</button>`:""}</div>`;
@@ -6847,7 +6869,7 @@ function canRequestRetirement(){return hrRetireReady&&!!me&&(me.is_master||["TEN
 function canApproveRetirement(){return hrRetireReady&&!!me&&(me.is_master||me.role==="CEO"||me.role==="HQ")}
 let retStore=null,retMembers=[],retUserSel="",retDateVal="",retQuery="";
 const RET_STATUS={pending:{label:"承認待ち",cls:"b"},approved:{label:"承認済み",cls:"g"},rejected:{label:"却下",cls:""},cancelled:{label:"取り消し済み",cls:""}};
-const RET_SYNC={none:"—",synced:"✅スマレジ同期済み",unsynced:"⚠️スマレジ未同期",error:"⚠️スマレジ同期エラー"};
+const RET_SYNC={none:"⏳停止はこれから（退職日の翌日の朝／源泉徴収票の工程が済んだ後）",synced:"✅スマレジ同期済み",unsynced:"⚠️スマレジ未同期",error:"⚠️スマレジ同期エラー"};
 const retMinDate=()=>{const x=new Date(todayStr()+"T00:00:00");x.setDate(x.getDate()-30);return x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0")}; // 申請できる退職日は30日前から（DB側も同じ）
 const retFmtDate=d=>{const x=new Date(d+"T00:00:00");return `${x.getFullYear()}年${x.getMonth()+1}月${x.getDate()}日`};
 async function retireView(){
@@ -6906,7 +6928,7 @@ function bindRetirePage(){
   if(!uid){toast("従業員を選んでください",true);return}
   if(!d){toast("退職日を選んでください",true);return}
   const u=retMembers.find(x=>x.id===uid);
-  if(!confirm(`${u?u.name:""}さんの退職申請を送ります（退職日 ${retFmtDate(d)}）。${d<todayStr()?"\n退職日が過去のため、本部が承認するとすぐにログインと打刻が止まります。":""}\nよろしいですか？`))return;
+  if(!confirm(`${u?u.name:""}さんの退職申請を送ります（退職日 ${retFmtDate(d)}）。${d<todayStr()?"\n退職日が過去のため、承認後、源泉徴収票の工程が終わったらログインと打刻が止まります。":""}\nよろしいですか？`))return;
   const b=$("ret-send");b.disabled=true;
   const {error}=await sb.rpc("hr_request_retirement",{p_store:retStore,p_user:uid,p_date:d});
   b.disabled=false;
@@ -6995,13 +7017,14 @@ function bindAdminRetirePage(){
  document.querySelectorAll("[data-retapprove]").forEach(b=>b.onclick=async()=>{
   const r=adminRetReqs[b.dataset.retapprove];if(!r)return;
   const u=adminRetUsers[r.user_id]||{name:""};
-  if(!confirm(`${u.name}さんを${retFmtDate(r.effective_date)}付で退職処理します。\n${r.effective_date<todayStr()?"退職日が過去のため、承認するとすぐにログインと打刻が止まります。":"退職日の翌日の朝からログインと打刻が止まります。"}よろしいですか？`))return;
+  if(!confirm(`${u.name}さんを${retFmtDate(r.effective_date)}付で退職処理します。\n退職日を登録し、退職手続きの本部タスクを作ります。ログインと打刻は、退職日の翌日の朝以降で、かつ源泉徴収票の工程が終わってから止まります。よろしいですか？`))return;
   b.disabled=true;
   const {data,error}=await sb.rpc("hr_approve_retirement",{p_request:r.id});
   if(error){toast("承認できませんでした: "+error.message,true);b.disabled=false;render();return}
-  const sync=await retSyncSmaregi(r.id,r.user_id,data.effective_date,!!data.deactivated_now);
   const ok=await hqNotifyOffboarding(r.user_id,u.name,u.role,data.effective_date); // 失敗しても承認は有効（トースト表示のみ）
-  toast(`承認しました（${sync.status==="synced"?"スマレジにも反映":"⚠️スマレジ未同期。一覧から再同期できます"}）${ok?"／退職手続きの本部タスクを作成":""}`,sync.status!=="synced");
+  const fin=await hrFinalizeRetirement(r.user_id); // 退職日が過去でも、源泉徴収票の工程が済むまでは停止しない（タスクを作った後に判定する）
+  const state=fin.stopped?(fin.sync&&fin.sync.status==="synced"?"／停止し、スマレジにも反映しました":"／停止しました（⚠️スマレジ未同期。一覧から再同期できます）"):(fin.reason==="slip_pending"?"／"+HR_HOLD_TEXT.slip_pending:"／"+HR_HOLD_TEXT.not_due);
+  toast(`承認しました${ok?"／退職手続きの本部タスクを作成":""}${state}`,(fin.stopped&&fin.sync&&fin.sync.status!=="synced")||fin.reason==="error");
   render();
  });
  document.querySelectorAll("[data-retreject]").forEach(b=>b.onclick=async()=>{
@@ -7017,8 +7040,7 @@ function bindAdminRetirePage(){
  document.querySelectorAll("[data-retresync]").forEach(b=>b.onclick=async()=>{
   const r=adminRetReqs[b.dataset.retresync];if(!r)return;
   b.disabled=true;
-  const past=r.effective_date<todayStr(); // 退職日を過ぎていれば打刻OFFまで一緒に行う
-  const sync=await retSyncSmaregi(r.id,r.user_id,r.effective_date,past);
+  const sync=await retSyncSmaregi(r.id,r.user_id,r.effective_date,true); // v4: 再同期が必要になるのは停止後のみ＝退職日と打刻OFFを送る
   toast(sync.status==="synced"?"スマレジに反映しました":"スマレジ反映に失敗しました。時間をおいて再度お試しください",sync.status!=="synced");
   render();
  });
@@ -7038,6 +7060,39 @@ async function myDocsView(){
  });
  h+=`</div>`;
  return h;
+}
+// 2026-10-03追加: 従業員編集から源泉徴収票をアップロード（本部・社長・マスター）。
+//   Storage(hr-documents/{user_id}/withholding_{年}.pdf)→hr_register_document→（希望すれば）本人へLINE案内→退職日を過ぎていれば停止判定
+function bindAdminDocUpload(){
+ const btn=$("eu-doc-upload");if(!btn)return;
+ btn.onclick=async()=>{
+  const f=$("eu-doc-file").files[0],year=Number($("eu-doc-year").value),uid=adminDetail;
+  if(!f){toast("PDFファイルを選んでください",true);return}
+  if(!(f.type==="application/pdf"||/\.pdf$/i.test(f.name))){toast("PDFファイルを選んでください",true);return}
+  if(f.size>10*1024*1024){toast("ファイルが大きすぎます（10MBまで）",true);return}
+  const u=adminUsers.find(x=>x.id===uid)||{name:""};
+  if(!confirm(`${u.name}さんの${year}年分の源泉徴収票として保管します。\n同じ年のものが既にあれば差し替えます。よろしいですか？`))return;
+  btn.disabled=true;btn.textContent="アップロード中…";
+  try{
+   const path=`${uid}/withholding_${year}.pdf`;
+   const up=await sb.storage.from("hr-documents").upload(path,f,{upsert:true,contentType:"application/pdf"});
+   if(up.error)throw new Error("アップロードできませんでした: "+up.error.message);
+   const {data:reg,error:re}=await sb.rpc("hr_register_document",{p_user:uid,p_kind:"withholding_slip",p_year:year,p_path:path});
+   if(re)throw new Error("登録できませんでした: "+re.message);
+   let note="保管しました";
+   if(confirm(`${u.name}さんへLINEで「源泉徴収票が届きました」と案内しますか？\n（PDFそのものはLINEに送りません。本人のマイページ「書類」から見られます）`)){
+    try{
+     const {data:{session}}=await sb.auth.getSession();
+     const r=await fetch(SUPA_URL+"/functions/v1/line-webhook",{method:"POST",headers:{"Content-Type":"application/json",apikey:SUPA_KEY,Authorization:"Bearer "+(session?session.access_token:"")},body:JSON.stringify({action:"push_user",user_id:uid,text:`${u.name}さん\n\n源泉徴収票が届きました。ポータルの「自分の書類」からご確認ください。`})});
+     const j=await r.json().catch(()=>({}));
+     if(j.ok){await sb.rpc("hr_mark_document_notified",{p_document:reg.id});note+="／LINEで案内しました"}else note+="／⚠️LINE案内は送れませんでした（"+(j.error||"原因不明")+"）"
+    }catch(e){note+="／⚠️LINE案内は送れませんでした"}
+   }
+   const fin=await hrFinalizeRetirement(uid); // 退職日を過ぎていて、他に待つものが無ければここで停止
+   if(fin.stopped)note+=fin.sync&&fin.sync.status==="synced"?"／退職日を過ぎているため停止し、スマレジにも反映しました":"／停止しました（⚠️スマレジ未同期）";
+   toast(note);try{const {data:us2}=await sb.from("users").select("*");if(us2)adminUsers=us2}catch(e){}render();
+  }catch(e){toast(e.message,true);btn.disabled=false;btn.textContent="📎 アップロードして保管する"}
+ };
 }
 function bindMyDocsPage(){
  document.querySelectorAll("[data-mydoc]").forEach(r=>r.onclick=async()=>{
@@ -9866,6 +9921,7 @@ function bindPage(){
  if(page==="shift"||page==="actual"){bindShiftPage();bindActualPage()}
  if(page==="manuals")bindManualsPage(); // v2.6.59
  if(page==="cashhandoff")bindCashHandoffPage(); // 2026-09-08追加
+ if(page==="admin"&&adminMode==="edit")bindAdminDocUpload();
  if(page==="mydocs"||(page==="admin"&&adminMode==="edit"))bindMyDocsPage(); // 2026-10-03追加（管理の従業員編集にも書類の「開く」がある）
  if(page==="retire")bindRetirePage(); // 2026-10-03追加
  if(page==="admin"&&adminMode==="retire")bindAdminRetirePage(); // 2026-10-03追加
@@ -11290,8 +11346,13 @@ function bindPage(){
   if(error){toast("保存エラー: "+error.message,true);if(btn)btn.disabled=false;return}
   let sm="";
   try{
-   const r=await smaregiTerminate(adminDetail,d,{deactivate:!d||!!(data&&data.deactivated_now)}); // 今日以降の退職日は打刻停止を翌朝の自動処理に任せる
-   sm=r&&r.ok?(r.skipped?"（スマレジは未連携）":"／スマレジにも反映しました"):"／スマレジ反映に失敗（後で再実行してください）";
+   if(!d){ // 退職の取り消し（復職）: スマレジの退職日を消して打刻を戻す
+    const r=await smaregiTerminate(adminDetail,null,{deactivate:true});
+    sm=r&&r.ok?(r.skipped?"（スマレジは未連携）":"／スマレジも元に戻しました"):"／スマレジを元に戻せませんでした（後で確認してください）";
+   }else{ // 停止してよい（退職日を過ぎ、源泉徴収票の工程も済んでいる）ときだけ停止＋スマレジ反映。それ以外は待つ
+    const f=await hrFinalizeRetirement(adminDetail);
+    sm=f.stopped?(f.sync&&f.sync.status==="synced"?"／停止し、スマレジにも反映しました":"／停止しました（⚠️スマレジ反映に失敗。申請一覧または後で再実行してください）"):"／"+(HR_HOLD_TEXT[f.reason]||"停止は後で行われます");
+   }
   }catch(e){sm="／スマレジ反映に失敗"}
   const apps=(data&&data.applicants)||0;
   toast(d?`退職日を保存しました${apps?"／応募者の状況を退職に更新":""}${sm}`:`退職を取り消しました${sm}`);
@@ -11300,7 +11361,7 @@ function bindPage(){
  if($("eu-termsave"))$("eu-termsave").onclick=()=>{
   const d=$("eu-term").value;
   if(!d){toast("退職日を選んでください",true);return}
-  if(!confirm(`退職日を ${d} に設定します。\n\n・退職日の翌日の朝からアカウントが使えなくなります（退職日が昨日以前なら今すぐ止まります）\n・スマレジ・タイムカードにも退職日が登録されます\n・応募者管理の状況が「退職」になります\n\nよろしいですか？`))return;
+  if(!confirm(`退職日を ${d} に設定します。\n\n・アカウントが止まるのは、退職日の翌日の朝以降で、かつ源泉徴収票の工程（本部タスク）が終わってからです\n・スマレジ・タイムカードへの退職日の反映も、そのとき行います\n・応募者管理の状況が「退職」になります\n\nよろしいですか？`))return;
   saveTerm(d);
  };
  if($("eu-termclear"))$("eu-termclear").onclick=()=>{

@@ -930,6 +930,7 @@ const openApplicant=new URLSearchParams(location.search).get("a"); // v2.6.64 �
 // v2.7 統合ポータルシェル（portal.html）からの深リンク対応（担当Fからの依頼・実装指示書_統合ポータルシェル）
 // 例: ?page=shift で開けば、ホームではなくシフト画面が最初から開く。埋め込みiframe用のためURLはクリアしない
 const deepLinkPage=new URLSearchParams(location.search).get("page");
+const deepLinkMode=new URLSearchParams(location.search).get("m"); // 2026-10-03追加: ?page=admin&m=retire で退職申請一覧を直接開く
 const deepLinkUser=new URLSearchParams(location.search).get("u"); // 2026-10-03追加: ?page=admin&u=<user_id> でその人の従業員編集（管理画面）を直接開く（本部タスクのリンク用。ログインは必要）
 const deepLinkSub=new URLSearchParams(location.search).get("sub"); // 2026-09-08追加: page=shift用のサブページ指定（勤怠メニュー: dashboard/submit/adjust/confirmed/actual/settings）
 const embedMode=new URLSearchParams(location.search).get("embed")==="1"; // v2.7 統合ポータルシェルのiframe埋め込み用。自前のnav・headerを隠す（担当F依頼・tori-dashboardのembed=1と同じ考え方）
@@ -1693,7 +1694,9 @@ async function updateDots(){ // v1.7 未読通知バッジ（ホーム=自分宛
   const reps=(ns||[]).filter(n=>n.type==="report_new"||n.type==="report_updated").length; // v2.6.28 日報通知は一覧タブへ
   const others=(ns||[]).length-joins-recs-reps;
   const set=(el,n)=>{if(!el)return;if(n>0){el.textContent=n>99?"99+":n;el.style.display=""}else el.style.display="none"};
-  set($("homedot"),others);set($("admdot"),joins);
+  let retPend=0;
+  if(canApproveRetirement()){try{const {count:rc}=await sb.from("hr_change_requests").select("id",{count:"exact",head:true}).eq("kind","retirement").eq("status","pending");retPend=rc||0}catch(e){}} // 2026-10-03 退職申請の承認待ちも「管理」のバッジに足す
+  set($("homedot"),others);set($("admdot"),joins+retPend);
   // v2.6.49 応募タブのバッジは「画面に出るお知らせの件数」と一致させる。
   // 通知の件数で数えていたため、古い通知が残って「何が未読か分からない」状態になっていた
   set($("recruitdot"),await recruitUnreadCount());
@@ -1808,7 +1811,8 @@ async function loadMe(uid,opts){
  // v2.7 統合ポータルシェルからの深リンク（?page=）。openApplicantのほうが優先、権限的に見られないページ・未知のキーは無視してホームのまま
  if(openApplicant&&can("recruit")){page="recruit";rcDetail=openApplicant}
  else if(deepLinkPage&&DEEPLINK_PAGES.includes(deepLinkPage)&&!(me.role==="GAIHAN"&&GAIHAN_HIDDEN_PAGES.includes(deepLinkPage))){page=deepLinkPage;if(deepLinkPage==="actual")sfMgStep="actual";
-  if(deepLinkPage==="shift"&&["dashboard","submit","adjust","confirmed","actual","settings"].includes(deepLinkSub))sfMgStep=deepLinkSub; // 2026-09-08追加: 勤怠メニュー(ダッシュボード/シフト/実績/設定)からの直接遷移  if(deepLinkPage==="admin"&&deepLinkUser&&/^[0-9a-f-]{36}$/i.test(deepLinkUser)&&(can("staff_admin")||can("store_admin")))await openAdminUserByLink(deepLinkUser); // 2026-10-03追加
+  if(deepLinkPage==="shift"&&["dashboard","submit","adjust","confirmed","actual","settings"].includes(deepLinkSub))sfMgStep=deepLinkSub; // 2026-09-08追加: 勤怠メニュー(ダッシュボード/シフト/実績/設定)からの直接遷移  if(deepLinkPage==="admin"&&deepLinkMode==="retire"&&canApproveRetirement())adminMode="retire";
+  if(deepLinkPage==="admin"&&deepLinkUser&&/^[0-9a-f-]{36}$/i.test(deepLinkUser)&&(can("staff_admin")||can("store_admin")))await openAdminUserByLink(deepLinkUser); // 2026-10-03追加
  }
  else{page="home"}
  if(openApplicant)history.replaceState({},"",location.pathname); // 開いたらURLのパラメータは消す（再読み込みで毎回同じ人が開かないように）。?page=はiframeの再読み込みでも同じページを開き続けたいので消さない
@@ -6919,8 +6923,8 @@ async function adminRetireView(){
    <option value="approved" ${f==="approved"?"selected":""}>承認済みのみ</option><option value="cancelled" ${f==="cancelled"?"selected":""}>取り消し済みのみ</option>
    <option value="unsynced" ${f==="unsynced"?"selected":""}>スマレジ未同期・エラーのみ</option></select></div>
   <div class="card"><h3 style="margin:0 0 6px">📋 退職申請フォームのURL（店長・チーム長に渡せます）</h3>
-   <p class="muted" style="margin:0 0 6px;font-size:12px">開くとログイン画面→ログイン後に退職申請の画面が開きます（各自のnippoのID・パスワードで入ります。自分の店舗の分だけ申請できます）。</p>
-   <input class="inp" id="adret-url" readonly value="${NIPPO_URL}?page=retire" style="margin:0 0 6px"><button class="btn sm" id="adret-copy">URLをコピー</button></div>`;
+   <p class="muted" style="margin:0 0 6px;font-size:12px">ログイン不要で、1枚のシンプルなフォームが開きます。送られた申請は「承認待ち」で入り、ここで承認するまで何も変わりません。URLを知っている人だけが使えます（外に漏れたときは「URLを作り直す」で古いURLを使えなくできます）。</p>
+   <input class="inp" id="adret-url" readonly value="読み込み中…" style="margin:0 0 6px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" id="adret-copy">URLをコピー</button><button class="btn sm sub" id="adret-rotate">URLを作り直す</button></div></div>`;
  const shown=(reqs||[]).filter(r=>f==="all"||(f==="pending"&&r.status==="pending")||(f==="approved"&&r.status==="approved")||(f==="cancelled"&&r.status==="cancelled")||(f==="unsynced"&&r.status==="approved"&&(r.sync_status==="unsynced"||r.sync_status==="error")));
  if(!shown.length)return h+`<p class="muted" style="margin-top:16px">該当する申請はありません。</p>`;
  shown.forEach(r=>{
@@ -6928,7 +6932,7 @@ async function adminRetireView(){
   const nm=(U[r.user_id]||{}).name||"（不明）";
   h+=`<div class="card"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
    <span><b>${esc(nm)}</b>　<span class="badge ${st.cls}">${st.label}</span><br>
-   <span class="muted">${esc(sname(r.store_id))} ／ 退職日 <b>${retFmtDate(r.effective_date)}</b><br>申請 ${new Date(r.requested_at).toLocaleString("ja-JP")}（${esc((U[r.requested_by]||{}).name||"")}）
+   <span class="muted">${esc(sname(r.store_id))} ／ 退職日 <b>${retFmtDate(r.effective_date)}</b><br>申請 ${new Date(r.requested_at).toLocaleString("ja-JP")}（${esc((U[r.requested_by]||{}).name||(r.requester_name?r.requester_name+"・フォーム":""))}）${r.note?`<br>備考: ${esc(r.note)}`:""}
    ${r.status==="approved"?`<br>承認 ${new Date(r.approved_at).toLocaleString("ja-JP")} ／ ${RET_SYNC[r.sync_status]||r.sync_status}${r.synced_at?`（${new Date(r.synced_at).toLocaleString("ja-JP")}）`:""}`:""}
    ${r.status==="cancelled"?`<br>取り消し ${r.cancelled_at?new Date(r.cancelled_at).toLocaleString("ja-JP"):""}${r.cancelled_by&&U[r.cancelled_by]?`（${esc(U[r.cancelled_by].name)}）`:""}`:""}
    ${r.status==="rejected"?`<br>却下 ${new Date(r.rejected_at).toLocaleString("ja-JP")}${r.reject_reason?` ／ 理由: ${esc(r.reject_reason)}`:""}`:""}</span></span>
@@ -6954,9 +6958,18 @@ async function retSyncSmaregi(reqId,uid,date,deactivateNow){
  return {status,result};
 }
 function bindAdminRetirePage(){
+ const setFormUrl=t=>{if($("adret-url"))$("adret-url").value=t?NIPPO_URL+"retire-form.html?k="+t:"（取得できませんでした）"};
+ if($("adret-url"))sb.rpc("hr_get_retire_form_token").then(({data,error})=>setFormUrl(error?null:data));
  if($("adret-copy"))$("adret-copy").onclick=async()=>{
   const v=$("adret-url").value;
+  if(!/^https:/.test(v)){toast("URLがまだ読み込めていません",true);return}
   try{await navigator.clipboard.writeText(v);toast("URLをコピーしました")}catch(e){$("adret-url").select();toast("URLを選択しました。コピーしてください")}
+ };
+ if($("adret-rotate"))$("adret-rotate").onclick=async()=>{
+  if(!confirm("申請フォームのURLを作り直します。\n今までのURLは使えなくなります（渡した店長には新しいURLを渡し直してください）。よろしいですか？"))return;
+  const {data,error}=await sb.rpc("hr_rotate_retire_form_token");
+  if(error){toast("作り直せませんでした: "+error.message,true);return}
+  setFormUrl(data);toast("新しいURLを作りました。コピーして渡してください");
  };
  document.querySelectorAll("[data-retcancel]").forEach(b=>b.onclick=async()=>{
   const r=adminRetReqs[b.dataset.retcancel];if(!r)return;

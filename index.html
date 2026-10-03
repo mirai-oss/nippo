@@ -930,6 +930,7 @@ const openApplicant=new URLSearchParams(location.search).get("a"); // v2.6.64 �
 // v2.7 統合ポータルシェル（portal.html）からの深リンク対応（担当Fからの依頼・実装指示書_統合ポータルシェル）
 // 例: ?page=shift で開けば、ホームではなくシフト画面が最初から開く。埋め込みiframe用のためURLはクリアしない
 const deepLinkPage=new URLSearchParams(location.search).get("page");
+const deepLinkUser=new URLSearchParams(location.search).get("u"); // 2026-10-03追加: ?page=admin&u=<user_id> でその人の従業員編集（管理画面）を直接開く（本部タスクのリンク用。ログインは必要）
 const deepLinkSub=new URLSearchParams(location.search).get("sub"); // 2026-09-08追加: page=shift用のサブページ指定（勤怠メニュー: dashboard/submit/adjust/confirmed/actual/settings）
 const embedMode=new URLSearchParams(location.search).get("embed")==="1"; // v2.7 統合ポータルシェルのiframe埋め込み用。自前のnav・headerを隠す（担当F依頼・tori-dashboardのembed=1と同じ考え方）
 const DEEPLINK_PAGES=["home","write","weekly","list","check","shift","actual","tasks","chat","manuals","recruit","admin","settings","dash","cashhandoff","mydocs","retire"]; // render()が分岐できるpage値のみ許可（2026-09-08 現金手渡し画面を追加。統合ポータル(portal.html)のnippoPage("cashhandoff")リンクからここへ来る）
@@ -1601,6 +1602,7 @@ async function hqNotifyOnboarding(uid,name,email){
 //   入社版hqNotifyOnboardingと同じ作法（失敗しても本体処理は継続）。法人はnippo側で解決してp_corpで渡す。失敗しても承認処理自体は巻き戻さず、ログ＋「手動で作成してください」トースト。
 //   ★承認処理(hr_approve_retirement・Sync7)は未実装のため、現時点では呼び出し元が無い。承認ハンドラ完成時に
 //   `await hqNotifyOffboarding(userId,name,role,effectiveDate)` を成功パスの最後に1行足すだけで繋がる。
+const NIPPO_URL="https://mirai-oss.github.io/nippo/"; // 本部タスク・URL案内用の公開URL
 async function hqNotifyOffboarding(uid,name,role,retirementDate){
  try{
   // 法人: user_stores→stores.corporation_id→corporations.name（入社版RPCが内部で行う対応表と同じ。担当Eの指示書どおり引数p_corpで渡す）
@@ -1612,8 +1614,16 @@ async function hqNotifyOffboarding(uid,name,role,retirementDate){
    p_is_employee:role!=="AL", // SHAIN/TENCHO/TEAM/HQ/CEOは社員扱い・ALはアルバイト
    p_retirement_date:retirementDate,p_approved_on:todayStr()
   };
-  const {error}=await sb.rpc("hq_create_offboarding_task",args);
+  const {data:taskId,error}=await sb.rpc("hq_create_offboarding_task",args);
   if(error)throw error;
+  // 説明欄に「その人の管理画面」へのリンクを足す（本部タスクから1クリックで従業員編集を開ける。失敗してもタスク自体は有効）
+  try{
+   if(taskId){
+    const link=NIPPO_URL+"?page=admin&u="+uid;
+    const {data:t}=await sb.from("hq_tasks").select("description").eq("id",taskId).maybeSingle();
+    if(t&&!(t.description||"").includes(link))await sb.from("hq_tasks").update({description:((t.description||"")+"\n従業員の管理画面: "+link).trim()}).eq("id",taskId);
+   }
+  }catch(e){console.warn("退職タスクへの管理画面リンク追記:",e)}
   return true;
  }catch(e){
   console.warn("退職手続きタスク自動作成:",e);
@@ -1798,7 +1808,7 @@ async function loadMe(uid,opts){
  // v2.7 統合ポータルシェルからの深リンク（?page=）。openApplicantのほうが優先、権限的に見られないページ・未知のキーは無視してホームのまま
  if(openApplicant&&can("recruit")){page="recruit";rcDetail=openApplicant}
  else if(deepLinkPage&&DEEPLINK_PAGES.includes(deepLinkPage)&&!(me.role==="GAIHAN"&&GAIHAN_HIDDEN_PAGES.includes(deepLinkPage))){page=deepLinkPage;if(deepLinkPage==="actual")sfMgStep="actual";
-  if(deepLinkPage==="shift"&&["dashboard","submit","adjust","confirmed","actual","settings"].includes(deepLinkSub))sfMgStep=deepLinkSub; // 2026-09-08追加: 勤怠メニュー(ダッシュボード/シフト/実績/設定)からの直接遷移
+  if(deepLinkPage==="shift"&&["dashboard","submit","adjust","confirmed","actual","settings"].includes(deepLinkSub))sfMgStep=deepLinkSub; // 2026-09-08追加: 勤怠メニュー(ダッシュボード/シフト/実績/設定)からの直接遷移  if(deepLinkPage==="admin"&&deepLinkUser&&/^[0-9a-f-]{36}$/i.test(deepLinkUser)&&(can("staff_admin")||can("store_admin")))await openAdminUserByLink(deepLinkUser); // 2026-10-03追加
  }
  else{page="home"}
  if(openApplicant)history.replaceState({},"",location.pathname); // 開いたらURLのパラメータは消す（再読み込みで毎回同じ人が開かないように）。?page=はiframeの再読み込みでも同じページを開き続けたいので消さない
@@ -5002,6 +5012,18 @@ let ivRole=null,ivStores=[],lastInvite=null;
 const isAdmin=()=>me&&(me.role==="CEO"||me.role==="HQ");
 const genPw=()=>{const c="abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";let p="";for(let i=0;i<10;i++)p+=c[Math.floor(Math.random()*c.length)];return p};
 
+// 2026-10-03追加: ?page=admin&u=<user_id> の直接リンク。従業員管理の一覧と同じデータを先に読み込んでから、その人の編集画面を開く
+async function openAdminUserByLink(uid){
+ try{
+  const [{data:us},{data:uss},{data:profs}]=await Promise.all([sb.from("users").select("*"),sb.from("user_stores").select("user_id,store_id"),sb.from("employee_profiles").select("*")]);
+  const u=(us||[]).find(x=>x.id===uid);
+  if(!u)return; // 見えない・存在しない人は何もしない（ふつうのadmin一覧のまま）
+  adminUsers=us||[];adminStoresMap={};(uss||[]).forEach(x=>{(adminStoresMap[x.user_id]=adminStoresMap[x.user_id]||[]).push(x.store_id)});
+  adminProfs={};(profs||[]).forEach(x=>adminProfs[x.user_id]=x);adminBankMap={};
+  adminDetail=uid;adminMode="edit";euRole=u.role;euStores=[...(adminStoresMap[uid]||[])];euTeam=u.team_id||null;
+  const q=new URLSearchParams(location.search);q.delete("u");history.replaceState({},"",location.pathname+(q.toString()?"?"+q.toString():"")); // 開いたらuだけ消す（再読み込みで毎回開かないように）
+ }catch(e){console.warn("管理画面リンクを開けませんでした:",e)}
+}
 async function adminView(){
  if(!can("staff_admin")&&!can("store_admin"))return `<p class="muted">このページを表示する権限がありません。</p>`; // v2.4
  if(adminMode==="new")return adminNewView();
@@ -6811,8 +6833,9 @@ let hrRetireReady=false;
 function canRequestRetirement(){return hrRetireReady&&!!me&&(me.is_master||["TENCHO","TEAM","HQ","CEO"].includes(me.role))}
 function canApproveRetirement(){return hrRetireReady&&!!me&&(me.is_master||me.role==="CEO"||me.role==="HQ")}
 let retStore=null,retMembers=[],retUserSel="",retDateVal="",retQuery="";
-const RET_STATUS={pending:{label:"承認待ち",cls:"b"},approved:{label:"承認済み",cls:"g"},rejected:{label:"却下",cls:""}};
+const RET_STATUS={pending:{label:"承認待ち",cls:"b"},approved:{label:"承認済み",cls:"g"},rejected:{label:"却下",cls:""},cancelled:{label:"取り消し済み",cls:""}};
 const RET_SYNC={none:"—",synced:"✅スマレジ同期済み",unsynced:"⚠️スマレジ未同期",error:"⚠️スマレジ同期エラー"};
+const retMinDate=()=>{const x=new Date(todayStr()+"T00:00:00");x.setDate(x.getDate()-30);return x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0")}; // 申請できる退職日は30日前から（DB側も同じ）
 const retFmtDate=d=>{const x=new Date(d+"T00:00:00");return `${x.getFullYear()}年${x.getMonth()+1}月${x.getDate()}日`};
 async function retireView(){
  if(!canRequestRetirement())return `<p class="muted">この画面を利用する権限がありません。</p>`;
@@ -6833,7 +6856,7 @@ async function retireView(){
  retMembers=(mem||[]).map(m=>m.users).filter(u=>u&&u.is_active&&!termSet.has(u.id)&&!pendSet.has(u.id)&&u.id!==me.id).sort((a,b)=>a.name.localeCompare(b.name,"ja"));
  const today=todayStr();
  let h=`<h2>🚪 退職申請</h2>
- <p class="muted" style="margin-top:-8px">退職する方の申請を本部へ送ります。申請しただけでは何も変わらず、本部が承認すると退職日が登録されます（退職日の翌日からログインと打刻が止まります）。</p>
+ <p class="muted" style="margin-top:-8px">退職する方の申請を本部へ送ります。申請しただけでは何も変わらず、本部が承認すると退職日が登録されます（退職日の翌日の朝からログインと打刻が止まります）。すでに退職した方は、<b>過去の退職日（30日前まで）</b>も選べます。その場合は承認するとすぐ止まります。</p>
  <div class="card">
   <label style="font-size:13px">店舗</label>
   <select class="inp" id="ret-store">${pick.map(s=>`<option value="${s.id}" ${s.id===retStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select>
@@ -6842,7 +6865,7 @@ async function retireView(){
   <select class="inp" id="ret-user" size="6" style="height:auto"></select>
   ${pendSet.size?`<p class="muted" style="font-size:11px;margin:4px 0 0">※承認待ちの申請がある方（${pendSet.size}名）は選べません</p>`:""}
   <label style="font-size:13px;margin-top:8px;display:block">退職日</label>
-  <input class="inp" type="date" id="ret-date" min="${today}" value="${esc(retDateVal)}">
+  <input class="inp" type="date" id="ret-date" min="${retMinDate()}" value="${esc(retDateVal)}">
   <button class="btn" id="ret-send" style="margin-top:10px">退職申請を送る</button>
  </div>
  <div class="card"><h3 style="margin:0 0 8px">この店舗の申請状況（直近15件）</h3>`;
@@ -6870,7 +6893,7 @@ function bindRetirePage(){
   if(!uid){toast("従業員を選んでください",true);return}
   if(!d){toast("退職日を選んでください",true);return}
   const u=retMembers.find(x=>x.id===uid);
-  if(!confirm(`${u?u.name:""}さんの退職申請を送ります（退職日 ${retFmtDate(d)}）。よろしいですか？`))return;
+  if(!confirm(`${u?u.name:""}さんの退職申請を送ります（退職日 ${retFmtDate(d)}）。${d<todayStr()?"\n退職日が過去のため、本部が承認するとすぐにログインと打刻が止まります。":""}\nよろしいですか？`))return;
   const b=$("ret-send");b.disabled=true;
   const {error}=await sb.rpc("hr_request_retirement",{p_store:retStore,p_user:uid,p_date:d});
   b.disabled=false;
@@ -6884,7 +6907,7 @@ async function adminRetireView(){
  const {data:reqs,error}=await sb.from("hr_change_requests").select("*").eq("kind","retirement").order("requested_at",{ascending:false}).limit(200);
  let h=`<span class="back" id="adback">← 従業員一覧</span><h2>🚪 退職申請一覧</h2>`;
  if(error)return h+`<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
- const uids=[...new Set((reqs||[]).flatMap(r=>[r.user_id,r.requested_by]).filter(Boolean))];
+ const uids=[...new Set((reqs||[]).flatMap(r=>[r.user_id,r.requested_by,r.cancelled_by]).filter(Boolean))];
  const {data:us}=uids.length?await sb.from("users").select("id,name,role").in("id",uids):{data:[]};
  const U={};(us||[]).forEach(u=>U[u.id]=u);
  adminRetReqs={};(reqs||[]).forEach(r=>adminRetReqs[r.id]=r);adminRetUsers=U;
@@ -6893,8 +6916,12 @@ async function adminRetireView(){
  h+=`<div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><label style="font-size:13px">表示：</label>
   <select class="inp" id="adret-filter" style="flex:1;min-width:140px;margin:0">
    <option value="pending" ${f==="pending"?"selected":""}>承認待ちのみ</option><option value="all" ${f==="all"?"selected":""}>すべて</option>
-   <option value="unsynced" ${f==="unsynced"?"selected":""}>スマレジ未同期・エラーのみ</option></select></div>`;
- const shown=(reqs||[]).filter(r=>f==="all"||(f==="pending"&&r.status==="pending")||(f==="unsynced"&&r.status==="approved"&&(r.sync_status==="unsynced"||r.sync_status==="error")));
+   <option value="approved" ${f==="approved"?"selected":""}>承認済みのみ</option><option value="cancelled" ${f==="cancelled"?"selected":""}>取り消し済みのみ</option>
+   <option value="unsynced" ${f==="unsynced"?"selected":""}>スマレジ未同期・エラーのみ</option></select></div>
+  <div class="card"><h3 style="margin:0 0 6px">📋 退職申請フォームのURL（店長・チーム長に渡せます）</h3>
+   <p class="muted" style="margin:0 0 6px;font-size:12px">開くとログイン画面→ログイン後に退職申請の画面が開きます（各自のnippoのID・パスワードで入ります。自分の店舗の分だけ申請できます）。</p>
+   <input class="inp" id="adret-url" readonly value="${NIPPO_URL}?page=retire" style="margin:0 0 6px"><button class="btn sm" id="adret-copy">URLをコピー</button></div>`;
+ const shown=(reqs||[]).filter(r=>f==="all"||(f==="pending"&&r.status==="pending")||(f==="approved"&&r.status==="approved")||(f==="cancelled"&&r.status==="cancelled")||(f==="unsynced"&&r.status==="approved"&&(r.sync_status==="unsynced"||r.sync_status==="error")));
  if(!shown.length)return h+`<p class="muted" style="margin-top:16px">該当する申請はありません。</p>`;
  shown.forEach(r=>{
   const st=RET_STATUS[r.status]||{label:r.status,cls:""};
@@ -6903,9 +6930,11 @@ async function adminRetireView(){
    <span><b>${esc(nm)}</b>　<span class="badge ${st.cls}">${st.label}</span><br>
    <span class="muted">${esc(sname(r.store_id))} ／ 退職日 <b>${retFmtDate(r.effective_date)}</b><br>申請 ${new Date(r.requested_at).toLocaleString("ja-JP")}（${esc((U[r.requested_by]||{}).name||"")}）
    ${r.status==="approved"?`<br>承認 ${new Date(r.approved_at).toLocaleString("ja-JP")} ／ ${RET_SYNC[r.sync_status]||r.sync_status}${r.synced_at?`（${new Date(r.synced_at).toLocaleString("ja-JP")}）`:""}`:""}
+   ${r.status==="cancelled"?`<br>取り消し ${r.cancelled_at?new Date(r.cancelled_at).toLocaleString("ja-JP"):""}${r.cancelled_by&&U[r.cancelled_by]?`（${esc(U[r.cancelled_by].name)}）`:""}`:""}
    ${r.status==="rejected"?`<br>却下 ${new Date(r.rejected_at).toLocaleString("ja-JP")}${r.reject_reason?` ／ 理由: ${esc(r.reject_reason)}`:""}`:""}</span></span>
    <span style="display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap">
    ${r.status==="pending"?`<button class="btn sm" data-retapprove="${r.id}">承認</button><button class="btn sm sub" data-retreject="${r.id}">却下</button>`:""}
+   ${r.status==="approved"?`<button class="btn sm sub" data-retcancel="${r.id}" style="color:var(--red);border-color:var(--red)">↩ 取り消す（復職）</button>`:""}
    ${r.status==="approved"&&(r.sync_status==="unsynced"||r.sync_status==="error")?`<button class="btn sm" data-retresync="${r.id}">⚠️スマレジ未同期・再同期</button>`:""}
    </span></div></div>`;
  });
@@ -6925,11 +6954,26 @@ async function retSyncSmaregi(reqId,uid,date,deactivateNow){
  return {status,result};
 }
 function bindAdminRetirePage(){
+ if($("adret-copy"))$("adret-copy").onclick=async()=>{
+  const v=$("adret-url").value;
+  try{await navigator.clipboard.writeText(v);toast("URLをコピーしました")}catch(e){$("adret-url").select();toast("URLを選択しました。コピーしてください")}
+ };
+ document.querySelectorAll("[data-retcancel]").forEach(b=>b.onclick=async()=>{
+  const r=adminRetReqs[b.dataset.retcancel];if(!r)return;
+  const u=adminRetUsers[r.user_id]||{name:""};
+  if(!confirm(`${u.name}さん（退職日 ${retFmtDate(r.effective_date)}）の退職を取り消します。\n・退職日を消して、在籍に戻します（ログインも元に戻ります）\n・スマレジの退職日も消し、打刻を使える状態に戻します\n・応募者管理の状況も「採用」に戻ります\nよろしいですか？`))return;
+  b.disabled=true;
+  const {error}=await sb.rpc("hr_cancel_retirement",{p_request:r.id});
+  if(error){toast("取り消せませんでした: "+error.message,true);b.disabled=false;render();return}
+  let sm="";
+  try{const x=await smaregiTerminate(r.user_id,null,{deactivate:true});sm=x&&x.ok?(x.skipped?"（スマレジは未連携）":"／スマレジも元に戻しました"):"／⚠️スマレジを元に戻せませんでした。スマレジ側を確認してください"}catch(e){sm="／⚠️スマレジを元に戻せませんでした"}
+  toast("退職を取り消しました"+sm,sm.includes("⚠️"));render();
+ });
  if($("adret-filter"))$("adret-filter").onchange=e=>{adminRetFilter=e.target.value;render()};
  document.querySelectorAll("[data-retapprove]").forEach(b=>b.onclick=async()=>{
   const r=adminRetReqs[b.dataset.retapprove];if(!r)return;
   const u=adminRetUsers[r.user_id]||{name:""};
-  if(!confirm(`${u.name}さんを${retFmtDate(r.effective_date)}付で退職処理します。\n退職日の翌日からログインと打刻が止まります。よろしいですか？`))return;
+  if(!confirm(`${u.name}さんを${retFmtDate(r.effective_date)}付で退職処理します。\n${r.effective_date<todayStr()?"退職日が過去のため、承認するとすぐにログインと打刻が止まります。":"退職日の翌日の朝からログインと打刻が止まります。"}よろしいですか？`))return;
   b.disabled=true;
   const {data,error}=await sb.rpc("hr_approve_retirement",{p_request:r.id});
   if(error){toast("承認できませんでした: "+error.message,true);b.disabled=false;render();return}

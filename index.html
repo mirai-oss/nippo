@@ -322,6 +322,7 @@
   <button data-p="manuals"><i>📎</i>マニュアル</button>
   <button data-p="recruit" id="navrecruit" style="display:none"><i>📥</i>応募<span class="ndot" id="recruitdot" style="display:none"></span></button>
   <button data-p="cashhandoff" id="navcash" style="display:none"><i>💴</i>手渡し</button>
+  <button data-p="mydocs" id="navmydocs"><i>📄</i>書類</button>
   <button data-p="admin" id="navadmin" style="display:none"><i>👥</i>管理<span class="ndot" id="admdot" style="display:none"></span></button>
   <button data-p="settings"><i>⚙️</i>設定</button>
 </nav>
@@ -930,7 +931,7 @@ const openApplicant=new URLSearchParams(location.search).get("a"); // v2.6.64 �
 const deepLinkPage=new URLSearchParams(location.search).get("page");
 const deepLinkSub=new URLSearchParams(location.search).get("sub"); // 2026-09-08追加: page=shift用のサブページ指定（勤怠メニュー: dashboard/submit/adjust/confirmed/actual/settings）
 const embedMode=new URLSearchParams(location.search).get("embed")==="1"; // v2.7 統合ポータルシェルのiframe埋め込み用。自前のnav・headerを隠す（担当F依頼・tori-dashboardのembed=1と同じ考え方）
-const DEEPLINK_PAGES=["home","write","weekly","list","check","shift","actual","tasks","chat","manuals","recruit","admin","settings","dash","cashhandoff"]; // render()が分岐できるpage値のみ許可（2026-09-08 現金手渡し画面を追加。統合ポータル(portal.html)のnippoPage("cashhandoff")リンクからここへ来る）
+const DEEPLINK_PAGES=["home","write","weekly","list","check","shift","actual","tasks","chat","manuals","recruit","admin","settings","dash","cashhandoff","mydocs"]; // render()が分岐できるpage値のみ許可（2026-09-08 現金手渡し画面を追加。統合ポータル(portal.html)のnippoPage("cashhandoff")リンクからここへ来る）
 const GAIHAN_HIDDEN_PAGES=["check","chat","weekly","manuals","shift"]; // 1533行目付近のnav非表示ロジックと同じ基準（外販には深リンクさせない）
 // v2.7 統合ポータルシェル（ns-portal）とのSSO。同一Supabaseプロジェクト・同一オリジンなので、
 // ポータル側が保存しているトークンでnippo自身のセッションを黙って復元できる（担当F調査・依頼分）。
@@ -1595,6 +1596,30 @@ async function hqNotifyOnboarding(uid,name,email){
   if(error)console.warn("入社タスク自動作成:",error.message);
  }catch(e){console.warn("入社タスク自動作成:",e)}
 }
+// 2026-10-03追加(実装指示書_退職手続きタスクと書類配布_担当BE §3-1): 退職申請の承認(hr_approve_retirement)成功後に呼ぶ。
+//   入社版hqNotifyOnboardingと同じ作法（失敗しても本体処理は継続）。法人はnippo側で解決してp_corpで渡す。失敗しても承認処理自体は巻き戻さず、ログ＋「手動で作成してください」トースト。
+//   ★承認処理(hr_approve_retirement・Sync7)は未実装のため、現時点では呼び出し元が無い。承認ハンドラ完成時に
+//   `await hqNotifyOffboarding(userId,name,role,effectiveDate)` を成功パスの最後に1行足すだけで繋がる。
+async function hqNotifyOffboarding(uid,name,role,retirementDate){
+ try{
+  // 法人: user_stores→stores.corporation_id→corporations.name（入社版RPCが内部で行う対応表と同じ。担当Eの指示書どおり引数p_corpで渡す）
+  const {data:us}=await sb.from("user_stores").select("stores(corporations(name))").eq("user_id",uid).limit(1);
+  const corp=us&&us[0]&&us[0].stores&&us[0].stores.corporations?us[0].stores.corporations.name:null;
+  const args={
+   p_user_id:uid,p_name:name,
+   p_is_employee:role!=="AL", // SHAIN/TENCHO/TEAM/HQ/CEOは社員扱い・ALはアルバイト
+   p_retirement_date:retirementDate,p_approved_on:todayStr()
+  };
+  if(corp)args.p_corp=corp; // 解決できなければ省略＝RPC側の既定値
+  const {error}=await sb.rpc("hq_create_offboarding_task",args);
+  if(error)throw error;
+  return true;
+ }catch(e){
+  console.warn("退職手続きタスク自動作成:",e);
+  toast("退職手続きの本部タスク作成に失敗しました。本部タスクから手動で作成してください",true);
+  return false;
+ }
+}
 async function smaregiSync(uid){ // スマレジ・タイムカードにスタッフ登録するEdge Functionを呼ぶ
  try{
   const {data:{session}}=await sb.auth.getSession();
@@ -1718,7 +1743,20 @@ async function loadMe(uid,opts){
   await new Promise(r=>setTimeout(r,400));
  }
  if(!u){renderLogin("ユーザー情報を取得できませんでした。管理者にお問い合わせください。");await sb.auth.signOut();return}
- if(!u.is_active){renderLogin("このアカウントは無効化されています。本部までお問い合わせください。");await sb.auth.signOut();return}
+ if(!u.is_active){
+  // 2026-10-03追加(補足Q1=a): 退職後も「📄 自分の書類」（源泉徴収票等）だけは本人が見られる。
+  //   hr_documentsに本人の行がある場合に限り、書類ページ専用でログインを通す（他の画面・データは
+  //   page強制＋各テーブルのRLS(is_active必須)の二重で閉じる）。書類が無ければ従来どおりログイン不可
+  const {count:docCount}=await sb.from("hr_documents").select("id",{count:"exact",head:true}).eq("user_id",uid);
+  if(docCount>0){
+   stores=[];storesHidden=[];teams=[];appSettings={};
+   me={...u,stores:[],features:{},docsOnly:true};
+   page="mydocs";
+   await render();
+   return;
+  }
+  renderLogin("このアカウントは無効化されています。本部までお問い合わせください。");await sb.auth.signOut();return
+ }
  // 2026-09-01追加: 入社登録直後にLINEが未連携なら、ホーム画面の前にその場で連携を促す
  // （応募者としてLINE連携済みなら register_via_invite 側で既に引き継がれているのでここには来ない）
  if(opts&&opts.afterJoin&&!u.line_user_id)showLineJoinPrompt=true;
@@ -1791,6 +1829,7 @@ async function doLogin(){
 
 // ===== 画面描画 =====
 async function render(){
+ if(me&&me.docsOnly)page="mydocs"; // 退職後の書類専用ログイン: どの経路から来ても書類ページ以外は開かせない
  document.getElementById("nav").style.display=embedMode?"none":"flex";
  document.body.classList.toggle("withnav",!embedMode);
  document.body.classList.toggle("embedmode",embedMode); // v2.7 embed=1修正: withnavを外すとPC幅拡張(940px)も一緒に外れ480px固定に戻ってしまうため、別クラスで幅だけ確保する（担当F報告）
@@ -1800,8 +1839,9 @@ async function render(){
  if(me.role==="GAIHAN")document.querySelectorAll('nav button[data-p="check"],nav button[data-p="chat"],nav button[data-p="weekly"],nav button[data-p="manuals"],nav button[data-p="shift"]').forEach(b=>b.style.display="none");
  document.getElementById("navrecruit").style.display=can("recruit")?"":"none"; // v2.5.2 応募は独立タブ
  document.getElementById("navcash").style.display=can("cash_handoff_manage")?"":"none"; // 2026-09-08追加
+ if(me.docsOnly)document.querySelectorAll("nav button").forEach(b=>{b.style.display=b.dataset.p==="mydocs"?"":"none"}); // 書類専用ログインは書類ボタンだけ表示
  document.getElementById("navactual").style.display=(sfCanManage(null)||me.role==="TENCHO")?"":"none"; // v2.7 実績確認（シフトから分離）
- updateDots();
+ if(!me.docsOnly)updateDots();
  let body="";
  if(showLineJoinPrompt)body=await lineJoinPromptView(); // 2026-09-01追加: 入社登録直後のLINE連携案内（他画面より優先）
  else if(page==="home")body=await homeView();
@@ -1817,6 +1857,7 @@ async function render(){
  else if(page==="dash")body=await dashView();
  else if(page==="recruit")body=await recruitView(); // v2.5.2
  else if(page==="cashhandoff")body=`<div class="sf-theme">${await cashHandoffView()}</div>`; // 2026-09-08追加
+ else if(page==="mydocs")body=`<div class="sf-theme">${await myDocsView()}</div>`; // 2026-10-03追加: 📄 自分の書類
  else if(page==="admin")body=await adminView();
  else if(page==="settings")body=await settingsView();
  $("app").innerHTML=(embedMode?"":`<header><b>日報・週報システム</b><span style="font-size:12px">${esc(me.name)}（${ROLE_NAME[me.role]||""}）</span></header>`)+`<main>${body}</main>`;
@@ -6748,6 +6789,29 @@ function cashStatusOf(rec){
  if(rec.withdrawn_at)return {label:"🏧引き出し済み・未対応",cls:"b",withdrawn:true};
  return {label:"未対応",cls:"b",withdrawn:false};
 }
+// 2026-10-03追加: マイページ「📄 自分の書類」（実装指示書_退職手続きタスクと書類配布_担当BE_2026-10-03.md §3-3）
+//   hr_documents（本人の行だけ読める）を一覧し、押したときに短時間の署名付きURLで開く（本人のみ・URLはLINE等に載せない）
+const HR_DOC_KIND_LABEL={withholding_slip:"源泉徴収票"};
+async function myDocsView(){
+ const {data:docs,error}=await sb.from("hr_documents").select("id,kind,year,path,uploaded_at").eq("user_id",me.id).order("year",{ascending:false}).order("uploaded_at",{ascending:false});
+ let h=`<h2>📄 自分の書類</h2>
+ <p class="muted" style="margin-top:-8px">会社から配布された書類（源泉徴収票など）です。あなた本人だけが見られます。${me.docsOnly?"<br>※退職後は、この書類ページのみご利用いただけます。":""}</p>`;
+ if(error){console.warn("hr_documents読み込み:",error.message);return h+`<p class="muted" style="margin-top:16px">まだ書類はありません。</p>`} // テーブル未作成・権限なし等でも画面は壊さない
+ if(!(docs||[]).length)return h+`<p class="muted" style="margin-top:16px">まだ書類はありません。</p>`;
+ h+=`<div class="card">`;
+ docs.forEach(d=>{
+  h+=`<div class="row" data-mydoc="${esc(d.path)}"><span><b>${esc(HR_DOC_KIND_LABEL[d.kind]||d.kind)}${d.year?`（${d.year}年分）`:""}</b><br><span class="muted">登録日 ${new Date(d.uploaded_at).toLocaleDateString("ja-JP")}</span></span><span class="muted">開く ›</span></div>`;
+ });
+ h+=`</div>`;
+ return h;
+}
+function bindMyDocsPage(){
+ document.querySelectorAll("[data-mydoc]").forEach(r=>r.onclick=async()=>{
+  const {data,error}=await sb.storage.from("hr-documents").createSignedUrl(r.dataset.mydoc,120); // 120秒だけ有効
+  if(error||!data||!data.signedUrl){toast("書類を開けませんでした: "+(error?error.message:"不明なエラー"),true);return}
+  window.open(data.signedUrl,"_blank","noopener");
+ });
+}
 // 2026-09-17追加: ユーザー指示「月を間違えて給料手渡しサインをしてしまう事故があるので、
 //   対象月が終わるまで（翌月になるまで）表示させないでほしい（例: 9月分は10月に入ってから）」。
 //   会計側(invoices.html・給与仕訳タブ、担当C)にも同じ考え方の表示ガードを別途入れてもらう予定
@@ -9568,6 +9632,7 @@ function bindPage(){
  if(page==="shift"||page==="actual"){bindShiftPage();bindActualPage()}
  if(page==="manuals")bindManualsPage(); // v2.6.59
  if(page==="cashhandoff")bindCashHandoffPage(); // 2026-09-08追加
+ if(page==="mydocs")bindMyDocsPage(); // 2026-10-03追加
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
  if($("goweekly"))$("goweekly").onclick=()=>{page="weekly";render()};
  if($("editdaily"))$("editdaily").onclick=()=>{editId=todayDaily.id;page="write";render()};
@@ -11135,7 +11200,7 @@ function bindPage(){
 // ずっと止まったままだった。「チーム長の日報が提出されてもCEO/マスターにバッジが出ない」
 // というユーザー報告の原因はこれ（該当の日報は本人が開けば読めるので可視性の問題ではなく、
 // 開く前に知らせるバッジが自動更新されていなかった）。navの表示状態に関係なく更新するよう修正
-setInterval(()=>{if(me)updateDots()},60000);
+setInterval(()=>{if(me&&!me.docsOnly)updateDots()},60000);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&me)updateDots()});
 
 // セッション切れ対応

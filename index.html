@@ -6930,9 +6930,10 @@ function bindRetirePage(){
   const u=retMembers.find(x=>x.id===uid);
   if(!confirm(`${u?u.name:""}さんの退職申請を送ります（退職日 ${retFmtDate(d)}）。${d<todayStr()?"\n退職日が過去のため、承認後、源泉徴収票の工程が終わったらログインと打刻が止まります。":""}\nよろしいですか？`))return;
   const b=$("ret-send");b.disabled=true;
-  const {error}=await sb.rpc("hr_request_retirement",{p_store:retStore,p_user:uid,p_date:d});
+  const {data:rq,error}=await sb.rpc("hr_request_retirement",{p_store:retStore,p_user:uid,p_date:d});
   b.disabled=false;
   if(error){toast("申請できませんでした: "+error.message,true);return}
+  if(rq&&rq.id)fetch(SUPA_URL+"/functions/v1/hr-retire-notify",{method:"POST",headers:{apikey:SUPA_KEY,Authorization:"Bearer "+SUPA_KEY,"Content-Type":"application/json"},body:JSON.stringify({request_id:rq.id})}).catch(()=>{}); // 本部・チーム長へLINE通知（失敗しても申請は有効）
   retUserSel="";retDateVal="";retQuery="";
   toast("退職申請を送りました。本部の承認をお待ちください");render();
  };

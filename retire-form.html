@@ -94,7 +94,9 @@ async function send(){
   if(!confirm(`${uname}さんの退職申請を送ります（退職日 ${date.replace(/-/g,"/")}）。${past}\nよろしいですか？`))return;
   const b=$("f-send");b.disabled=true;b.textContent="送信中…";
   try{
-    await rpc("hr_public_request_retirement",{p_token:TOKEN,p_store:store,p_user:user,p_date:date,p_requester:req,p_note:note||null});
+    const res=await rpc("hr_public_request_retirement",{p_token:TOKEN,p_store:store,p_user:user,p_date:date,p_requester:req,p_note:note||null});
+    // 本部・チーム長へLINE通知（失敗しても申請自体は有効。一覧のバッジで気づける）
+    if(res&&res.id)fetch(SUPA_URL+"/functions/v1/hr-retire-notify",{method:"POST",headers:{apikey:SUPA_KEY,Authorization:"Bearer "+SUPA_KEY,"Content-Type":"application/json"},body:JSON.stringify({request_id:res.id})}).catch(()=>{});
     $("app").innerHTML=`<div class="done"><b>✅ 送信しました</b><p class="sub" style="margin:0 0 6px">${esc(uname)}さんの退職申請を本部へ送りました。<br>本部が確認して、退職日が登録されます。</p>
       <button id="f-again" class="ghost">続けてもう1件申請する</button></div>`;
     $("f-again").onclick=async()=>{try{opts=await rpc("hr_public_retire_options",{p_token:TOKEN})}catch(e){}render()};

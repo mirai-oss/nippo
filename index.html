@@ -6685,6 +6685,9 @@ async function adminEditView(){
   bankAllowed?sb.from("payroll_bank_accounts").select("*").eq("user_id",adminDetail).maybeSingle():Promise.resolve({data:null})
  ]);
  const bank=bankRes.data;
+ // 2026-10-03追加: この人に配布した書類（源泉徴収票など）。本部・社長・マスターだけが開ける（hr_documentsのRLSと同じ）
+ let hrDocs=[];
+ if(me.is_master||["HQ","CEO"].includes(me.role)){try{const {data:dd}=await sb.from("hr_documents").select("id,kind,year,path,uploaded_at,line_notified_at").eq("user_id",adminDetail).order("year",{ascending:false});hrDocs=dd||[]}catch(e){}}
  let h=`<span class="back" id="adback">← 従業員一覧</span><h2>${esc(u.name)} ${u.is_active?"":'<span class="badge">無効</span>'}</h2>
  <p class="muted" style="margin-top:-8px">${esc(u.email)}</p>`;
  // 2026-09-05追加: 「LINE連携はどこでやるの？身分証明書の追加は？口座情報は？」というユーザー要望に
@@ -6750,6 +6753,12 @@ async function adminEditView(){
  <div class="card" style="margin-top:16px"><h3>パスワード再設定</h3>
   <input type="text" id="eu-pw" placeholder="新しいパスワード（8文字以上）">
   <button class="btn sm" id="eu-setpw">再設定する</button></div>`;
+ if(me.is_master||["HQ","CEO"].includes(me.role)){
+  h+=`<div class="card"><h3>📄 配布した書類（源泉徴収票など）</h3>`;
+  if(!hrDocs.length)h+=`<p class="muted" style="margin:0">まだ配布した書類はありません。退職手続きの本部タスクで源泉徴収票をアップロードすると、ここに保管されます（本人のマイページ「📄 書類」にも表示されます）。</p>`;
+  hrDocs.forEach(d=>{h+=`<div class="row" data-mydoc="${esc(d.path)}"><span><b>${esc(HR_DOC_KIND_LABEL[d.kind]||d.kind)}${d.year?`（${d.year}年分）`:""}</b><br><span class="muted">登録 ${new Date(d.uploaded_at).toLocaleDateString("ja-JP")}${d.line_notified_at?" ／ 本人へLINE案内済み":" ／ LINE案内なし"}</span></span><span class="muted">開く ›</span></div>`});
+  h+=`</div>`;
+ }
  if(u.id!==me.id){
   h+=`<div class="card"><h3>🗓 退職日</h3>
    <p class="muted" style="margin:0">退職日を入れると、スマレジ・タイムカードにも退職日が登録されます。<b>退職日の翌日の朝から</b>、アカウントが使えなくなり打刻もできなくなります（退職日が昨日以前の場合は、保存してすぐ止まります）。応募者管理に記録がある方は、状況が自動で「退職」になります。</p>
@@ -9857,7 +9866,7 @@ function bindPage(){
  if(page==="shift"||page==="actual"){bindShiftPage();bindActualPage()}
  if(page==="manuals")bindManualsPage(); // v2.6.59
  if(page==="cashhandoff")bindCashHandoffPage(); // 2026-09-08追加
- if(page==="mydocs")bindMyDocsPage(); // 2026-10-03追加
+ if(page==="mydocs"||(page==="admin"&&adminMode==="edit"))bindMyDocsPage(); // 2026-10-03追加（管理の従業員編集にも書類の「開く」がある）
  if(page==="retire")bindRetirePage(); // 2026-10-03追加
  if(page==="admin"&&adminMode==="retire")bindAdminRetirePage(); // 2026-10-03追加
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};

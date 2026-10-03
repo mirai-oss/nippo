@@ -323,6 +323,7 @@
   <button data-p="recruit" id="navrecruit" style="display:none"><i>📥</i>応募<span class="ndot" id="recruitdot" style="display:none"></span></button>
   <button data-p="cashhandoff" id="navcash" style="display:none"><i>💴</i>手渡し</button>
   <button data-p="mydocs" id="navmydocs"><i>📄</i>書類</button>
+  <button data-p="retire" id="navretire" style="display:none"><i>🚪</i>退職申請</button>
   <button data-p="admin" id="navadmin" style="display:none"><i>👥</i>管理<span class="ndot" id="admdot" style="display:none"></span></button>
   <button data-p="settings"><i>⚙️</i>設定</button>
 </nav>
@@ -931,7 +932,7 @@ const openApplicant=new URLSearchParams(location.search).get("a"); // v2.6.64 �
 const deepLinkPage=new URLSearchParams(location.search).get("page");
 const deepLinkSub=new URLSearchParams(location.search).get("sub"); // 2026-09-08追加: page=shift用のサブページ指定（勤怠メニュー: dashboard/submit/adjust/confirmed/actual/settings）
 const embedMode=new URLSearchParams(location.search).get("embed")==="1"; // v2.7 統合ポータルシェルのiframe埋め込み用。自前のnav・headerを隠す（担当F依頼・tori-dashboardのembed=1と同じ考え方）
-const DEEPLINK_PAGES=["home","write","weekly","list","check","shift","actual","tasks","chat","manuals","recruit","admin","settings","dash","cashhandoff","mydocs"]; // render()が分岐できるpage値のみ許可（2026-09-08 現金手渡し画面を追加。統合ポータル(portal.html)のnippoPage("cashhandoff")リンクからここへ来る）
+const DEEPLINK_PAGES=["home","write","weekly","list","check","shift","actual","tasks","chat","manuals","recruit","admin","settings","dash","cashhandoff","mydocs","retire"]; // render()が分岐できるpage値のみ許可（2026-09-08 現金手渡し画面を追加。統合ポータル(portal.html)のnippoPage("cashhandoff")リンクからここへ来る）
 const GAIHAN_HIDDEN_PAGES=["check","chat","weekly","manuals","shift"]; // 1533行目付近のnav非表示ロジックと同じ基準（外販には深リンクさせない）
 // v2.7 統合ポータルシェル（ns-portal）とのSSO。同一Supabaseプロジェクト・同一オリジンなので、
 // ポータル側が保存しているトークンでnippo自身のセッションを黙って復元できる（担当F調査・依頼分）。
@@ -1654,13 +1655,13 @@ async function smaregiPullProfiles(uid){
   return await res.json();
  }catch(e){return {ok:false,error:String(e)}}
 }
-async function smaregiTerminate(uid,date){ // v2.6.8 退職日をスマレジへ反映
+async function smaregiTerminate(uid,date,opts){ // v2.6.8 退職日をスマレジへ反映／2026-10-03 opts.deactivate===falseなら退職日だけ送り打刻は止めない（退職申請の承認時）
  try{
   const {data:{session}}=await sb.auth.getSession();
   const res=await fetch(SUPA_URL+"/functions/v1/smaregi-sync",{
    method:"POST",
    headers:{Authorization:"Bearer "+(session?session.access_token:SUPA_KEY),apikey:SUPA_KEY,"Content-Type":"application/json"},
-   body:JSON.stringify({action:"terminate",user_id:uid,date})});
+   body:JSON.stringify({action:"terminate",user_id:uid,date,...(opts&&opts.deactivate===false?{deactivate:false}:{})})});
   return await res.json();
  }catch(e){return {ok:false,error:String(e)}}
 }
@@ -1789,6 +1790,10 @@ async function loadMe(uid,opts){
  //   本人のuser_stores行にひもづく店舗は、is_activeに関わらずそのまま解決する。
  const {data:myStoreRows}=myIds.length?await sb.from("stores").select("id,name").in("id",myIds).order("sort_order"):{data:[]};
  me={...u,stores:myStoreRows||[],features:fmap};
+ hrRetireReady=false; // 2026-10-03追加: 退職申請テーブルがあるか確認（管理者系のみ）
+ if(me.is_master||["TENCHO","TEAM","HQ","CEO"].includes(me.role)){
+  try{const {error:rtErr}=await sb.from("hr_change_requests").select("id",{count:"exact",head:true}).limit(1);hrRetireReady=!rtErr}catch(e){hrRetireReady=false}
+ }
  // v2.6.64 応募者詳細への直接リンクで開いたときは、ホームではなくその応募者の詳細を開く
  // v2.7 統合ポータルシェルからの深リンク（?page=）。openApplicantのほうが優先、権限的に見られないページ・未知のキーは無視してホームのまま
  if(openApplicant&&can("recruit")){page="recruit";rcDetail=openApplicant}
@@ -1839,6 +1844,7 @@ async function render(){
  if(me.role==="GAIHAN")document.querySelectorAll('nav button[data-p="check"],nav button[data-p="chat"],nav button[data-p="weekly"],nav button[data-p="manuals"],nav button[data-p="shift"]').forEach(b=>b.style.display="none");
  document.getElementById("navrecruit").style.display=can("recruit")?"":"none"; // v2.5.2 応募は独立タブ
  document.getElementById("navcash").style.display=can("cash_handoff_manage")?"":"none"; // 2026-09-08追加
+ document.getElementById("navretire").style.display=canRequestRetirement()?"":"none"; // 2026-10-03追加: 退職申請（店長・チーム長・本部・社長・マスター）
  if(me.docsOnly)document.querySelectorAll("nav button").forEach(b=>{b.style.display=b.dataset.p==="mydocs"?"":"none"}); // 書類専用ログインは書類ボタンだけ表示
  document.getElementById("navactual").style.display=(sfCanManage(null)||me.role==="TENCHO")?"":"none"; // v2.7 実績確認（シフトから分離）
  if(!me.docsOnly)updateDots();
@@ -1857,6 +1863,7 @@ async function render(){
  else if(page==="dash")body=await dashView();
  else if(page==="recruit")body=await recruitView(); // v2.5.2
  else if(page==="cashhandoff")body=`<div class="sf-theme">${await cashHandoffView()}</div>`; // 2026-09-08追加
+ else if(page==="retire")body=`<div class="sf-theme">${await retireView()}</div>`; // 2026-10-03追加: 退職申請
  else if(page==="mydocs")body=`<div class="sf-theme">${await myDocsView()}</div>`; // 2026-10-03追加: 📄 自分の書類
  else if(page==="admin")body=await adminView();
  else if(page==="settings")body=await settingsView();
@@ -5003,6 +5010,7 @@ async function adminView(){
  if(adminMode==="smaregi")return await adminSmaregiView();
  if(adminMode==="stores")return await adminStoresView();
  if(adminMode==="payroll")return await adminPayrollView(); // 2026-08-29続き
+ if(adminMode==="retire")return await adminRetireView(); // 2026-10-03追加: 退職申請一覧（本部・社長・マスター）
  const bankAllowed=me.is_master||me.role==="HQ"; // payroll_bank_accountsのRLSと同じ条件
  const [{data:us,error},{data:uss},{data:ntfs},{data:profs},bankRes]=await Promise.all([
   sb.from("users").select("*"),
@@ -5032,6 +5040,10 @@ async function adminView(){
  if(can("store_admin"))h+=`<button class="btn sub" id="adstores">🏪 店舗管理（追加・並び替え・スマレジ紐付け）</button>`;
  // 2026-08-29続き: 給与・インセンティブ配分（ユーザー要望「マスターの人が振り分けられるように権限設定して」）
  if(me.is_master)h+=`<button class="btn sub" id="adpayroll">💴 給与・インセンティブ配分</button>`;
+ if(canApproveRetirement()){ // 2026-10-03追加: 退職申請一覧（承認待ち件数つき）
+  const {count:retPending}=await sb.from("hr_change_requests").select("id",{count:"exact",head:true}).eq("kind","retirement").eq("status","pending");
+  h+=`<button class="btn sub" id="adretire">🚪 退職申請一覧${retPending>0?`（承認待ち ${retPending}件）`:""}</button>`;
+ }
  if(can("staff_admin")){
   // 2026-09-05追加: 「LINE連携・身分証明書、連携してない人をすぐ探せるように」への対応。
   // 複数選択（OR条件＝どれか1つでも当てはまる人を表示）
@@ -6788,6 +6800,162 @@ function cashStatusOf(rec){
  if(rec.receiver_checked_at)return {label:w+"受け取った側のみ確認済み",cls:"b",withdrawn:!!rec.withdrawn_at};
  if(rec.withdrawn_at)return {label:"🏧引き出し済み・未対応",cls:"b",withdrawn:true};
  return {label:"未対応",cls:"b",withdrawn:false};
+}
+// ===== 2026-10-03追加: 退職申請・承認（Sync7。実装指示書_担当B_退職申請承認_2026-10-03.md） =====
+// 画面①「退職申請」（店長・チーム長・本部・社長・マスター）と、画面②「退職申請一覧」（本部・社長・マスター。従業員管理の中）。
+// 承認時は退職日の登録だけ（スマレジへも退職日だけ送る）。ログイン停止・打刻停止は退職日の翌日に毎日の自動処理(hr_apply_due_terminations)が行う。
+// 申請・承認・却下はすべてRPC経由（バックエンドで二重申請・二重承認・承認前の状態変化を検証する）。
+// hrRetireReady: hr_change_requests（DB側のテーブル）が本番に存在する間だけtrue。テーブルが無い間（SQL適用前）は
+//   ナビ・ボタンを出さない（ログイン時にloadMeで1回だけ確認する）。
+let hrRetireReady=false;
+function canRequestRetirement(){return hrRetireReady&&!!me&&(me.is_master||["TENCHO","TEAM","HQ","CEO"].includes(me.role))}
+function canApproveRetirement(){return hrRetireReady&&!!me&&(me.is_master||me.role==="CEO"||me.role==="HQ")}
+let retStore=null,retMembers=[],retUserSel="",retDateVal="",retQuery="";
+const RET_STATUS={pending:{label:"承認待ち",cls:"b"},approved:{label:"承認済み",cls:"g"},rejected:{label:"却下",cls:""}};
+const RET_SYNC={none:"—",synced:"✅スマレジ同期済み",unsynced:"⚠️スマレジ未同期",error:"⚠️スマレジ同期エラー"};
+const retFmtDate=d=>{const x=new Date(d+"T00:00:00");return `${x.getFullYear()}年${x.getMonth()+1}月${x.getDate()}日`};
+async function retireView(){
+ if(!canRequestRetirement())return `<p class="muted">この画面を利用する権限がありません。</p>`;
+ const pick=sfPickableStores();
+ if(!pick.length)return `<h2>🚪 退職申請</h2><p class="muted">申請できる店舗がありません。</p>`;
+ if(!retStore||!pick.find(s=>s.id===retStore))retStore=pick[0].id;
+ const [{data:mem},{data:pend},{data:hist}]=await Promise.all([
+  sb.from("user_stores").select("user_id,users(id,name,role,is_active)").eq("store_id",retStore),
+  sb.from("hr_change_requests").select("user_id").eq("kind","retirement").eq("status","pending").eq("store_id",retStore),
+  sb.from("hr_change_requests").select("id,user_id,effective_date,status,reject_reason,requested_at").eq("kind","retirement").eq("store_id",retStore).order("requested_at",{ascending:false}).limit(15)
+ ]);
+ const ids=(mem||[]).map(m=>m.user_id);
+ const {data:profs}=ids.length?await sb.from("employee_profiles").select("user_id,termination_date").in("user_id",ids):{data:[]};
+ const termSet=new Set((profs||[]).filter(x=>x.termination_date).map(x=>x.user_id));
+ const pendSet=new Set((pend||[]).map(x=>x.user_id));
+ const nameOf={};(mem||[]).forEach(m=>{if(m.users)nameOf[m.user_id]=m.users.name});
+ // 在籍・退職日未登録・承認待ちなし・本人以外
+ retMembers=(mem||[]).map(m=>m.users).filter(u=>u&&u.is_active&&!termSet.has(u.id)&&!pendSet.has(u.id)&&u.id!==me.id).sort((a,b)=>a.name.localeCompare(b.name,"ja"));
+ const today=todayStr();
+ let h=`<h2>🚪 退職申請</h2>
+ <p class="muted" style="margin-top:-8px">退職する方の申請を本部へ送ります。申請しただけでは何も変わらず、本部が承認すると退職日が登録されます（退職日の翌日からログインと打刻が止まります）。</p>
+ <div class="card">
+  <label style="font-size:13px">店舗</label>
+  <select class="inp" id="ret-store">${pick.map(s=>`<option value="${s.id}" ${s.id===retStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select>
+  <label style="font-size:13px">従業員（名前の一部で絞り込めます）</label>
+  <input class="inp" id="ret-q" placeholder="例: 山田" value="${esc(retQuery)}">
+  <select class="inp" id="ret-user" size="6" style="height:auto"></select>
+  ${pendSet.size?`<p class="muted" style="font-size:11px;margin:4px 0 0">※承認待ちの申請がある方（${pendSet.size}名）は選べません</p>`:""}
+  <label style="font-size:13px;margin-top:8px;display:block">退職日</label>
+  <input class="inp" type="date" id="ret-date" min="${today}" value="${esc(retDateVal)}">
+  <button class="btn" id="ret-send" style="margin-top:10px">退職申請を送る</button>
+ </div>
+ <div class="card"><h3 style="margin:0 0 8px">この店舗の申請状況（直近15件）</h3>`;
+ if(!(hist||[]).length)h+=`<p class="muted">まだ申請はありません。</p>`;
+ (hist||[]).forEach(r=>{
+  const st=RET_STATUS[r.status]||{label:r.status,cls:""};
+  h+=`<div class="row" style="cursor:default"><span><b>${esc(nameOf[r.user_id]||"（所属変更・退職済み）")}</b> ／ 退職日 ${retFmtDate(r.effective_date)}<br><span class="muted">${new Date(r.requested_at).toLocaleDateString("ja-JP")}申請 ／ <span class="badge ${st.cls}">${st.label}</span>${r.status==="rejected"&&r.reject_reason?` ／ 理由: ${esc(r.reject_reason)}`:""}</span></span></div>`;
+ });
+ return h+`</div>`;
+}
+function retFillUserOptions(){
+ const q=($("ret-q")?$("ret-q").value:"").trim().replace(/[\s　]/g,"");
+ const list=retMembers.filter(u=>!q||u.name.replace(/[\s　]/g,"").includes(q));
+ const sel=$("ret-user");if(!sel)return;
+ sel.innerHTML=list.length?list.map(u=>`<option value="${u.id}" ${u.id===retUserSel?"selected":""}>${esc(u.name)}（${esc(ROLE_NAME[u.role]||u.role)}）</option>`).join(""):`<option value="" disabled>該当する従業員がいません</option>`;
+}
+function bindRetirePage(){
+ retFillUserOptions();
+ if($("ret-store"))$("ret-store").onchange=e=>{retStore=e.target.value;retUserSel="";retQuery="";render()};
+ if($("ret-q"))$("ret-q").oninput=e=>{retQuery=e.target.value;retFillUserOptions()};
+ if($("ret-user"))$("ret-user").onchange=e=>{retUserSel=e.target.value};
+ if($("ret-date"))$("ret-date").onchange=e=>{retDateVal=e.target.value};
+ if($("ret-send"))$("ret-send").onclick=async()=>{
+  const uid=$("ret-user").value,d=$("ret-date").value;
+  if(!uid){toast("従業員を選んでください",true);return}
+  if(!d){toast("退職日を選んでください",true);return}
+  const u=retMembers.find(x=>x.id===uid);
+  if(!confirm(`${u?u.name:""}さんの退職申請を送ります（退職日 ${retFmtDate(d)}）。よろしいですか？`))return;
+  const b=$("ret-send");b.disabled=true;
+  const {error}=await sb.rpc("hr_request_retirement",{p_store:retStore,p_user:uid,p_date:d});
+  b.disabled=false;
+  if(error){toast("申請できませんでした: "+error.message,true);return}
+  retUserSel="";retDateVal="";retQuery="";
+  toast("退職申請を送りました。本部の承認をお待ちください");render();
+ };
+}
+async function adminRetireView(){
+ if(!canApproveRetirement())return `<p class="muted">この画面を利用する権限がありません。</p>`;
+ const {data:reqs,error}=await sb.from("hr_change_requests").select("*").eq("kind","retirement").order("requested_at",{ascending:false}).limit(200);
+ let h=`<span class="back" id="adback">← 従業員一覧</span><h2>🚪 退職申請一覧</h2>`;
+ if(error)return h+`<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
+ const uids=[...new Set((reqs||[]).flatMap(r=>[r.user_id,r.requested_by]).filter(Boolean))];
+ const {data:us}=uids.length?await sb.from("users").select("id,name,role").in("id",uids):{data:[]};
+ const U={};(us||[]).forEach(u=>U[u.id]=u);
+ adminRetReqs={};(reqs||[]).forEach(r=>adminRetReqs[r.id]=r);adminRetUsers=U;
+ const sname=id=>{const s=[...stores,...storesHidden].find(x=>x.id===id);return s?s.name:"所属不明"};
+ const f=adminRetFilter;
+ h+=`<div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><label style="font-size:13px">表示：</label>
+  <select class="inp" id="adret-filter" style="flex:1;min-width:140px;margin:0">
+   <option value="pending" ${f==="pending"?"selected":""}>承認待ちのみ</option><option value="all" ${f==="all"?"selected":""}>すべて</option>
+   <option value="unsynced" ${f==="unsynced"?"selected":""}>スマレジ未同期・エラーのみ</option></select></div>`;
+ const shown=(reqs||[]).filter(r=>f==="all"||(f==="pending"&&r.status==="pending")||(f==="unsynced"&&r.status==="approved"&&(r.sync_status==="unsynced"||r.sync_status==="error")));
+ if(!shown.length)return h+`<p class="muted" style="margin-top:16px">該当する申請はありません。</p>`;
+ shown.forEach(r=>{
+  const st=RET_STATUS[r.status]||{label:r.status,cls:""};
+  const nm=(U[r.user_id]||{}).name||"（不明）";
+  h+=`<div class="card"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+   <span><b>${esc(nm)}</b>　<span class="badge ${st.cls}">${st.label}</span><br>
+   <span class="muted">${esc(sname(r.store_id))} ／ 退職日 <b>${retFmtDate(r.effective_date)}</b><br>申請 ${new Date(r.requested_at).toLocaleString("ja-JP")}（${esc((U[r.requested_by]||{}).name||"")}）
+   ${r.status==="approved"?`<br>承認 ${new Date(r.approved_at).toLocaleString("ja-JP")} ／ ${RET_SYNC[r.sync_status]||r.sync_status}${r.synced_at?`（${new Date(r.synced_at).toLocaleString("ja-JP")}）`:""}`:""}
+   ${r.status==="rejected"?`<br>却下 ${new Date(r.rejected_at).toLocaleString("ja-JP")}${r.reject_reason?` ／ 理由: ${esc(r.reject_reason)}`:""}`:""}</span></span>
+   <span style="display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap">
+   ${r.status==="pending"?`<button class="btn sm" data-retapprove="${r.id}">承認</button><button class="btn sm sub" data-retreject="${r.id}">却下</button>`:""}
+   ${r.status==="approved"&&(r.sync_status==="unsynced"||r.sync_status==="error")?`<button class="btn sm" data-retresync="${r.id}">⚠️スマレジ未同期・再同期</button>`:""}
+   </span></div></div>`;
+ });
+ return h;
+}
+let adminRetReqs={},adminRetUsers={},adminRetFilter="pending";
+// スマレジ反映→結果をDBへ記録（承認処理とは別トランザクション。失敗しても退職日の登録は有効で、画面から再同期できる）
+async function retSyncSmaregi(reqId,uid,date,deactivateNow){
+ let status="error",result={};
+ try{
+  const r=await smaregiTerminate(uid,date,{deactivate:deactivateNow});
+  result=r||{};
+  status=r&&r.ok?"synced":"unsynced"; // skipped(スマレジ未連携)もok=trueなのでsynced扱い（resultに理由が残る）
+  if(r&&!r.ok&&r.error)status="error";
+ }catch(e){result={error:String(e)}}
+ await sb.rpc("hr_record_retirement_sync",{p_request:reqId,p_status:status,p_result:result});
+ return {status,result};
+}
+function bindAdminRetirePage(){
+ if($("adret-filter"))$("adret-filter").onchange=e=>{adminRetFilter=e.target.value;render()};
+ document.querySelectorAll("[data-retapprove]").forEach(b=>b.onclick=async()=>{
+  const r=adminRetReqs[b.dataset.retapprove];if(!r)return;
+  const u=adminRetUsers[r.user_id]||{name:""};
+  if(!confirm(`${u.name}さんを${retFmtDate(r.effective_date)}付で退職処理します。\n退職日の翌日からログインと打刻が止まります。よろしいですか？`))return;
+  b.disabled=true;
+  const {data,error}=await sb.rpc("hr_approve_retirement",{p_request:r.id});
+  if(error){toast("承認できませんでした: "+error.message,true);b.disabled=false;render();return}
+  const sync=await retSyncSmaregi(r.id,r.user_id,data.effective_date,!!data.deactivated_now);
+  const ok=await hqNotifyOffboarding(r.user_id,u.name,u.role,data.effective_date); // 失敗しても承認は有効（トースト表示のみ）
+  toast(`承認しました（${sync.status==="synced"?"スマレジにも反映":"⚠️スマレジ未同期。一覧から再同期できます"}）${ok?"／退職手続きの本部タスクを作成":""}`,sync.status!=="synced");
+  render();
+ });
+ document.querySelectorAll("[data-retreject]").forEach(b=>b.onclick=async()=>{
+  const r=adminRetReqs[b.dataset.retreject];if(!r)return;
+  const u=adminRetUsers[r.user_id]||{name:""};
+  const reason=prompt(`${u.name}さんの退職申請を却下します。理由（任意）を入力してください`,"");
+  if(reason===null)return;
+  b.disabled=true;
+  const {error}=await sb.rpc("hr_reject_retirement",{p_request:r.id,p_reason:reason.trim()||null});
+  if(error){toast("却下できませんでした: "+error.message,true);b.disabled=false;render();return}
+  toast("却下しました");render();
+ });
+ document.querySelectorAll("[data-retresync]").forEach(b=>b.onclick=async()=>{
+  const r=adminRetReqs[b.dataset.retresync];if(!r)return;
+  b.disabled=true;
+  const past=r.effective_date<todayStr(); // 退職日を過ぎていれば打刻OFFまで一緒に行う
+  const sync=await retSyncSmaregi(r.id,r.user_id,r.effective_date,past);
+  toast(sync.status==="synced"?"スマレジに反映しました":"スマレジ反映に失敗しました。時間をおいて再度お試しください",sync.status!=="synced");
+  render();
+ });
 }
 // 2026-10-03追加: マイページ「📄 自分の書類」（実装指示書_退職手続きタスクと書類配布_担当BE_2026-10-03.md §3-3）
 //   hr_documents（本人の行だけ読める）を一覧し、押したときに短時間の署名付きURLで開く（本人のみ・URLはLINE等に載せない）
@@ -9633,6 +9801,8 @@ function bindPage(){
  if(page==="manuals")bindManualsPage(); // v2.6.59
  if(page==="cashhandoff")bindCashHandoffPage(); // 2026-09-08追加
  if(page==="mydocs")bindMyDocsPage(); // 2026-10-03追加
+ if(page==="retire")bindRetirePage(); // 2026-10-03追加
+ if(page==="admin"&&adminMode==="retire")bindAdminRetirePage(); // 2026-10-03追加
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
  if($("goweekly"))$("goweekly").onclick=()=>{page="weekly";render()};
  if($("editdaily"))$("editdaily").onclick=()=>{editId=todayDaily.id;page="write";render()};
@@ -9962,6 +10132,7 @@ function bindPage(){
  if($("adstores"))$("adstores").onclick=()=>{adminMode="stores";stList=null;stSmaregi=undefined;lastIssued=null;lastInvite=null;render()};
  // 2026-08-30続き: 給与・インセンティブ配分（月単位・人ごとに店舗を並べる方式に改訂）
  if($("adpayroll"))$("adpayroll").onclick=()=>{adminMode="payroll";payExtraStores={};render()};
+ if($("adretire"))$("adretire").onclick=()=>{adminMode="retire";render()}; // 2026-10-03追加
  const payMonthPick=()=>{if(!$("pay-year")||!$("pay-monthsel"))return;payMonth=$("pay-year").value+"-"+String($("pay-monthsel").value).padStart(2,"0");payExtraStores={};render()};
  if($("pay-year"))$("pay-year").onchange=payMonthPick;
  if($("pay-monthsel"))$("pay-monthsel").onchange=payMonthPick;

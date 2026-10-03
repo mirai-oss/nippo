@@ -24,6 +24,9 @@ button.ghost{background:transparent;color:var(--btn);border:1px solid var(--btn)
 .msg.err{color:var(--err)}
 .done{text-align:center;padding:10px 0}
 .done b{display:block;font-size:17px;color:var(--ok);margin-bottom:8px}
+.cand{width:100%;font-size:15px;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-family:inherit;margin-top:6px}
+.cand option{padding:7px 8px;border-radius:6px}
+.pick{font-size:12.5px;color:var(--ok);margin-top:6px;min-height:16px}
 .note{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.6}
 </style>
 </head>
@@ -44,31 +47,49 @@ async function rpc(name,args){
   if(!r.ok)throw new Error((b&&b.message)||"通信に失敗しました");
   return b;
 }
-function memberOptions(storeId){
-  const ms=(opts.members||[]).filter(m=>m.store_id===storeId);
-  return `<option value="">（従業員を選択）</option>`+ms.map(m=>`<option value="${esc(m.id)}">${esc(m.name)}</option>`).join("");
+const norm=x=>String(x||"").normalize("NFKC").replace(/[\s　]+/g,"").toLowerCase(); // 空白・全角半角・大文字小文字の違いを無視して検索
+let pickUser="",pickStore="";
+function storeName(id){const s=(opts.stores||[]).find(x=>x.id===id);return s?s.name:""}
+function renderCands(){
+  const q=norm($("f-q").value),sf=$("f-store").value;
+  const list=(opts.members||[]).filter(m=>(!sf||m.store_id===sf)&&(!q||norm(m.name).includes(q)));
+  const box=$("f-cand");
+  if(!q&&!sf){box.style.display="none";box.innerHTML="";return}
+  box.style.display="";
+  const shown=list.slice(0,50);
+  box.size=Math.max(2,Math.min(6,shown.length||2));
+  box.innerHTML=shown.length?shown.map(m=>`<option value="${esc(m.id)}|${esc(m.store_id)}" ${m.id===pickUser&&m.store_id===pickStore?"selected":""}>${esc(m.name)} ／ ${esc(storeName(m.store_id))}</option>`).join("")+(list.length>shown.length?`<option disabled>…ほか${list.length-shown.length}名（さらに絞り込んでください）</option>`:""):`<option disabled>該当する従業員がいません</option>`;
 }
 function render(){
+  pickUser="";pickStore="";
   $("app").innerHTML=`<h1>🚪 退職申請</h1>
   <p class="sub">退職する方の情報を入力して送信してください。送信後は本部が確認してから退職日が登録されます（送っただけでは何も変わりません）。すでに退職した方は、過去の退職日（30日前まで）も選べます。</p>
   <label>退職日</label><input type="date" id="f-date" min="${minDate()}">
-  <label>店舗</label><select id="f-store"><option value="">（店舗を選択）</option>${(opts.stores||[]).map(s=>`<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("")}</select>
-  <label>従業員</label><select id="f-user" disabled><option value="">（先に店舗を選択）</option></select>
+  <label>従業員（名前の一部を入力して検索）</label><input id="f-q" placeholder="例: 山田" autocomplete="off">
+  <label>店舗で絞り込み（任意）</label><select id="f-store"><option value="">（すべての店舗）</option>${(opts.stores||[]).map(s=>`<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("")}</select>
+  <select id="f-cand" class="cand" size="4" style="display:none"></select>
+  <div class="pick" id="f-pick"></div>
   <label>申請する人のお名前</label><input id="f-req" maxlength="30" placeholder="例: 山田 太郎（店長）">
   <label>備考（任意）</label><textarea id="f-note" maxlength="200" placeholder="例: 一身上の都合"></textarea>
   <div class="msg err" id="f-msg"></div>
   <button id="f-send">送信</button>`;
-  $("f-store").onchange=()=>{const v=$("f-store").value;const u=$("f-user");u.disabled=!v;u.innerHTML=v?memberOptions(v):`<option value="">（先に店舗を選択）</option>`};
+  $("f-q").oninput=()=>{pickUser="";pickStore="";$("f-pick").textContent="";renderCands()};
+  $("f-store").onchange=()=>{pickUser="";pickStore="";$("f-pick").textContent="";renderCands()};
+  $("f-cand").onchange=()=>{
+    const v=$("f-cand").value;if(!v)return;
+    const [u,st]=v.split("|");pickUser=u;pickStore=st;
+    const m=(opts.members||[]).find(x=>x.id===u&&x.store_id===st);
+    $("f-pick").textContent=m?`✔ 選択中: ${m.name}（${storeName(st)}）`:"";
+  };
   $("f-send").onclick=send;
 }
 async function send(){
-  const date=$("f-date").value,store=$("f-store").value,user=$("f-user").value,req=$("f-req").value.trim(),note=$("f-note").value.trim();
+  const date=$("f-date").value,store=pickStore,user=pickUser,req=$("f-req").value.trim(),note=$("f-note").value.trim();
   const m=$("f-msg");m.className="msg err";m.textContent="";
   if(!date){m.textContent="退職日を選んでください";return}
-  if(!store){m.textContent="店舗を選んでください";return}
-  if(!user){m.textContent="従業員を選んでください";return}
+  if(!user||!store){m.textContent="従業員を検索して、一覧から選んでください";return}
   if(!req){m.textContent="申請する人のお名前を入力してください";return}
-  const uname=$("f-user").selectedOptions[0].textContent;
+  const um=(opts.members||[]).find(x=>x.id===user&&x.store_id===store);const uname=um?um.name:"";
   const past=date<todayJst()?"\n※退職日が過去のため、本部が承認するとすぐにログインと打刻が止まります。":"";
   if(!confirm(`${uname}さんの退職申請を送ります（退職日 ${date.replace(/-/g,"/")}）。${past}\nよろしいですか？`))return;
   const b=$("f-send");b.disabled=true;b.textContent="送信中…";

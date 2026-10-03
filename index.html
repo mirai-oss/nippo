@@ -1607,10 +1607,10 @@ async function hqNotifyOffboarding(uid,name,role,retirementDate){
   const corp=us&&us[0]&&us[0].stores&&us[0].stores.corporations?us[0].stores.corporations.name:null;
   const args={
    p_user_id:uid,p_name:name,
+   p_corp:corp||"トーホー", // 担当EのRPCはp_corp必須（'LiveGate'|'SK'|'N-Style'|'トーホー'以外は'トーホー'扱い）
    p_is_employee:role!=="AL", // SHAIN/TENCHO/TEAM/HQ/CEOは社員扱い・ALはアルバイト
    p_retirement_date:retirementDate,p_approved_on:todayStr()
   };
-  if(corp)args.p_corp=corp; // 解決できなければ省略＝RPC側の既定値
   const {error}=await sb.rpc("hq_create_offboarding_task",args);
   if(error)throw error;
   return true;

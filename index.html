@@ -6726,7 +6726,7 @@ async function adminEditView(){
   <button class="btn sm" id="eu-setpw">再設定する</button></div>`;
  if(u.id!==me.id){
   h+=`<div class="card"><h3>🗓 退職日</h3>
-   <p class="muted" style="margin:0">退職日を入れると、アカウントが使えなくなり、スマレジ・タイムカードにも退職日が登録されます（打刻もできなくなります）。応募者管理に記録がある方は、状況が自動で「退職」になります。</p>
+   <p class="muted" style="margin:0">退職日を入れると、スマレジ・タイムカードにも退職日が登録されます。<b>退職日の翌日の朝から</b>、アカウントが使えなくなり打刻もできなくなります（退職日が昨日以前の場合は、保存してすぐ止まります）。応募者管理に記録がある方は、状況が自動で「退職」になります。</p>
    <input type="date" id="eu-term" value="${(prof&&prof.termination_date)||""}">
    <button class="btn sm" id="eu-termsave">退職日を保存する</button>
    ${(prof&&prof.termination_date)?`<button class="btn sm sub" id="eu-termclear">退職を取り消す（復職）</button>`:""}</div>`;
@@ -11224,7 +11224,7 @@ function bindPage(){
   if(error){toast("保存エラー: "+error.message,true);if(btn)btn.disabled=false;return}
   let sm="";
   try{
-   const r=await smaregiTerminate(adminDetail,d);
+   const r=await smaregiTerminate(adminDetail,d,{deactivate:!d||!!(data&&data.deactivated_now)}); // 今日以降の退職日は打刻停止を翌朝の自動処理に任せる
    sm=r&&r.ok?(r.skipped?"（スマレジは未連携）":"／スマレジにも反映しました"):"／スマレジ反映に失敗（後で再実行してください）";
   }catch(e){sm="／スマレジ反映に失敗"}
   const apps=(data&&data.applicants)||0;
@@ -11234,7 +11234,7 @@ function bindPage(){
  if($("eu-termsave"))$("eu-termsave").onclick=()=>{
   const d=$("eu-term").value;
   if(!d){toast("退職日を選んでください",true);return}
-  if(!confirm(`退職日を ${d} に設定します。\n\n・アカウントが使えなくなります\n・スマレジ・タイムカードにも登録され、打刻できなくなります\n・応募者管理の状況が「退職」になります\n\nよろしいですか？`))return;
+  if(!confirm(`退職日を ${d} に設定します。\n\n・退職日の翌日の朝からアカウントが使えなくなります（退職日が昨日以前なら今すぐ止まります）\n・スマレジ・タイムカードにも退職日が登録されます\n・応募者管理の状況が「退職」になります\n\nよろしいですか？`))return;
   saveTerm(d);
  };
  if($("eu-termclear"))$("eu-termclear").onclick=()=>{

@@ -7121,12 +7121,18 @@ async function cashHandoffView(){
  if(!cashMonthIsAllowed(cashMonth)){
   return h+`<div class="alert" style="margin-top:16px">この月の給料はまだ確定していません。月が終わって翌月になってから（給料月の翌月1日以降）表示されます。月を間違えてのサイン・処理を防ぐための制限です。</div>`;
  }
- const [{data:targets,error:e1},{data:recs,error:e2}]=await Promise.all([
+ const [{data:targets,error:e1},{data:recs,error:e2},{data:hid}]=await Promise.all([
   sb.rpc("cash_handoff_targets",{p_year_month:cashMonth}),
-  sb.from("sf_cash_handoff_signatures").select("*").eq("year_month",cashMonth)
+  sb.from("sf_cash_handoff_signatures").select("*").eq("year_month",cashMonth),
+  sb.from("sf_payroll_hidden").select("user_id").eq("year_month",cashMonth)
  ]);
  if(e1)return h+`<div class="alert">読み込みエラー: ${esc(e1.message)}</div>`;
- cashList=(targets||[]).filter(t=>t.is_active);
+ // 2026-10-07修正（ユーザー報告「給料確定タスクの人数は直ったが現金手渡し・サインが更新されていない」）:
+ // 従来は在籍中(is_active)のみ表示していたため、退職済みでも給与が出ている人が漏れ、逆に「この月は対象外（非表示）」
+ // にした人や金額0円の人が混ざっていた。給与仕訳の画面・本部タスク（hq_create_payroll_tasks）と同じ基準に揃える:
+ // 金額>0・その月の非表示(sf_payroll_hidden)を除く・在籍は問わない（退職者にも手渡しが必要）
+ const hiddenIds=new Set((hid||[]).map(x=>x.user_id));
+ cashList=(targets||[]).filter(t=>Number(t.amount)>0&&!hiddenIds.has(t.user_id));
  cashRecords={};(recs||[]).forEach(r=>cashRecords[r.user_id]=r);
  if(!cashList.length)return h+`<p class="muted" style="margin-top:16px">この月・現金手渡しの対象者はいません。</p>`;
  const sname=id=>{const s=[...stores,...storesHidden].find(x=>x.id===id);return s?s.name:"所属不明"};

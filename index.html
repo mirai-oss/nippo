@@ -1708,7 +1708,7 @@ async function updateDots(){ // v1.7 未読通知バッジ（ホーム=自分宛
   const others=(ns||[]).length-joins-recs-reps;
   const set=(el,n)=>{if(!el)return;if(n>0){el.textContent=n>99?"99+":n;el.style.display=""}else el.style.display="none"};
   let retPend=0;
-  if(canApproveRetirement()){try{const {count:rc}=await sb.from("hr_change_requests").select("id",{count:"exact",head:true}).eq("kind","retirement").eq("status","pending");retPend=rc||0}catch(e){}} // 2026-10-03 退職申請の承認待ちも「管理」のバッジに足す
+  if(canApproveRetirement()){try{const {count:rc}=await sb.from("hr_change_requests").select("id",{count:"exact",head:true}).eq("status","pending");retPend=rc||0}catch(e){}} // 2026-10-03 退職申請の承認待ちも「管理」のバッジに足す
   set($("homedot"),others);set($("admdot"),joins+retPend);
   // v2.6.49 応募タブのバッジは「画面に出るお知らせの件数」と一致させる。
   // 通知の件数で数えていたため、古い通知が残って「何が未読か分からない」状態になっていた
@@ -1820,6 +1820,8 @@ async function loadMe(uid,opts){
  if(me.is_master||["TENCHO","TEAM","HQ","CEO"].includes(me.role)){
   try{const {error:rtErr}=await sb.from("hr_change_requests").select("id",{count:"exact",head:true}).limit(1);hrRetireReady=!rtErr}catch(e){hrRetireReady=false}
  }
+ smReady=false;smContracts=[];
+ if(canApproveRetirement())await loadSmContracts(); // 2026-10-17追加: スマレジ契約マスタ(担当D)があれば、移籍・兼務追加・所属の一致の画面を出す
  // v2.6.64 応募者詳細への直接リンクで開いたときは、ホームではなくその応募者の詳細を開く
  // v2.7 統合ポータルシェルからの深リンク（?page=）。openApplicantのほうが優先、権限的に見られないページ・未知のキーは無視してホームのまま
  if(openApplicant&&can("recruit")){page="recruit";rcDetail=openApplicant}
@@ -5051,6 +5053,8 @@ async function adminView(){
  if(adminMode==="stores")return await adminStoresView();
  if(adminMode==="payroll")return await adminPayrollView(); // 2026-08-29続き
  if(adminMode==="retire")return await adminRetireView(); // 2026-10-03追加: 退職申請一覧（本部・社長・マスター）
+ if(adminMode==="contractreg")return await adminContractRegView(); // 2026-10-17追加
+ if(adminMode==="storemis")return await adminStoreMisView();
  const bankAllowed=me.is_master||me.role==="HQ"; // payroll_bank_accountsのRLSと同じ条件
  const [{data:us,error},{data:uss},{data:ntfs},{data:profs},bankRes]=await Promise.all([
   sb.from("users").select("*"),
@@ -5081,8 +5085,11 @@ async function adminView(){
  // 2026-08-29続き: 給与・インセンティブ配分（ユーザー要望「マスターの人が振り分けられるように権限設定して」）
  if(me.is_master)h+=`<button class="btn sub" id="adpayroll">💴 給与・インセンティブ配分</button>`;
  if(canApproveRetirement()){ // 2026-10-03追加: 退職申請一覧（承認待ち件数つき）
-  const {count:retPending}=await sb.from("hr_change_requests").select("id",{count:"exact",head:true}).eq("kind","retirement").eq("status","pending");
-  h+=`<button class="btn sub" id="adretire">🚪 退職申請一覧${retPending>0?`（承認待ち ${retPending}件）`:""}</button>`;
+  const {count:retPending}=await sb.from("hr_change_requests").select("id",{count:"exact",head:true}).eq("status","pending");
+  h+=`<button class="btn sub" id="adretire">🚪 退職・移籍・兼務の申請一覧${retPending>0?`（承認待ち ${retPending}件）`:""}</button>`;
+  if(smReady){ // 2026-10-17追加
+   h+=`<button class="btn sub" id="adcontractreg">🏢 他法人スマレジへの入社登録（移籍・兼務）</button><button class="btn sub" id="adstoremis">⚠️ 所属のズレ（管理システム↔スマレジ）</button>`;
+  }
  }
  if(can("staff_admin")){
   // 2026-09-05追加: 「LINE連携・身分証明書、連携してない人をすぐ探せるように」への対応。
@@ -6700,6 +6707,7 @@ async function adminEditView(){
  ]);
  const bank=bankRes.data;
  // 2026-10-03追加: この人に配布した書類（源泉徴収票など）。本部・社長・マスターだけが開ける（hr_documentsのRLSと同じ）
+ const smInfo=(smReady&&canApproveRetirement())?await loadSmInfo(adminDetail):undefined; // 2026-10-17追加: スマレジ所属（契約ごと）
  let hrDocs=[];
  if(me.is_master||["HQ","CEO"].includes(me.role)){try{const {data:dd}=await sb.from("hr_documents").select("id,kind,year,path,uploaded_at,line_notified_at").eq("user_id",adminDetail).order("year",{ascending:false});hrDocs=dd||[]}catch(e){}}
  let h=`<span class="back" id="adback">← 従業員一覧</span><h2>${esc(u.name)} ${u.is_active?"":'<span class="badge">無効</span>'}</h2>
@@ -6767,6 +6775,7 @@ async function adminEditView(){
  <div class="card" style="margin-top:16px"><h3>パスワード再設定</h3>
   <input type="text" id="eu-pw" placeholder="新しいパスワード（8文字以上）">
   <button class="btn sm" id="eu-setpw">再設定する</button></div>`;
+ if(smInfo!==undefined)h+=smCardHtml(smInfo);
  if(me.is_master||["HQ","CEO"].includes(me.role)){
   h+=`<div class="card"><h3>📄 配布した書類（源泉徴収票など）</h3>`;
   if(!hrDocs.length)h+=`<p class="muted" style="margin:0">まだ配布した書類はありません。退職手続きの本部タスクで源泉徴収票をアップロードすると、ここに保管されます（本人のマイページ「📄 書類」にも表示されます）。</p>`;
@@ -6868,7 +6877,7 @@ function cashStatusOf(rec){
 let hrRetireReady=false;
 function canRequestRetirement(){return hrRetireReady&&!!me&&(me.is_master||["TENCHO","TEAM","HQ","CEO"].includes(me.role))}
 function canApproveRetirement(){return hrRetireReady&&!!me&&(me.is_master||me.role==="CEO"||me.role==="HQ")}
-let retStore=null,retMembers=[],retUserSel="",retDateVal="",retQuery="";
+let retStore=null,retMembers=[],retUserSel="",retDateVal="",retQuery="",retKind="retirement",retTo="";
 const RET_STATUS={pending:{label:"承認待ち",cls:"b"},approved:{label:"承認済み",cls:"g"},rejected:{label:"却下",cls:""},cancelled:{label:"取り消し済み",cls:""}};
 const RET_SYNC={none:"⏳停止はこれから（退職日の翌日の朝／源泉徴収票の工程が済んだ後）",synced:"✅スマレジ同期済み",unsynced:"⚠️スマレジ未同期",error:"⚠️スマレジ同期エラー"};
 const retMinDate=()=>{const x=new Date(todayStr()+"T00:00:00");x.setDate(x.getDate()-30);return x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0")}; // 申請できる退職日は30日前から（DB側も同じ）
@@ -6880,8 +6889,8 @@ async function retireView(){
  if(!retStore||!pick.find(s=>s.id===retStore))retStore=pick[0].id;
  const [{data:mem},{data:pend},{data:hist}]=await Promise.all([
   sb.from("user_stores").select("user_id,users(id,name,role,is_active)").eq("store_id",retStore),
-  sb.from("hr_change_requests").select("user_id").eq("kind","retirement").eq("status","pending").eq("store_id",retStore),
-  sb.from("hr_change_requests").select("id,user_id,effective_date,status,reject_reason,requested_at").eq("kind","retirement").eq("store_id",retStore).order("requested_at",{ascending:false}).limit(15)
+  sb.from("hr_change_requests").select("user_id").eq("status","pending").eq("store_id",retStore),
+  sb.from("hr_change_requests").select("id,user_id,kind,effective_date,status,reject_reason,requested_at,from_contract_id,to_contract_id").eq("store_id",retStore).order("requested_at",{ascending:false}).limit(15)
  ]);
  const ids=(mem||[]).map(m=>m.user_id);
  const {data:profs}=ids.length?await sb.from("employee_profiles").select("user_id,termination_date").in("user_id",ids):{data:[]};
@@ -6900,15 +6909,18 @@ async function retireView(){
   <input class="inp" id="ret-q" placeholder="例: 山田" value="${esc(retQuery)}">
   <select class="inp" id="ret-user" size="6" style="height:auto"></select>
   ${pendSet.size?`<p class="muted" style="font-size:11px;margin:4px 0 0">※承認待ちの申請がある方（${pendSet.size}名）は選べません</p>`:""}
-  <label style="font-size:13px;margin-top:8px;display:block">退職日</label>
+  ${smReady?`<label style="font-size:13px;margin-top:8px;display:block">種別</label>
+  <select class="inp" id="ret-kind"><option value="retirement" ${retKind==="retirement"?"selected":""}>退職</option><option value="transfer" ${retKind==="transfer"?"selected":""}>移籍（別法人へ。今の契約を終了して移行先に登録）</option><option value="concurrent" ${retKind==="concurrent"?"selected":""}>兼務追加（今の契約は続けて、移行先にも追加）</option></select>
+  ${retKind!=="retirement"?`<label style="font-size:13px;margin-top:8px;display:block">移行先のスマレジ契約</label><select class="inp" id="ret-to">${smContracts.map(c=>`<option value="${esc(c.contract_id)}" ${(retTo||(smTargetContract()||{}).contract_id)===c.contract_id?"selected":""}>${esc(c.label||c.contract_id)}</option>`).join("")}</select>`:""}`:""}
+  <label style="font-size:13px;margin-top:8px;display:block">${retKind==="retirement"?"退職日":"開始日（移籍は、この日の前日で今の契約を終了）"}</label>
   <input class="inp" type="date" id="ret-date" min="${retMinDate()}" value="${esc(retDateVal)}">
-  <button class="btn" id="ret-send" style="margin-top:10px">退職申請を送る</button>
+  <button class="btn" id="ret-send" style="margin-top:10px">${retKind==="retirement"?"退職申請を送る":"申請を送る"}</button>
  </div>
  <div class="card"><h3 style="margin:0 0 8px">この店舗の申請状況（直近15件）</h3>`;
  if(!(hist||[]).length)h+=`<p class="muted">まだ申請はありません。</p>`;
  (hist||[]).forEach(r=>{
   const st=RET_STATUS[r.status]||{label:r.status,cls:""};
-  h+=`<div class="row" style="cursor:default"><span><b>${esc(nameOf[r.user_id]||"（所属変更・退職済み）")}</b> ／ 退職日 ${retFmtDate(r.effective_date)}<br><span class="muted">${new Date(r.requested_at).toLocaleDateString("ja-JP")}申請 ／ <span class="badge ${st.cls}">${st.label}</span>${r.status==="rejected"&&r.reject_reason?` ／ 理由: ${esc(r.reject_reason)}`:""}</span></span></div>`;
+  h+=`<div class="row" style="cursor:default"><span><b>${esc(nameOf[r.user_id]||"（所属変更・退職済み）")}</b> ／ ${r.kind&&r.kind!=="retirement"?`${esc(RET_KIND[r.kind]||r.kind)} 開始 ${retFmtDate(r.effective_date)}（${r.kind==="transfer"?esc(smShort(r.from_contract_id))+"→":"＋"}${esc(smShort(r.to_contract_id))}）`:`退職日 ${retFmtDate(r.effective_date)}`}<br><span class="muted">${new Date(r.requested_at).toLocaleDateString("ja-JP")}申請 ／ <span class="badge ${st.cls}">${st.label}</span>${r.status==="rejected"&&r.reject_reason?` ／ 理由: ${esc(r.reject_reason)}`:""}</span></span></div>`;
  });
  return h+`</div>`;
 }
@@ -6924,11 +6936,24 @@ function bindRetirePage(){
  if($("ret-q"))$("ret-q").oninput=e=>{retQuery=e.target.value;retFillUserOptions()};
  if($("ret-user"))$("ret-user").onchange=e=>{retUserSel=e.target.value};
  if($("ret-date"))$("ret-date").onchange=e=>{retDateVal=e.target.value};
+ if($("ret-kind"))$("ret-kind").onchange=e=>{retKind=e.target.value;render()};
+ if($("ret-to"))$("ret-to").onchange=e=>{retTo=e.target.value};
  if($("ret-send"))$("ret-send").onclick=async()=>{
   const uid=$("ret-user").value,d=$("ret-date").value;
   if(!uid){toast("従業員を選んでください",true);return}
-  if(!d){toast("退職日を選んでください",true);return}
+  if(!d){toast(retKind==="retirement"?"退職日を選んでください":"開始日を選んでください",true);return}
   const u=retMembers.find(x=>x.id===uid);
+  if(retKind!=="retirement"){ // 2026-10-17追加: 移籍・兼務追加の申請
+   const to=($("ret-to")||{}).value||(smTargetContract()||{}).contract_id;
+   if(!to){toast("移行先の契約を選んでください",true);return}
+   if(!confirm(`${u?u.name:""}さんの「${RET_KIND[retKind]}」申請を送ります。\n移行先: ${smLabel(to)}／開始日 ${retFmtDate(d)}\n本部が承認すると、スマレジに登録されます（アカウント・ログインは止まりません）。よろしいですか？`))return;
+   const b2=$("ret-send");b2.disabled=true;
+   const {error:e2}=await sb.rpc("hr_request_contract_change",{p_store:retStore,p_user:uid,p_kind:retKind,p_to_contract:to,p_date:d,p_note:null});
+   b2.disabled=false;
+   if(e2){toast("申請できませんでした: "+e2.message,true);return}
+   retUserSel="";retDateVal="";retQuery="";
+   toast("申請を送りました。本部の承認をお待ちください");render();return;
+  }
   if(!confirm(`${u?u.name:""}さんの退職申請を送ります（退職日 ${retFmtDate(d)}）。${d<todayStr()?"\n退職日が過去のため、承認後、源泉徴収票の工程が終わったらログインと打刻が止まります。":""}\nよろしいですか？`))return;
   const b=$("ret-send");b.disabled=true;
   const {data:rq,error}=await sb.rpc("hr_request_retirement",{p_store:retStore,p_user:uid,p_date:d});
@@ -6941,8 +6966,8 @@ function bindRetirePage(){
 }
 async function adminRetireView(){
  if(!canApproveRetirement())return `<p class="muted">この画面を利用する権限がありません。</p>`;
- const {data:reqs,error}=await sb.from("hr_change_requests").select("*").eq("kind","retirement").order("requested_at",{ascending:false}).limit(200);
- let h=`<span class="back" id="adback">← 従業員一覧</span><h2>🚪 退職申請一覧</h2>`;
+ const {data:reqs,error}=await sb.from("hr_change_requests").select("*").order("requested_at",{ascending:false}).limit(200);
+ let h=`<span class="back" id="adback">← 従業員一覧</span><h2>🚪 退職・移籍・兼務の申請一覧</h2>`;
  if(error)return h+`<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
  const uids=[...new Set((reqs||[]).flatMap(r=>[r.user_id,r.requested_by,r.cancelled_by]).filter(Boolean))];
  const {data:us}=uids.length?await sb.from("users").select("id,name,role").in("id",uids):{data:[]};
@@ -6965,13 +6990,13 @@ async function adminRetireView(){
   const nm=(U[r.user_id]||{}).name||"（不明）";
   h+=`<div class="card"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
    <span><b>${esc(nm)}</b>　<span class="badge ${st.cls}">${st.label}</span><br>
-   <span class="muted">${esc(sname(r.store_id))} ／ 退職日 <b>${retFmtDate(r.effective_date)}</b><br>申請 ${new Date(r.requested_at).toLocaleString("ja-JP")}（${esc((U[r.requested_by]||{}).name||(r.requester_name?r.requester_name+"・フォーム":""))}）${r.note?`<br>備考: ${esc(r.note)}`:""}
+   <span class="muted">${esc(sname(r.store_id))} ／ ${r.kind&&r.kind!=="retirement"?`<b>${esc(RET_KIND[r.kind]||r.kind)}</b> ${r.kind==="transfer"?esc(smShort(r.from_contract_id))+" → ":"＋"}<b>${esc(smShort(r.to_contract_id))}</b>　開始 <b>${retFmtDate(r.effective_date)}</b>`:`退職日 <b>${retFmtDate(r.effective_date)}</b>`}${r.note?` ／ ${esc(r.note)}`:""}<br>申請 ${new Date(r.requested_at).toLocaleString("ja-JP")}（${esc((U[r.requested_by]||{}).name||(r.requester_name?r.requester_name+"・フォーム":""))}）${r.note?`<br>備考: ${esc(r.note)}`:""}
    ${r.status==="approved"?`<br>承認 ${new Date(r.approved_at).toLocaleString("ja-JP")} ／ ${RET_SYNC[r.sync_status]||r.sync_status}${r.synced_at?`（${new Date(r.synced_at).toLocaleString("ja-JP")}）`:""}`:""}
    ${r.status==="cancelled"?`<br>取り消し ${r.cancelled_at?new Date(r.cancelled_at).toLocaleString("ja-JP"):""}${r.cancelled_by&&U[r.cancelled_by]?`（${esc(U[r.cancelled_by].name)}）`:""}`:""}
    ${r.status==="rejected"?`<br>却下 ${new Date(r.rejected_at).toLocaleString("ja-JP")}${r.reject_reason?` ／ 理由: ${esc(r.reject_reason)}`:""}`:""}</span></span>
    <span style="display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap">
    ${r.status==="pending"?`<button class="btn sm" data-retapprove="${r.id}">承認</button><button class="btn sm sub" data-retreject="${r.id}">却下</button>`:""}
-   ${r.status==="approved"?`<button class="btn sm sub" data-retcancel="${r.id}" style="color:var(--red);border-color:var(--red)">↩ 取り消す（復職）</button>`:""}
+   ${r.status==="approved"&&(!r.kind||r.kind==="retirement")?`<button class="btn sm sub" data-retcancel="${r.id}" style="color:var(--red);border-color:var(--red)">↩ 取り消す（復職）</button>`:""}
    ${r.status==="approved"&&(r.sync_status==="unsynced"||r.sync_status==="error")?`<button class="btn sm" data-retresync="${r.id}">⚠️スマレジ未同期・再同期</button>`:""}
    </span></div></div>`;
  });
@@ -7019,6 +7044,14 @@ function bindAdminRetirePage(){
  document.querySelectorAll("[data-retapprove]").forEach(b=>b.onclick=async()=>{
   const r=adminRetReqs[b.dataset.retapprove];if(!r)return;
   const u=adminRetUsers[r.user_id]||{name:""};
+  if(r.kind&&r.kind!=="retirement"){ // 2026-10-17追加: 移籍・兼務追加の承認（記録→スマレジへ反映）
+   if(!confirm(`${u.name}さんの「${RET_KIND[r.kind]}」を承認します。\n${r.kind==="transfer"?`${smLabel(r.from_contract_id)} を ${addDaysStr(r.effective_date,-1)} で終了し、`:""}${smLabel(r.to_contract_id)} に入社登録します（開始日 ${retFmtDate(r.effective_date)}）。\nスマレジに実際に登録されます。アカウント・ログインは止まりません。よろしいですか？`))return;
+   b.disabled=true;
+   const x=await approveContractChange(r,u.name);
+   if(x.ok)toast(`承認し、スマレジに反映しました（スタッフID ${x.staffId||"—"}）${x.warn?"／⚠️所属の反映は「所属のズレ」で確認してください":""}`,!!x.warn);
+   else toast(`${x.stage==="approve"?"承認できませんでした":"承認しましたが、スマレジへの反映に失敗しました（一覧から再同期できます）"}: ${x.error||""}`,true);
+   render();return;
+  }
   if(!confirm(`${u.name}さんを${retFmtDate(r.effective_date)}付で退職処理します。\n退職日を登録し、退職手続きの本部タスクを作ります。ログインと打刻は、退職日の翌日の朝以降で、かつ源泉徴収票の工程が終わってから止まります。よろしいですか？`))return;
   b.disabled=true;
   const {data,error}=await sb.rpc("hr_approve_retirement",{p_request:r.id});
@@ -7042,10 +7075,264 @@ function bindAdminRetirePage(){
  document.querySelectorAll("[data-retresync]").forEach(b=>b.onclick=async()=>{
   const r=adminRetReqs[b.dataset.retresync];if(!r)return;
   b.disabled=true;
+  if(r.kind&&r.kind!=="retirement"){ // 移籍・兼務追加の再同期（続きから再実行。登録済みの分は二重にならない）
+   const x=await execContractChange({id:r.id,user_id:r.user_id,kind:r.kind,effective_date:r.effective_date,from_contract_id:r.from_contract_id,to_contract_id:r.to_contract_id});
+   toast(x.ok?`スマレジに反映しました（スタッフID ${x.staffId||"—"}）`:`反映に失敗しました（${x.stage||""}）: ${x.error||""}`,!x.ok);
+   render();return;
+  }
   const sync=await retSyncSmaregi(r.id,r.user_id,r.effective_date,true); // v4: 再同期が必要になるのは停止後のみ＝退職日と打刻OFFを送る
   toast(sync.status==="synced"?"スマレジに反映しました":"スマレジ反映に失敗しました。時間をおいて再度お試しください",sync.status!=="synced");
   render();
  });
+}
+// ===== 2026-10-17追加: 移籍（別法人へ）・兼務追加／他法人のスマレジ契約への入社登録／所属の一致状況（担当D: smaregi_contracts・employee_smaregi_links・staff_store_sync）=====
+// 指示書_黒霧屋運営変更_2026-11-01_準備_2026-10-17.md §4・§9・§10。移籍=旧契約を終了＋移行先の契約に入社登録／兼務追加=移行先に追加のみ（どちらもアカウント・ログインは止めない）。
+// スマレジへの反映は smaregi-sync（contract_id指定）。移行先の登録を先に行い、成功してから旧契約を終了する（失敗しても旧契約は触らない）。
+// smReady: 契約マスタ(smaregi_contracts)が本番にある間だけtrue（SQL適用前は画面を出さない）。
+let smReady=false,smContracts=[];
+async function loadSmContracts(){
+ try{
+  const {data,error}=await sb.from("smaregi_contracts").select("*").eq("is_active",true).order("created_at");
+  if(error)throw error;
+  smContracts=data||[];smReady=true;
+ }catch(e){smReady=false;smContracts=[]}
+}
+const smLabel=cid=>{const c=smContracts.find(x=>x.contract_id===cid);return c?(c.label||c.contract_id):(cid||"—")};
+const smShort=cid=>{const c=smContracts.find(x=>x.contract_id===cid);return c?(c.label||c.contract_id).replace(/（.*$/,""):(cid||"—")};
+const smTargetContract=()=>smContracts.find(c=>c.corporation_hint==="livegate")||smContracts.find(c=>!c.is_default)||null;
+const RET_KIND={retirement:"退職",transfer:"移籍（別法人へ）",concurrent:"兼務追加"};
+const addDaysStr=(s,n)=>{const x=new Date(s+"T00:00:00Z");x.setUTCDate(x.getUTCDate()+n);return x.toISOString().slice(0,10)};
+async function smFn(action,payload){ // smaregi-sync（契約指定）
+ try{
+  const {data:{session}}=await sb.auth.getSession();
+  const r=await fetch(SUPA_URL+"/functions/v1/smaregi-sync",{method:"POST",headers:{Authorization:"Bearer "+(session?session.access_token:SUPA_KEY),apikey:SUPA_KEY,"Content-Type":"application/json"},body:JSON.stringify({action,...payload})});
+  let j=null;try{j=await r.json()}catch(e){}
+  return j||{ok:false,error:"HTTP "+r.status};
+ }catch(e){return {ok:false,error:String(e)}}
+}
+const smErr=x=>x&&x.ok?null:String((x&&x.error&&typeof x.error!=="string")?JSON.stringify(x.error):(x&&x.error)||"原因不明").slice(0,300);
+const recordChange=(id,status,result)=>sb.rpc("hr_record_retirement_sync",{p_request:id,p_status:status,p_result:result}); // 承認済みの申請へ結果を保存（種別を問わない）
+// 承認済みの「移籍／兼務追加」1件をスマレジへ反映する。req={id,user_id,kind,effective_date,from_contract_id,to_contract_id}
+// 再実行しても二重にならない（sync=登録済みならそのまま／terminate=同じ日付を送り直すだけ）。
+async function execContractChange(req){
+ const uid=req.user_id,to=req.to_contract_id,res={sync:null,store_sync:null,terminate:null,old_deactivated:false};
+ const s=await smFn("sync",{user_id:uid,contract_id:to}); // ① 移行先に入社登録（先に行う＝失敗しても旧契約には触らない）
+ res.sync={ok:!!s.ok,staffId:s.staffId||null,already:!!s.already,error:smErr(s)};
+ if(!s.ok){await recordChange(req.id,"error",res);return {ok:false,stage:"sync",error:res.sync.error,res}}
+ try{ // ② 所属事業所（この契約に対応のある店舗があれば）を管理システム→スマレジへ。失敗しても登録は有効（所属のズレ一覧から直せる）
+  const ss=await smFn("store_sync",{user_id:uid,contract_id:to,direction:"portal_to_smaregi"});
+  res.store_sync={ok:!!ss.ok,added:ss.added_to_smaregi??null,error:smErr(ss)};
+ }catch(e){res.store_sync={ok:false,error:String(e).slice(0,200)}}
+ if(req.kind==="transfer"&&req.from_contract_id){ // ③ 移籍: 旧契約を終了（開始日の前日まで。過去なら打刻もOFF、未来なら毎朝の自動処理が翌日にOFF）
+  const endD=addDaysStr(req.effective_date,-1),past=endD<todayStr();
+  const t=await smFn("terminate",{user_id:uid,contract_id:req.from_contract_id,date:endD,deactivate:past});
+  res.terminate={ok:!!t.ok,date:endD,skipped:t.skipped||null,error:smErr(t)};
+  res.old_deactivated=!!(t.ok&&past);
+  if(!t.ok){await recordChange(req.id,"error",res);return {ok:false,stage:"terminate",error:res.terminate.error,res}}
+ }
+ await recordChange(req.id,"synced",res);
+ return {ok:true,staffId:res.sync.staffId,already:res.sync.already,warn:res.store_sync&&!res.store_sync.ok?res.store_sync.error:null,res};
+}
+// 本部が直接登録（承認済みの記録を作って反映）
+async function execDirectChange(uid,kind,to,date,note){
+ const {data,error}=await sb.rpc("hr_direct_contract_change",{p_user:uid,p_kind:kind,p_to_contract:to,p_date:date,p_note:note||null});
+ if(error)return {ok:false,stage:"record",error:error.message};
+ return await execContractChange({id:data.id,user_id:uid,kind,effective_date:data.effective_date||date,from_contract_id:data.from_contract_id||null,to_contract_id:to});
+}
+// --- 退職申請一覧: 移籍・兼務追加の承認（記録→スマレジ反映） ---
+async function approveContractChange(r,uName){
+ const {data,error}=await sb.rpc("hr_approve_contract_change",{p_request:r.id});
+ if(error)return {ok:false,stage:"approve",error:error.message};
+ const x=await execContractChange({id:r.id,user_id:r.user_id,kind:r.kind,effective_date:data.effective_date,from_contract_id:data.from_contract_id,to_contract_id:data.to_contract_id});
+ return x;
+}
+// --- 従業員管理: 他法人スマレジへの入社登録（移籍・兼務追加）一括画面 ---
+let bkContract="",bkKind="concurrent",bkDate="2026-11-01",bkQ="",bkStore="",bkNote="",bkSel=new Set(),bkResults=[],bkRunning=false;
+async function adminContractRegView(){
+ if(!canApproveRetirement()||!smReady)return `<span class="back" id="adback">← 従業員一覧</span><p class="muted">この画面は準備中です（スマレジの契約マスタが未登録）。</p>`;
+ if(!bkContract){const t=smTargetContract();bkContract=t?t.contract_id:""}
+ const [{data:us},{data:uss},{data:lk}]=await Promise.all([
+  sb.from("users").select("id,name,role,is_active").eq("is_active",true),
+  sb.from("user_stores").select("user_id,store_id"),
+  sb.from("employee_smaregi_links").select("user_id,contract_id,smaregi_staff_id,effective_from,effective_to")
+ ]);
+ const today=todayStr(),stName=id=>{const s=[...stores,...storesHidden].find(x=>x.id===id);return s?s.name:""};
+ const stOf={};(uss||[]).forEach(x=>{(stOf[x.user_id]=stOf[x.user_id]||[]).push(x.store_id)});
+ const lkOf={};(lk||[]).forEach(l=>{if(!l.effective_to||l.effective_to>=today)(lkOf[l.user_id]=lkOf[l.user_id]||[]).push(l)});
+ const q=bkQ.replace(/[\s　]/g,"");
+ const list=(us||[]).filter(u=>(!q||u.name.replace(/[\s　]/g,"").includes(q))&&(!bkStore||(stOf[u.id]||[]).includes(bkStore))).sort((a,b)=>a.name.localeCompare(b.name,"ja"));
+ const linked=u=>(lkOf[u.id]||[]).some(l=>l.contract_id===bkContract);
+ const selectable=u=>!linked(u)&&(bkKind==="concurrent"||(lkOf[u.id]||[]).some(l=>l.contract_id!==bkContract));
+ let h=`<span class="back" id="adback">← 従業員一覧</span><h2>🏢 他法人スマレジへの入社登録</h2>
+ <p class="muted" style="margin-top:-8px">黒霧屋のスタッフなどを、LiveGateなど別のスマレジ契約に登録します。<b>移籍</b>＝今の契約を終了して移行先に登録／<b>兼務追加</b>＝今の契約は続けたまま移行先にも追加。どちらもアカウント・ログインは止まりません。</p>
+ <div class="card">
+  <label style="font-size:13px">登録先のスマレジ契約</label>
+  <select class="inp" id="bk-contract">${smContracts.map(c=>`<option value="${esc(c.contract_id)}" ${c.contract_id===bkContract?"selected":""}>${esc(c.label||c.contract_id)}${c.is_default?"（現在の既定）":""}</option>`).join("")}</select>
+  <label style="font-size:13px;margin-top:8px;display:block">区分</label>
+  <div style="display:flex;gap:14px;flex-wrap:wrap"><label><input type="radio" name="bk-kind" value="concurrent" ${bkKind==="concurrent"?"checked":""}> 兼務追加（今の契約も続ける）</label><label><input type="radio" name="bk-kind" value="transfer" ${bkKind==="transfer"?"checked":""}> 移籍（今の契約を終了）</label></div>
+  <label style="font-size:13px;margin-top:8px;display:block">開始日（移籍は、この日の前日で今の契約を終了します）</label>
+  <input class="inp" type="date" id="bk-date" value="${esc(bkDate)}">
+  <label style="font-size:13px;margin-top:8px;display:block">備考（任意）</label>
+  <input class="inp" id="bk-note" maxlength="100" value="${esc(bkNote)}" placeholder="例: 黒霧屋 新横浜の運営変更">
+ </div>
+ <div class="card">
+  <div style="display:flex;gap:6px;flex-wrap:wrap"><input class="inp" id="bk-q" placeholder="名前で絞り込み" value="${esc(bkQ)}" style="flex:1;min-width:140px;margin:0">
+   <select class="inp" id="bk-store" style="width:auto;margin:0"><option value="">（すべての店舗）</option>${[...stores].map(s=>`<option value="${s.id}" ${s.id===bkStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select></div>
+  <p class="muted" style="margin:6px 0">${list.length}名表示 ／ 登録済み・対象外の人は選べません（移籍は、今スマレジに登録されている人だけ）</p>`;
+ list.slice(0,300).forEach(u=>{
+  const ok=selectable(u),cs=(lkOf[u.id]||[]).map(l=>`<span class="badge ${l.contract_id===bkContract?"g":"b"}">${esc(smShort(l.contract_id))} #${esc(l.smaregi_staff_id)}</span>`).join(" ")||`<span class="muted">スマレジ未登録</span>`;
+  h+=`<label class="row" style="cursor:${ok?"pointer":"default"};opacity:${ok?1:.5};align-items:center"><span><input type="checkbox" data-bksel="${u.id}" ${bkSel.has(u.id)&&ok?"checked":""} ${ok?"":"disabled"}> <b>${esc(u.name)}</b> <span class="muted">${esc(ROLE_NAME[u.role]||u.role)} ／ ${esc((stOf[u.id]||[]).map(stName).filter(Boolean).join("・")||"所属なし")}</span></span><span>${cs}</span></label>`;
+ });
+ if(list.length>300)h+=`<p class="muted">…ほか${list.length-300}名（絞り込んでください）</p>`;
+ h+=`<button class="btn" id="bk-run" style="margin-top:10px" ${bkRunning?"disabled":""}>選んだ人をまとめて入社登録（<span id="bk-count">${bkSel.size}</span>名）</button></div>`;
+ if(bkResults.length){
+  h+=`<div class="card"><h3 style="margin:0 0 6px">実行結果</h3>`;
+  bkResults.forEach(r=>{h+=`<div class="row" style="cursor:default"><span><b>${esc(r.name)}</b><br><span class="muted">${r.ok?`スタッフID ${esc(r.staffId||"—")}${r.already?"（登録済み）":""}${r.warn?` ／ ⚠️所属の反映: ${esc(r.warn)}`:""}`:`${esc(r.stage||"")}: ${esc(r.error||"")}`}</span></span><span class="badge ${r.ok?"g":""}">${r.ok?"✅成功":"❌失敗"}</span></div>`});
+  h+=`<p class="muted" style="margin:6px 0 0">失敗した人は、もう一度チェックして実行すると続きから再実行できます（登録済みの分は二重になりません）。</p></div>`;
+ }
+ const reg=(lk||[]).filter(l=>l.contract_id===bkContract&&(!l.effective_to||l.effective_to>=today));
+ const nm={};(us||[]).forEach(u=>nm[u.id]=u.name);
+ h+=`<div class="card"><h3 style="margin:0 0 6px">この契約（${esc(smLabel(bkContract))}）に登録済みの人（${reg.length}名）</h3>${reg.length?reg.map(l=>`<div class="row" style="cursor:default"><span><b>${esc(nm[l.user_id]||"（退職・無効）")}</b></span><span class="muted">スタッフID ${esc(l.smaregi_staff_id)} ／ ${esc(l.effective_from||"")}〜</span></div>`).join(""):`<p class="muted" style="margin:0">まだいません。</p>`}</div>`;
+ return h;
+}
+function bindAdminContractReg(){
+ if($("bk-contract"))$("bk-contract").onchange=e=>{bkContract=e.target.value;bkSel=new Set();render()};
+ document.querySelectorAll('input[name="bk-kind"]').forEach(r=>r.onchange=e=>{bkKind=e.target.value;bkSel=new Set();render()});
+ if($("bk-date"))$("bk-date").onchange=e=>{bkDate=e.target.value};
+ if($("bk-note"))$("bk-note").oninput=e=>{bkNote=e.target.value};
+ if($("bk-q"))$("bk-q").onchange=e=>{bkQ=e.target.value;render()};
+ if($("bk-store"))$("bk-store").onchange=e=>{bkStore=e.target.value;render()};
+ document.querySelectorAll("[data-bksel]").forEach(c=>c.onchange=e=>{const id=e.target.dataset.bksel;if(e.target.checked)bkSel.add(id);else bkSel.delete(id);if($("bk-count"))$("bk-count").textContent=bkSel.size});
+ if($("bk-run"))$("bk-run").onclick=async()=>{
+  if(bkRunning)return;
+  if(!bkContract){toast("登録先の契約を選んでください",true);return}
+  if(!bkDate){toast("開始日を選んでください",true);return}
+  const ids=[...bkSel];if(!ids.length){toast("人をチェックしてください",true);return}
+  const kindTxt=bkKind==="transfer"?"移籍（今の契約を終了）":"兼務追加（今の契約は続ける）";
+  if(!confirm(`${ids.length}名を「${smLabel(bkContract)}」のスマレジに入社登録します。\n区分: ${kindTxt}\n開始日: ${bkDate}${bkKind==="transfer"?`（今の契約は ${addDaysStr(bkDate,-1)} で終了）`:""}\n\nスマレジに実際に登録されます。よろしいですか？`))return;
+  bkRunning=true;bkResults=[];const b=$("bk-run");b.disabled=true;
+  const {data:us}=await sb.from("users").select("id,name").in("id",ids);const nm={};(us||[]).forEach(u=>nm[u.id]=u.name);
+  for(let i=0;i<ids.length;i++){
+   b.textContent=`実行中… ${i+1}/${ids.length}`;
+   const r=await execDirectChange(ids[i],bkKind,bkContract,bkDate,bkNote.trim());
+   bkResults.push({name:nm[ids[i]]||ids[i],...r});
+   if(r.ok)bkSel.delete(ids[i]);
+  }
+  bkRunning=false;
+  const okN=bkResults.filter(r=>r.ok).length;
+  toast(`${okN}名を登録しました${okN<bkResults.length?`（${bkResults.length-okN}名は失敗。結果を確認してください）`:""}`,okN<bkResults.length);
+  render();
+ };
+}
+// --- 従業員編集: スマレジ所属（契約ごと）・一致状況・今すぐ同期・1人の入社登録 ---
+async function loadSmInfo(uid){
+ try{
+  const [{data:links},st]=await Promise.all([sb.from("employee_smaregi_links").select("*").eq("user_id",uid).order("effective_from"),sb.rpc("hr_staff_store_status",{p_user:uid,p_only_diff:false})]);
+  return {links:links||[],status:st.error?null:(st.data||[])};
+ }catch(e){return null}
+}
+function smCardHtml(info){
+ let h=`<div class="card"><h3>🔗 スマレジ所属（契約ごと）</h3>`;
+ if(!info)return h+`<p class="muted" style="margin:0">読み込めませんでした。</p></div>`;
+ const today=todayStr(),act=l=>!l.effective_to||l.effective_to>=today;
+ smContracts.forEach(c=>{
+  const l=(info.links||[]).find(x=>x.contract_id===c.contract_id&&act(x)),st=(info.status||[]).find(x=>x.contract_id===c.contract_id);
+  h+=`<div style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px"><b>${esc(c.label||c.contract_id)}</b>`;
+  if(!l){
+   h+=` <span class="badge">未登録</span><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">
+    <select class="inp" data-smkind="${esc(c.contract_id)}" style="width:auto;margin:0"><option value="concurrent">兼務追加（今の契約も続ける）</option><option value="transfer">移籍（今の契約を終了）</option></select>
+    <input class="inp" type="date" data-smdate="${esc(c.contract_id)}" value="2026-11-01" style="width:auto;margin:0">
+    <button class="btn sm" data-smreg="${esc(c.contract_id)}">📝 ${esc(smShort(c.contract_id))}のスマレジに入社登録</button></div><div class="muted" id="smmsg-${esc(c.contract_id)}" style="font-size:12px;margin-top:4px"></div>`;
+  }else{
+   h+=` <span class="badge g">スタッフID ${esc(l.smaregi_staff_id)}</span> <span class="muted" style="font-size:12px">${esc(l.effective_from||"")}〜${l.effective_to?esc(l.effective_to):""}${l.is_primary?" ／主契約":""}</span>`;
+   if(st){
+    const chips=a=>(a||[]).map(x=>`<span class="chip on" style="cursor:default">${esc(x.name)}</span>`).join("")||`<span class="muted">なし</span>`;
+    h+=` ${st.in_sync?`<span class="badge g">✓一致</span>`:`<span class="badge" style="background:#fff3cd;color:#8a5a00">⚠️ズレ</span>`}
+     <div style="font-size:12px;margin-top:6px">管理システムの所属: ${chips(st.portal)}</div><div style="font-size:12px;margin-top:4px">スマレジの所属: ${chips(st.smaregi)}</div>`;
+    if(!st.in_sync){
+     h+=`<div style="font-size:12px;margin-top:4px;color:#8a5a00">${(st.only_portal||[]).length?`管理システムだけにある: ${(st.only_portal||[]).map(x=>esc(x.name)).join("・")}　`:""}${(st.only_smaregi||[]).length?`スマレジだけにある: ${(st.only_smaregi||[]).map(x=>esc(x.name)).join("・")}`:""}${st.changed_side==="portal"?"（前回の同期のあと、管理システム側が変わっています）":st.changed_side==="smaregi"?"（前回の同期のあと、スマレジ側が変わっています）":st.changed_side==="both"?"（両方変わっています）":""}</div>`;
+    }
+    if((st.unmapped||[]).length)h+=`<div style="font-size:11.5px;color:#8a5a00;margin-top:4px">⚠️管理システムに対応する店舗が無いスマレジの事業所があります（事業所ID ${esc(st.unmapped.join("・"))}）。</div>`;
+    h+=`<div class="muted" style="font-size:11px;margin-top:4px">スマレジ側の所属は${st.snapshot_at?`${esc(new Date(st.snapshot_at).toLocaleString("ja-JP"))}時点の棚卸し`:"まだ取得されていません"}です。「最新で確認」で今の状態を見られます。</div>`;
+   }else h+=`<div class="muted" style="font-size:12px;margin-top:6px">所属の比較データがまだありません（毎日の同期のあとに表示されます）。「最新で確認」で今の状態を見られます。</div>`;
+   h+=`<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">
+    <select class="inp" data-smdir="${esc(c.contract_id)}" style="width:auto;margin:0"><option value="portal_to_smaregi">管理システムに合わせる（おすすめ）</option><option value="smaregi_to_portal">スマレジに合わせる</option></select>
+    <button class="btn sm sub" data-smdry="${esc(c.contract_id)}">最新で確認</button>
+    <button class="btn sm" data-smsync="${esc(c.contract_id)}">今すぐ同期</button></div><div class="muted" id="smmsg-${esc(c.contract_id)}" style="font-size:12px;margin-top:4px"></div>`;
+  }
+  h+=`</div>`;
+ });
+ const old=(info.links||[]).filter(l=>!act(l));
+ if(old.length)h+=`<p class="muted" style="font-size:12px;margin:10px 0 0">終了済み: ${old.map(l=>`${esc(smShort(l.contract_id))} #${esc(l.smaregi_staff_id)}（〜${esc(l.effective_to)}）`).join(" ／ ")}</p>`;
+ return h+`</div>`;
+}
+function bindSmCard(uid){
+ const fmt=r=>r.in_sync?"✓ 一致しています":`ズレ: 管理システムだけ[${(r.only_portal||[]).join("・")||"なし"}]／スマレジだけ[${(r.only_smaregi||[]).join("・")||"なし"}]${(r.unmapped_smaregi_stores||[]).length?`／対応店舗なしの事業所[${r.unmapped_smaregi_stores.join("・")}]`:""}`;
+ document.querySelectorAll("[data-smdry]").forEach(b=>b.onclick=async()=>{
+  const c=b.dataset.smdry,m=$("smmsg-"+c);b.disabled=true;if(m)m.textContent="スマレジの最新の所属を確認中…";
+  const r=await smFn("store_sync",{user_id:uid,contract_id:c,direction:"portal_to_smaregi",dry_run:true});
+  if(m)m.textContent=r.ok?"最新: "+fmt(r):"確認できませんでした: "+(smErr(r)||"");
+  b.disabled=false;
+ });
+ document.querySelectorAll("[data-smsync]").forEach(b=>b.onclick=async()=>{
+  const c=b.dataset.smsync,dirEl=document.querySelector(`[data-smdir="${c}"]`),dir=dirEl?dirEl.value:"portal_to_smaregi",m=$("smmsg-"+c);
+  b.disabled=true;if(m)m.textContent="確認中…";
+  const pre=await smFn("store_sync",{user_id:uid,contract_id:c,direction:dir,dry_run:true});
+  if(!pre.ok){if(m)m.textContent="確認できませんでした: "+(smErr(pre)||"");b.disabled=false;return}
+  if(pre.in_sync){if(m)m.textContent="既に一致しています（台帳を更新しました）";await smFn("store_sync",{user_id:uid,contract_id:c,direction:dir});b.disabled=false;render();return}
+  const dirTxt=dir==="portal_to_smaregi"?"管理システムの所属をスマレジへ反映します":"スマレジの所属を管理システムへ反映します（管理システムの所属が書き換わります）";
+  if(!confirm(`${dirTxt}。\n\n管理システムだけにある: ${pre.only_portal.join("・")||"なし"}\nスマレジだけにある: ${pre.only_smaregi.join("・")||"なし"}\n\nよろしいですか？`)){if(m)m.textContent="";b.disabled=false;return}
+  if(m)m.textContent="同期中…";
+  const r=await smFn("store_sync",{user_id:uid,contract_id:c,direction:dir});
+  if(r.ok){toast("所属を同期しました");render()}else{if(m)m.textContent="同期できませんでした: "+(smErr(r)||"");toast("所属を同期できませんでした",true)}
+  b.disabled=false;
+ });
+ document.querySelectorAll("[data-smreg]").forEach(b=>b.onclick=async()=>{
+  const c=b.dataset.smreg,k=document.querySelector(`[data-smkind="${c}"]`).value,d=document.querySelector(`[data-smdate="${c}"]`).value,m=$("smmsg-"+c);
+  const u=(adminUsers||[]).find(x=>x.id===uid)||{name:""};
+  if(!d){toast("開始日を選んでください",true);return}
+  if(!confirm(`${u.name}さんを「${smLabel(c)}」のスマレジに入社登録します。\n区分: ${k==="transfer"?"移籍（今の契約を終了）":"兼務追加（今の契約は続ける）"}\n開始日: ${d}${k==="transfer"?`（今の契約は ${addDaysStr(d,-1)} で終了）`:""}\n\nスマレジに実際に登録されます。よろしいですか？`))return;
+  b.disabled=true;if(m)m.textContent="登録中…";
+  const r=await execDirectChange(uid,k,c,d,"");
+  if(r.ok){toast(`登録しました（スタッフID ${r.staffId||"—"}）${r.warn?"／⚠️所属の反映は後で確認してください":""}`,!!r.warn);render()}
+  else{if(m)m.textContent=`登録できませんでした（${r.stage||""}）: ${r.error||""}`;toast("登録できませんでした",true);b.disabled=false}
+ });
+}
+// --- 従業員管理: 所属のズレ一覧（棚卸しスナップショットと管理システムの比較） ---
+async function adminStoreMisView(){
+ let h=`<span class="back" id="adback">← 従業員一覧</span><h2>⚠️ 所属のズレ</h2>`;
+ if(!canApproveRetirement()||!smReady)return h+`<p class="muted">この画面は準備中です。</p>`;
+ const {data,error}=await sb.rpc("hr_staff_store_status",{p_user:null,p_only_diff:true});
+ if(error)return h+`<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
+ const rows=data||[];
+ const snap=rows.map(r=>r.snapshot_at).filter(Boolean).sort().pop();
+ h+=`<p class="muted" style="margin-top:-8px">管理システムの所属店舗と、スマレジの所属事業所が食い違っている人です（スマレジ側は${snap?esc(new Date(snap).toLocaleString("ja-JP")):"—"}時点の棚卸し）。基本は<b>管理システムに合わせます</b>。</p>`;
+ if(!rows.length)return h+`<p class="muted" style="margin-top:16px">ズレはありません ✓</p>`;
+ h+=`<div class="card"><b>${rows.length}件</b>のズレがあります。<br><button class="btn sm" id="mis-all" style="margin-top:6px">表示中の全員を「管理システムに合わせる」で同期</button>
+  <p class="muted" style="font-size:11.5px;margin:4px 0 0">スマレジの所属が書き換わります（シフト・勤怠の表示に影響）。初回は立会いのもとで実行してください。</p></div>`;
+ rows.forEach(r=>{
+  h+=`<div class="card"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span><b>${esc(r.name)}</b> <span class="badge">${esc(smShort(r.contract_id))}</span><br>
+   <span class="muted" style="font-size:12.5px">管理システムだけ: ${(r.only_portal||[]).map(x=>esc(x.name)).join("・")||"なし"}<br>スマレジだけ: ${(r.only_smaregi||[]).map(x=>esc(x.name)).join("・")||"なし"}${(r.unmapped||[]).length?`<br>⚠️対応店舗なしの事業所: ${esc(r.unmapped.join("・"))}`:""}<br>${r.changed_side==="portal"?"管理システム側が変更済み":r.changed_side==="smaregi"?"スマレジ側が変更済み":r.changed_side==="both"?"両方変更済み":"前回同期なし"}</span></span>
+   <span style="display:flex;gap:6px;flex-direction:column"><button class="btn sm" data-mis="${r.user_id}|${esc(r.contract_id)}|portal_to_smaregi">管理システムに合わせる</button><button class="btn sm sub" data-mis="${r.user_id}|${esc(r.contract_id)}|smaregi_to_portal">スマレジに合わせる</button></span></div></div>`;
+ });
+ return h;
+}
+function bindAdminStoreMis(){
+ const run=async(uid,cid,dir)=>smFn("store_sync",{user_id:uid,contract_id:cid,direction:dir});
+ document.querySelectorAll("[data-mis]").forEach(b=>b.onclick=async()=>{
+  const [uid,cid,dir]=b.dataset.mis.split("|");
+  if(!confirm(dir==="portal_to_smaregi"?"管理システムの所属をスマレジへ反映します。よろしいですか？":"スマレジの所属を管理システムへ反映します（管理システムの所属が書き換わります）。よろしいですか？"))return;
+  b.disabled=true;const r=await run(uid,cid,dir);
+  toast(r.ok?"同期しました":("同期できませんでした: "+(smErr(r)||"")),!r.ok);render();
+ });
+ if($("mis-all"))$("mis-all").onclick=async()=>{
+  const targets=[...document.querySelectorAll('[data-mis$="|portal_to_smaregi"]')].map(b=>b.dataset.mis.split("|"));
+  if(!targets.length)return;
+  if(!confirm(`${targets.length}件を「管理システムに合わせる」で同期します。\nスマレジの所属が書き換わります（シフト・勤怠の表示に影響）。\n初回は必ず立会いのもとで実行してください。よろしいですか？`))return;
+  const b=$("mis-all");b.disabled=true;let ok=0,ng=0,lastErr="";
+  for(let i=0;i<targets.length;i++){b.textContent=`同期中… ${i+1}/${targets.length}`;const r=await run(targets[i][0],targets[i][1],"portal_to_smaregi");if(r.ok)ok++;else{ng++;lastErr=smErr(r)||""}}
+  toast(`${ok}件を同期しました${ng?`（${ng}件は失敗: ${lastErr}）`:""}`,ng>0);render();
+ };
 }
 // 2026-10-03追加: マイページ「📄 自分の書類」（実装指示書_退職手続きタスクと書類配布_担当BE_2026-10-03.md §3-3）
 //   hr_documents（本人の行だけ読める）を一覧し、押したときに短時間の署名付きURLで開く（本人のみ・URLはLINE等に載せない）
@@ -9937,6 +10224,9 @@ function bindPage(){
  if(page==="mydocs"||(page==="admin"&&adminMode==="edit"))bindMyDocsPage(); // 2026-10-03追加（管理の従業員編集にも書類の「開く」がある）
  if(page==="retire")bindRetirePage(); // 2026-10-03追加
  if(page==="admin"&&adminMode==="retire")bindAdminRetirePage(); // 2026-10-03追加
+ if(page==="admin"&&adminMode==="contractreg")bindAdminContractReg(); // 2026-10-17追加
+ if(page==="admin"&&adminMode==="storemis")bindAdminStoreMis();
+ if(page==="admin"&&adminMode==="edit"&&smReady)bindSmCard(adminDetail);
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
  if($("goweekly"))$("goweekly").onclick=()=>{page="weekly";render()};
  if($("editdaily"))$("editdaily").onclick=()=>{editId=todayDaily.id;page="write";render()};
@@ -10267,6 +10557,8 @@ function bindPage(){
  // 2026-08-30続き: 給与・インセンティブ配分（月単位・人ごとに店舗を並べる方式に改訂）
  if($("adpayroll"))$("adpayroll").onclick=()=>{adminMode="payroll";payExtraStores={};render()};
  if($("adretire"))$("adretire").onclick=()=>{adminMode="retire";render()}; // 2026-10-03追加
+ if($("adcontractreg"))$("adcontractreg").onclick=()=>{adminMode="contractreg";render()}; // 2026-10-17追加
+ if($("adstoremis"))$("adstoremis").onclick=()=>{adminMode="storemis";render()};
  const payMonthPick=()=>{if(!$("pay-year")||!$("pay-monthsel"))return;payMonth=$("pay-year").value+"-"+String($("pay-monthsel").value).padStart(2,"0");payExtraStores={};render()};
  if($("pay-year"))$("pay-year").onchange=payMonthPick;
  if($("pay-monthsel"))$("pay-monthsel").onchange=payMonthPick;

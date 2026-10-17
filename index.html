@@ -7306,7 +7306,12 @@ async function adminStoreMisView(){
  if(!canApproveRetirement()||!smReady)return h+`<p class="muted">この画面は準備中です。</p>`;
  const {data,error}=await sb.rpc("hr_staff_store_status",{p_user:null,p_only_diff:true});
  if(error)return h+`<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
- const rows=data||[];
+ // 退職した人（無効・退職日が過去）は対象外（スマレジ側が先に退職扱いでも、管理システム側が退職済みでもズレとして扱わない）
+ const ids0=[...new Set((data||[]).map(r=>r.user_id))];
+ const [{data:uu},{data:pp}]=ids0.length?await Promise.all([sb.from("users").select("id,is_active").in("id",ids0),sb.from("employee_profiles").select("user_id,termination_date").in("user_id",ids0)]):[{data:[]},{data:[]}];
+ const inactive=new Set((uu||[]).filter(u=>!u.is_active).map(u=>u.id)),today0=todayStr();
+ (pp||[]).forEach(x=>{if(x.termination_date&&x.termination_date<today0)inactive.add(x.user_id)});
+ const rows=(data||[]).filter(r=>!inactive.has(r.user_id));
  const snap=rows.map(r=>r.snapshot_at).filter(Boolean).sort().pop();
  h+=`<p class="muted" style="margin-top:-8px">管理システムの所属店舗と、スマレジの所属事業所が食い違っている人です（スマレジ側は${snap?esc(new Date(snap).toLocaleString("ja-JP")):"—"}時点の棚卸し）。基本は<b>管理システムに合わせます</b>。</p>`;
  if(!rows.length)return h+`<p class="muted" style="margin-top:16px">ズレはありません ✓</p>`;

@@ -1598,6 +1598,8 @@ async function hqNotifyOnboarding(uid,name,email){
   });
   if(error)console.warn("入社タスク自動作成:",error.message);
  }catch(e){console.warn("入社タスク自動作成:",e)}
+ // 2026-10-17追加: 賃金の入力待ちを本部のLINEへ通知（返信「時給 1200」等で登録→スマレジへ反映）。失敗しても入社登録は継続
+ try{fetch(SUPA_URL+"/functions/v1/hr-wage-notify",{method:"POST",headers:{apikey:SUPA_KEY,Authorization:"Bearer "+SUPA_KEY,"Content-Type":"application/json"},body:JSON.stringify({user_id:uid})}).catch(()=>{})}catch(e){}
 }
 // 2026-10-03追加(実装指示書_退職手続きタスクと書類配布_担当BE §3-1): 退職申請の承認(hr_approve_retirement)成功後に呼ぶ。
 //   入社版hqNotifyOnboardingと同じ作法（失敗しても本体処理は継続）。法人はnippo側で解決してp_corpで渡す。失敗しても承認処理自体は巻き戻さず、ログ＋「手動で作成してください」トースト。

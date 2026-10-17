@@ -1824,7 +1824,8 @@ async function loadMe(uid,opts){
  // v2.7 統合ポータルシェルからの深リンク（?page=）。openApplicantのほうが優先、権限的に見られないページ・未知のキーは無視してホームのまま
  if(openApplicant&&can("recruit")){page="recruit";rcDetail=openApplicant}
  else if(deepLinkPage&&DEEPLINK_PAGES.includes(deepLinkPage)&&!(me.role==="GAIHAN"&&GAIHAN_HIDDEN_PAGES.includes(deepLinkPage))){page=deepLinkPage;if(deepLinkPage==="actual")sfMgStep="actual";
-  if(deepLinkPage==="shift"&&["dashboard","submit","adjust","confirmed","actual","settings"].includes(deepLinkSub))sfMgStep=deepLinkSub; // 2026-09-08追加: 勤怠メニュー(ダッシュボード/シフト/実績/設定)からの直接遷移  if(deepLinkPage==="admin"&&deepLinkMode==="retire"&&canApproveRetirement())adminMode="retire";
+  if(deepLinkPage==="shift"&&["dashboard","submit","adjust","confirmed","actual","settings"].includes(deepLinkSub))sfMgStep=deepLinkSub; // 2026-09-08追加: 勤怠メニュー(ダッシュボード/シフト/実績/設定)からの直接遷移
+  if(deepLinkPage==="admin"&&deepLinkMode==="retire"&&canApproveRetirement())adminMode="retire"; // 2026-10-03追加: 退職申請一覧への直リンク
   if(deepLinkPage==="admin"&&deepLinkUser&&/^[0-9a-f-]{36}$/i.test(deepLinkUser)&&(can("staff_admin")||can("store_admin")))await openAdminUserByLink(deepLinkUser); // 2026-10-03追加
  }
  else{page="home"}

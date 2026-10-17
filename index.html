@@ -1709,7 +1709,9 @@ async function updateDots(){ // v1.7 未読通知バッジ（ホーム=自分宛
   const set=(el,n)=>{if(!el)return;if(n>0){el.textContent=n>99?"99+":n;el.style.display=""}else el.style.display="none"};
   let retPend=0;
   if(canApproveRetirement()){try{const {count:rc}=await sb.from("hr_change_requests").select("id",{count:"exact",head:true}).eq("status","pending");retPend=rc||0}catch(e){}} // 2026-10-03 退職申請の承認待ちも「管理」のバッジに足す
-  set($("homedot"),others);set($("admdot"),joins+retPend);
+  let misN=0;
+  if(smReady&&canApproveRetirement()){misN=await smMismatchCount()} // 2026-10-17 所属のズレ（担当Dの staff_store_mismatch）も「管理」のバッジに足す
+  set($("homedot"),others);set($("admdot"),joins+retPend+misN);
   // v2.6.49 応募タブのバッジは「画面に出るお知らせの件数」と一致させる。
   // 通知の件数で数えていたため、古い通知が残って「何が未読か分からない」状態になっていた
   set($("recruitdot"),await recruitUnreadCount());
@@ -5088,7 +5090,8 @@ async function adminView(){
   const {count:retPending}=await sb.from("hr_change_requests").select("id",{count:"exact",head:true}).eq("status","pending");
   h+=`<button class="btn sub" id="adretire">🚪 退職・移籍・兼務の申請一覧${retPending>0?`（承認待ち ${retPending}件）`:""}</button>`;
   if(smReady){ // 2026-10-17追加
-   h+=`<button class="btn sub" id="adcontractreg">🏢 他法人スマレジへの入社登録（移籍・兼務）</button><button class="btn sub" id="adstoremis">⚠️ 所属のズレ（管理システム↔スマレジ）</button>`;
+   const misN=await smMismatchCount();
+   h+=`<button class="btn sub" id="adcontractreg">🏢 他法人スマレジへの入社登録（移籍・兼務）</button><button class="btn sub" id="adstoremis">⚠️ 所属のズレ（管理システム↔スマレジ）${misN>0?`<span class="badge" style="background:#d93025;color:#fff;margin-left:6px">${misN}件</span>`:""}</button>`;
   }
  }
  if(can("staff_admin")){
@@ -7096,6 +7099,10 @@ async function loadSmContracts(){
   if(error)throw error;
   smContracts=data||[];smReady=true;
  }catch(e){smReady=false;smContracts=[]}
+}
+// 所属のズレの件数（担当D: RPC hq_staff_store_mismatch。毎日の所属同期が作り直す表。0件・未作成・権限なしは0）
+async function smMismatchCount(){
+ try{const {data,error}=await sb.rpc("hq_staff_store_mismatch");if(error||!Array.isArray(data)||!data.length)return 0;return Number(data[0].total_count)||data.length}catch(e){return 0}
 }
 const smLabel=cid=>{const c=smContracts.find(x=>x.contract_id===cid);return c?(c.label||c.contract_id):(cid||"—")};
 const smShort=cid=>{const c=smContracts.find(x=>x.contract_id===cid);return c?(c.label||c.contract_id).replace(/（.*$/,""):(cid||"—")};

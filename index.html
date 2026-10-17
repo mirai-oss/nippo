@@ -7117,6 +7117,7 @@ const recordChange=(id,status,result)=>sb.rpc("hr_record_retirement_sync",{p_req
 async function execContractChange(req){
  const uid=req.user_id,to=req.to_contract_id,res={sync:null,store_sync:null,terminate:null,old_deactivated:false};
  const s=await smFn("sync",{user_id:uid,contract_id:to}); // ① 移行先に入社登録（先に行う＝失敗しても旧契約には触らない）
+ if(s.ok&&s.contract_id!==to){s.ok=false;s.error="スマレジ連携の関数が契約指定に未対応です（担当Dの契約対応版が未デプロイ）。登録はしていません"} // 古い版は契約を無視して既定の契約へ登録/「登録済み」と返してしまうため、応答の契約IDを必ず確認する
  res.sync={ok:!!s.ok,staffId:s.staffId||null,already:!!s.already,error:smErr(s)};
  if(!s.ok){await recordChange(req.id,"error",res);return {ok:false,stage:"sync",error:res.sync.error,res}}
  try{ // ② 所属事業所（この契約に対応のある店舗があれば）を管理システム→スマレジへ。失敗しても登録は有効（所属のズレ一覧から直せる）
@@ -7127,6 +7128,7 @@ async function execContractChange(req){
   const endD=addDaysStr(req.effective_date,-1),past=endD<todayStr();
   const t=await smFn("terminate",{user_id:uid,contract_id:req.from_contract_id,date:endD,deactivate:past});
   res.terminate={ok:!!t.ok,date:endD,skipped:t.skipped||null,error:smErr(t)};
+  if(t.ok&&!t.skipped&&!Array.isArray(t.contracts)){t.ok=false;t.error="スマレジ連携の関数が契約指定に未対応です（終了の反映を確認できません）";res.terminate={ok:false,date:endD,skipped:null,error:t.error}}
   res.old_deactivated=!!(t.ok&&past);
   if(!t.ok){await recordChange(req.id,"error",res);return {ok:false,stage:"terminate",error:res.terminate.error,res}}
  }

@@ -588,7 +588,7 @@ let rcCostEdit=null; // v2.7 B-3(C7): 求人費用の「入力済み」項目を
 let rcFStatus=""; // v2.5.6 選考ステータス絞り込み
 let csvRows=null,csvBusy=false; // v2.6.5 CSV取り込み
 let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8
-let myProf=null,auRole="",auState="",auStore="",auMissing=[],auMissingOpen=false; // v2.6.0／auMissingは2026-09-05追加（LINE未連携・提出物なし等の複数選択絞り込み）
+let myProf=null,auRole="",auState="",auStore="",auCorp="",adminCorpOf={},adminCorpList=[],auMissing=[],auMissingOpen=false; // v2.6.0／auMissingは2026-09-05追加（LINE未連携・提出物なし等の複数選択絞り込み）
 let lineBulkRunning=false,lineBulkResult=null; // 2026-09-07追加: LINE未連携者への一斉メール送信
 let ivSkipSm=false; // v2.6.1
 let joinGender=null; // v2.6.7
@@ -4987,13 +4987,14 @@ async function exportEmployeeCsv(){
   if(auState==="active"&&!u.is_active)return false;
   if(auState==="inactive"&&u.is_active)return false;
   if(auStore&&!(adminStoresMap[u.id]||[]).includes(auStore))return false;
+   if(auCorp&&!(adminCorpOf[u.id]||[]).includes(auCorp))return false; // 2026-10-17追加: 法人で絞り込み
   if(auMissing.length){
    const hit=(auMissing.includes("line")&&!u.line_user_id)||(auMissing.includes("doc")&&submitCountOf(u.id)===0)||(bankAllowed&&auMissing.includes("bank")&&!adminBankMap[u.id]);
    if(!hit)return false;
   }
   if(q){
    const storeNames=(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・");
-   const hay=[u.name,u.email,ROLE_NAME[u.role]||u.role,storeNames].join(" ").toLowerCase();
+   const hay=[u.name,u.email,ROLE_NAME[u.role]||u.role,storeNames,(adminCorpOf[u.id]||[]).join(" ")].join(" ").toLowerCase();
    if(!hay.includes(q))return false;
   }
   return true;
@@ -5066,6 +5067,20 @@ async function adminView(){
   bankAllowed?sb.from("payroll_bank_accounts").select("user_id,payment_method,bank_name,branch_name,account_holder_kana"):Promise.resolve({data:null}) // 2026-09-05追加
  ]);
  if(error)return `<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
+ // 2026-10-17追加: 法人（スマレジの契約リンク＝兼務の人は両方／リンクが無い人は所属店舗の法人）。一覧の絞り込み・検索・CSVに使う
+ try{
+  const [{data:corps},{data:stc},lkRes]=await Promise.all([sb.from("corporations").select("id,name").eq("is_active",true).order("sort_order"),sb.from("stores").select("id,corporation_id"),smReady?sb.from("employee_smaregi_links").select("user_id,contract_id,effective_to"):Promise.resolve({data:[]})]);
+  const cname={};(corps||[]).forEach(c=>cname[c.id]=c.name);adminCorpList=(corps||[]).map(c=>c.name);
+  const ctn={};smContracts.forEach(c=>{if(c.corporation_id&&cname[c.corporation_id])ctn[c.contract_id]=cname[c.corporation_id]});
+  const today=todayStr(),byLink={};
+  (lkRes.data||[]).forEach(l=>{if((!l.effective_to||l.effective_to>=today)&&ctn[l.contract_id]){const a=(byLink[l.user_id]=byLink[l.user_id]||[]);if(!a.includes(ctn[l.contract_id]))a.push(ctn[l.contract_id])}});
+  adminCorpOf={};
+  (us||[]).forEach(u=>{
+   if(byLink[u.id]){adminCorpOf[u.id]=byLink[u.id];return}
+   const a=[];(uss||[]).filter(x=>x.user_id===u.id).forEach(x=>{const st=(stc||[]).find(y=>y.id===x.store_id);const n=st&&st.corporation_id?cname[st.corporation_id]:null;if(n&&!a.includes(n))a.push(n)});
+   adminCorpOf[u.id]=a;
+  });
+ }catch(e){adminCorpOf={};adminCorpList=[]}
  adminUsers=us||[];
  adminStoresMap={};(uss||[]).forEach(x=>{(adminStoresMap[x.user_id]=adminStoresMap[x.user_id]||[]).push(x.store_id)});
  adminProfs={};(profs||[]).forEach(x=>adminProfs[x.user_id]=x); // v2.6.45
@@ -5109,19 +5124,21 @@ async function adminView(){
    if(auState==="active"&&!u.is_active)return false;
    if(auState==="inactive"&&u.is_active)return false;
    if(auStore&&!(adminStoresMap[u.id]||[]).includes(auStore))return false;
+   if(auCorp&&!(adminCorpOf[u.id]||[]).includes(auCorp))return false; // 2026-10-17追加: 法人で絞り込み
    if(!missingMatch(u))return false;
    return true;
   });
   h+=`<p class="muted">${shown.length}名${shown.length!==adminUsers.length?`（全${adminUsers.length}名中）`:""}（タップで役職・所属の変更）</p>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 8px">
-   <input type="text" id="auq" placeholder="🔍 氏名・メール・役職・店舗で絞り込み" style="flex:1;min-width:160px;margin:0">
+   <input type="text" id="auq" placeholder="🔍 氏名・メール・役職・店舗・法人で絞り込み" style="flex:1;min-width:160px;margin:0">
    <button class="btn sm sub" id="au-csv" style="flex-shrink:0">📥 CSVダウンロード</button>
   </div>
   <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
    <select class="inp" id="au-role" style="flex:1;min-width:100px;margin:0;font-size:13px;padding:8px"><option value="">役職: 全て</option>${Object.entries(ROLE_NAME).map(([r,n])=>`<option value="${r}"${auRole===r?" selected":""}>${n}</option>`).join("")}</select>
    <select class="inp" id="au-state" style="flex:1;min-width:110px;margin:0;font-size:13px;padding:8px"><option value="">状態: 全て</option><option value="active"${auState==="active"?" selected":""}>在籍中のみ</option><option value="inactive"${auState==="inactive"?" selected":""}>退職・無効のみ</option></select>
    <select class="inp" id="au-store" style="flex:1;min-width:110px;margin:0;font-size:13px;padding:8px"><option value="">店舗: 全て</option>${stores.map(s=>`<option value="${s.id}"${auStore===s.id?" selected":""}>${esc(s.name)}</option>`).join("")}</select>
-   ${(auRole||auState||auStore||auMissing.length)?`<span class="chip" id="au-clear" style="font-size:11px;padding:4px 10px">✕ 解除</span>`:""}
+   ${adminCorpList.length?`<select class="inp" id="au-corp" style="flex:1;min-width:110px;margin:0;font-size:13px;padding:8px"><option value="">法人: 全て</option>${adminCorpList.map(n=>`<option value="${esc(n)}"${auCorp===n?" selected":""}>${esc(n)}</option>`).join("")}</select>`:""}
+   ${(auRole||auState||auStore||auCorp||auMissing.length)?`<span class="chip" id="au-clear" style="font-size:11px;padding:4px 10px">✕ 解除</span>`:""}
   </div>
   <details class="card" id="au-missing-details" style="margin:0 0 8px" ${auMissingOpen?"open":""}>
    <summary style="cursor:pointer">未連携・未提出だけ探す${auMissing.length?`（${auMissing.length}件選択中）`:""} <span class="muted" style="font-size:11px">（複数選択可）</span></summary>
@@ -5149,7 +5166,7 @@ async function adminView(){
    const subBadge=subN?`<span class="badge b">📎提出${subN}件</span>`:"";
    const bank=adminBankMap[u.id];
    const bankBadge=bankAllowed?(bank?(bank.payment_method==="cash"?'<span class="badge g">💴現金手渡し</span>':'<span class="badge g">🏦口座登録済</span>'):'<span class="badge" style="background:#c0392b">🏦振込先未登録</span>'):"";
-   h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b>${ageOf(u.id)!=null?`（${ageOf(u.id)}）`:""} <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">退職・無効</span>'} ${lineBadge}${subBadge?" "+subBadge:""}${bankBadge?" "+bankBadge:""}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}${(!u.is_active&&u.deactivated_at)?" ／ 退職 "+new Date(u.deactivated_at).toLocaleDateString("ja-JP"):""}</span></span><span class="muted">›</span></div>`;
+   h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b>${ageOf(u.id)!=null?`（${ageOf(u.id)}）`:""} <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">退職・無効</span>'} ${lineBadge}${subBadge?" "+subBadge:""}${bankBadge?" "+bankBadge:""}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}${(adminCorpOf[u.id]||[]).length?" ／ 🏢 "+adminCorpOf[u.id].map(esc).join("・"):""}${(!u.is_active&&u.deactivated_at)?" ／ 退職 "+new Date(u.deactivated_at).toLocaleDateString("ja-JP"):""}</span></span><span class="muted">›</span></div>`;
   });
  }
  return h;
@@ -11785,7 +11802,7 @@ function bindPage(){
   adminMode="list";adminDetail=null;adminUsers=null;render();
  };
  // v2.6.0 従業員の絞り込み
- ["au-role","au-state","au-store"].forEach(id=>{if($(id))$(id).onchange=()=>{auRole=$("au-role").value;auState=$("au-state").value;auStore=$("au-store").value;render()}});
+ ["au-role","au-state","au-store","au-corp"].forEach(id=>{if($(id))$(id).onchange=()=>{auRole=$("au-role").value;auState=$("au-state").value;auStore=$("au-store").value;auCorp=$("au-corp")?$("au-corp").value:"";render()}});
  // 2026-09-05追加: 本部タスクの「担当（複数選択可）」と同じ、チェックボックスを縦に並べる方式に変更
  // （<select multiple>はCtrl/Cmdクリックが必要で選びにくいとの指摘のため）
  document.querySelectorAll(".au-missing-cb").forEach(cb=>cb.onchange=()=>{
@@ -11794,7 +11811,7 @@ function bindPage(){
   render();
  });
  if($("au-missing-details"))$("au-missing-details").ontoggle=()=>{auMissingOpen=$("au-missing-details").open};
- if($("au-clear"))$("au-clear").onclick=()=>{auRole="";auState="";auStore="";auMissing=[];render()};
+ if($("au-clear"))$("au-clear").onclick=()=>{auRole="";auState="";auStore="";auCorp="";auMissing=[];render()};
  if($("au-csv"))$("au-csv").onclick=exportEmployeeCsv; // 2026-09-05追加
  if($("au-linebulk"))$("au-linebulk").onclick=async()=>{ // 2026-09-07追加
   const targetIds=adminUsers.filter(u=>{
@@ -11802,6 +11819,7 @@ function bindPage(){
    if(auState==="active"&&!u.is_active)return false;
    if(auState==="inactive"&&u.is_active)return false;
    if(auStore&&!(adminStoresMap[u.id]||[]).includes(auStore))return false;
+   if(auCorp&&!(adminCorpOf[u.id]||[]).includes(auCorp))return false; // 2026-10-17追加: 法人で絞り込み
    return !u.line_user_id;
   }).map(u=>u.id);
   if(!targetIds.length){toast("対象者がいません",true);return}

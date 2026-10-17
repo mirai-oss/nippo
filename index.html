@@ -11555,7 +11555,11 @@ function bindPage(){
  if($("eu-smaregi"))$("eu-smaregi").onclick=async()=>{
   $("eu-smaregi").disabled=true;$("eu-smaregi").textContent="同期中...";
   const r=await smaregiSync(adminDetail);
-  if(r&&r.ok)toast("スマレジに登録しました（スタッフID: "+r.staffId+"）");
+  if(r&&r.ok){
+   // 2026-10-17: 登録のあと、所属事業所（管理システムの所属店舗）もそのままスマレジへ反映する（入社登録タスクの「所属事業所を入力」工程を廃止したため）。失敗しても登録は有効（毎日の所属同期でも反映される）
+   let aff="";try{const ss=await smFn("store_sync",{user_id:adminDetail,direction:"portal_to_smaregi"});aff=ss&&ss.ok?(ss.added_to_smaregi?`／所属事業所も登録（${ss.added_to_smaregi}件）`:""):"／⚠️所属事業所は後で同期されます"}catch(e){aff="／⚠️所属事業所は後で同期されます"}
+   toast("スマレジに登録しました（スタッフID: "+r.staffId+"）"+aff);
+  }
   else toast("同期エラー: "+((r&&(r.error&&r.error.title||JSON.stringify(r.error)))||"不明"),true);
   render();
  };

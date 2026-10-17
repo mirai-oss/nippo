@@ -7329,12 +7329,14 @@ function bindSmCard(uid){
 // --- 2026-10-17追加: 賃金設定（時給・月給）→スマレジ・タイムカードへ自動反映（employee_wage_settings＝正本・smaregi-sync wage_push/wage_pull） ---
 // 時給: 全事業所共通 ＋ 店舗別（ヘルプ先など高めの時給）・休日賃金。月給: 月初日から。スマレジのAPIで書けるのは賃金のみ（メール・交通費・源泉所得税・個別Web給与明細は手作業）。
 const WAGE_DIV={0:"時給",2:"月給"};
+let wageEditId=null; // 賃金設定の行を編集中のid
 const yen=n=>n==null?"":"¥"+Number(n).toLocaleString("ja-JP");
 async function loadWageRows(uid){
  try{const {data,error}=await sb.from("employee_wage_settings").select("*").eq("user_id",uid).order("effective_date",{ascending:false});if(error)return null;return data||[]}catch(e){return null}
 }
 function wageCardHtml(info,rows){
  if(!info||rows===null)return "";
+ window.__wageRows=rows; // 修正ボタンが区分を調べるため
  const today=todayStr(),act=l=>!l.effective_to||l.effective_to>=today;
  const links=(info.links||[]).filter(act);
  let h=`<div class="card"><h3>💴 賃金設定（スマレジに自動反映）</h3><p class="muted" style="margin:0 0 6px;font-size:12px">時給・月給を入れて保存すると、スマレジ・タイムカードの賃金設定に反映されます。店舗を指定した時給は、その事業所で働くときだけの時給です（ヘルプ先など）。メール・交通費・源泉所得税・個別Web給与明細はスマレジのAPIで書けないため、これまでどおり手作業です。</p>`;
@@ -7346,7 +7348,16 @@ function wageCardHtml(info,rows){
   mine.forEach(r=>{
    const st=r.sync_status==="synced"?`<span class="badge g">✅反映済み</span>`:r.sync_status==="error"?`<span class="badge" style="background:#fdecea;color:#b3261e">❌エラー</span>`:`<span class="badge b">⏳反映待ち</span>`;
    const target=r.store_id?esc(((stores.find(x=>x.id===r.store_id)||storesHidden.find(x=>x.id===r.store_id)||{}).name)||"店舗"):"全事業所共通";
-   h+=`<div class="row" style="cursor:default;align-items:flex-start"><span><b>${WAGE_DIV[r.division]} ${yen(r.wage)}</b>${r.holiday_wage!=null?`（休日 ${yen(r.holiday_wage)}）`:""} ／ ${target}<br><span class="muted" style="font-size:12px">${esc(r.effective_date)}から ${st}${r.sync_status==="error"&&r.sync_error?` <span style="color:#b3261e">${esc(r.sync_error)}</span>`:""}</span></span><span>${r.smaregi_wage_apply_id?"":`<button class="btn sm sub" data-wagedel="${r.id}">削除</button>`}</span></div>`;
+   if(wageEditId===r.id){ // 編集中: 金額・休日賃金・適用開始日を直せる（区分・店舗を変えるときは削除して入れ直す）
+    h+=`<div class="row" style="cursor:default;display:block;background:#f6f9ff"><b>${WAGE_DIV[r.division]} を修正</b> <span class="muted" style="font-size:12px">／ ${target}（区分・店舗を変えるときは、削除して入れ直してください）</span>
+     <div style="display:grid;gap:6px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin-top:6px">
+      <input class="inp" type="number" min="0" inputmode="numeric" id="wedit-amt" value="${r.wage}" style="margin:0" placeholder="金額（円）">
+      ${r.division===0?`<input class="inp" type="number" min="0" inputmode="numeric" id="wedit-hol" value="${r.holiday_wage==null?"":r.holiday_wage}" style="margin:0" placeholder="休日賃金（任意）">`:""}
+      <input class="inp" type="date" id="wedit-date" value="${esc(r.effective_date)}" style="margin:0"></div>
+     <div style="display:flex;gap:6px;margin-top:6px"><button class="btn sm" data-wageeditsave="${r.id}|${esc(c)}">保存してスマレジに反映</button><button class="btn sm sub" data-wageeditcancel="1">キャンセル</button></div></div>`;
+    return;
+   }
+   h+=`<div class="row" style="cursor:default;align-items:flex-start"><span><b>${WAGE_DIV[r.division]} ${yen(r.wage)}</b>${r.holiday_wage!=null?`（休日 ${yen(r.holiday_wage)}）`:""} ／ ${target}<br><span class="muted" style="font-size:12px">${esc(r.effective_date)}から ${st}${r.sync_status==="error"&&r.sync_error?` <span style="color:#b3261e">${esc(r.sync_error)}</span>`:""}</span></span><span style="display:flex;gap:6px"><button class="btn sm sub" data-wageedit="${r.id}">修正</button><button class="btn sm sub" data-wagedel="${r.id}|${esc(c)}|${r.smaregi_wage_apply_id?"1":"0"}">削除</button></span></div>`;
   });
   h+=`<div style="margin-top:8px;display:grid;gap:6px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
    <select class="inp" data-wdiv="${esc(c)}" style="margin:0"><option value="0">時給</option><option value="2">月給</option></select>
@@ -7384,11 +7395,33 @@ function bindWageCard(uid){
   await push(c);
  });
  document.querySelectorAll("[data-wagepush]").forEach(b=>b.onclick=async()=>{b.disabled=true;await push(b.dataset.wagepush)});
+ document.querySelectorAll("[data-wageedit]").forEach(b=>b.onclick=()=>{wageEditId=b.dataset.wageedit;render()});
+ document.querySelectorAll("[data-wageeditcancel]").forEach(b=>b.onclick=()=>{wageEditId=null;render()});
+ document.querySelectorAll("[data-wageeditsave]").forEach(b=>b.onclick=async()=>{
+  const [id,c]=b.dataset.wageeditsave.split("|"),amt=Number($("wedit-amt").value),holEl=$("wedit-hol"),hol=holEl&&holEl.value!==""?Number(holEl.value):null;
+  let date=$("wedit-date").value;
+  if(!amt||amt<=0){toast("金額を入れてください",true);return}
+  if(!date){toast("適用開始日を選んでください",true);return}
+  const row=(window.__wageRows||[]).find(x=>x.id===id);
+  if(row&&row.division===2&&date.slice(8)!=="01"){date=date.slice(0,8)+"01";toast(`月給の適用開始日は月初日です（${date}にします）`)}
+  if(!confirm(`賃金を修正して、スマレジにも反映します。\n金額 ${yen(amt)}${hol!=null?`（休日 ${yen(hol)}）`:""} ／ ${date}から\nよろしいですか？`))return;
+  b.disabled=true;
+  const r=await smFn("wage_update",{user_id:uid,contract_id:c,id,wage:amt,holiday_wage:hol,effective_date:date});
+  if(r.ok){wageEditId=null;toast("修正して、スマレジに反映しました");render()}
+  else{toast("修正できませんでした: "+(smErr(r)||(r.results||[]).filter(x=>!x.ok).map(x=>x.error).join(" / ")||"不明"),true);b.disabled=false}
+ });
  document.querySelectorAll("[data-wagedel]").forEach(b=>b.onclick=async()=>{
-  if(!confirm("この賃金設定を削除します（スマレジには反映されていません）。よろしいですか？"))return;
-  const {error}=await sb.rpc("hr_delete_wage",{p_id:b.dataset.wagedel});
-  if(error){toast("削除できませんでした: "+error.message,true);return}
-  render();
+  const [id,c,synced]=b.dataset.wagedel.split("|");
+  if(!confirm(synced==="1"?"この賃金設定を削除します。スマレジの賃金設定も削除されます。よろしいですか？":"この賃金設定を削除します（スマレジには反映されていません）。よろしいですか？"))return;
+  b.disabled=true;
+  if(synced==="1"){
+   const r=await smFn("wage_delete",{user_id:uid,contract_id:c,id});
+   if(!r.ok){toast("削除できませんでした: "+(smErr(r)||""),true);b.disabled=false;return}
+  }else{
+   const {error}=await sb.rpc("hr_delete_wage",{p_id:id});
+   if(error){toast("削除できませんでした: "+error.message,true);b.disabled=false;return}
+  }
+  toast("削除しました");render();
  });
  document.querySelectorAll("[data-wagepull]").forEach(b=>b.onclick=async()=>{
   const c=b.dataset.wagepull;b.disabled=true;msg(c,"スマレジの今の賃金設定を確認中…");

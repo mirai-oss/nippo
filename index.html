@@ -7208,7 +7208,8 @@ async function adminContractRegView(){
  <div class="card">
   <div style="display:flex;gap:6px;flex-wrap:wrap"><input class="inp" id="bk-q" placeholder="名前で絞り込み" value="${esc(bkQ)}" style="flex:1;min-width:140px;margin:0">
    <select class="inp" id="bk-store" style="width:auto;margin:0"><option value="">（すべての店舗）</option>${[...stores].map(s=>`<option value="${s.id}" ${s.id===bkStore?"selected":""}>${esc(s.name)}</option>`).join("")}</select></div>
-  <p class="muted" style="margin:6px 0">${list.length}名表示 ／ 登録済み・対象外の人は選べません（移籍は、今スマレジに登録されている人だけ）</p>`;
+  <p class="muted" style="margin:6px 0">${list.length}名表示（うち選べる人 ${list.filter(selectable).length}名） ／ 登録済み・対象外の人は選べません（移籍は、今スマレジに登録されている人だけ）</p>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px"><button class="btn sm sub" id="bk-selall">表示中の選べる人を、すべて選ぶ</button><button class="btn sm sub" id="bk-selnone">選択を全部外す</button></div>`;
  list.slice(0,300).forEach(u=>{
   const ok=selectable(u),cs=(lkOf[u.id]||[]).map(l=>`<span class="badge ${l.contract_id===bkContract?"g":"b"}">${esc(smShort(l.contract_id))} #${esc(l.smaregi_staff_id)}</span>`).join(" ")||`<span class="muted">スマレジ未登録</span>`;
   h+=`<label class="row" style="cursor:${ok?"pointer":"default"};opacity:${ok?1:.5};align-items:center"><span><input type="checkbox" data-bksel="${u.id}" ${bkSel.has(u.id)&&ok?"checked":""} ${ok?"":"disabled"}> <b>${esc(u.name)}</b> <span class="muted">${esc(ROLE_NAME[u.role]||u.role)} ／ ${esc((stOf[u.id]||[]).map(stName).filter(Boolean).join("・")||"所属なし")}</span></span><span>${cs}</span></label>`;
@@ -7232,6 +7233,8 @@ function bindAdminContractReg(){
  if($("bk-note"))$("bk-note").oninput=e=>{bkNote=e.target.value};
  if($("bk-q"))$("bk-q").onchange=e=>{bkQ=e.target.value;render()};
  if($("bk-store"))$("bk-store").onchange=e=>{bkStore=e.target.value;render()};
+ if($("bk-selall"))$("bk-selall").onclick=()=>{document.querySelectorAll("[data-bksel]:not([disabled])").forEach(c=>{c.checked=true;bkSel.add(c.dataset.bksel)});if($("bk-count"))$("bk-count").textContent=bkSel.size};
+ if($("bk-selnone"))$("bk-selnone").onclick=()=>{bkSel=new Set();document.querySelectorAll("[data-bksel]").forEach(c=>{c.checked=false});if($("bk-count"))$("bk-count").textContent=0};
  document.querySelectorAll("[data-bksel]").forEach(c=>c.onchange=e=>{const id=e.target.dataset.bksel;if(e.target.checked)bkSel.add(id);else bkSel.delete(id);if($("bk-count"))$("bk-count").textContent=bkSel.size});
  if($("bk-run"))$("bk-run").onclick=async()=>{
   if(bkRunning)return;

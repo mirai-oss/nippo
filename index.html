@@ -7178,6 +7178,8 @@ async function hqNotifyOnboardingContract(uid,contractId,opts){
   return true;
  }catch(e){console.warn("他法人の入社登録タスク:",e);return false}
 }
+// スマレジに所属事業所が映らなかったとき、その人の入社登録タスクへ工程「所属事業所をスマレジで確認・入力」を足す（べき等・タスクが無ければ何もしない。SQL適用前は何も起きない）
+async function hqAddAffiliationStep(uid,reason){try{await sb.rpc("hq_add_onboarding_affiliation_step",{p_user:uid,p_reason:reason||null})}catch(e){}}
 const recordChange=(id,status,result)=>sb.rpc("hr_record_retirement_sync",{p_request:id,p_status:status,p_result:result}); // 承認済みの申請へ結果を保存（種別を問わない）
 // 承認済みの「移籍／兼務追加」1件をスマレジへ反映する。req={id,user_id,kind,effective_date,from_contract_id,to_contract_id}
 // 再実行しても二重にならない（sync=登録済みならそのまま／terminate=同じ日付を送り直すだけ）。
@@ -7200,6 +7202,7 @@ async function execContractChange(req){
   if(!t.ok){await recordChange(req.id,"error",res);return {ok:false,stage:"terminate",error:res.terminate.error,res}}
  }
  try{res.onboarding_task=await hqNotifyOnboardingContract(uid,to,{note:`※${RET_KIND[req.kind]||"移籍"}（${req.kind==="transfer"?smLabel(req.from_contract_id)+"→":"＋"}${smLabel(to)}）による入社登録。開始日 ${req.effective_date}。`})}catch(e){res.onboarding_task=false} // 移行先(LiveGate等)の入社登録タスク（賃金設定・LINE案内などの通常の入社工程）
+ if(res.store_sync&&!res.store_sync.ok)await hqAddAffiliationStep(uid,"所属事業所がスマレジに登録できませんでした"); // 所属が映らなかったときだけ、入社登録タスクに確認の工程を足す
  if(req.kind==="transfer"){ // 移籍＝旧契約(トーホー等)の退職扱い → 退職手続きの本部タスク（源泉徴収票の工程を含む）を通常の退職と同じに自動発行（同じ人の未完了タスクがあれば二重に作らない）。アカウント・所属は止めない
   try{
    const {data:uu}=await sb.from("users").select("name,role").eq("id",uid).maybeSingle();
@@ -11769,7 +11772,7 @@ function bindPage(){
   const r=await smaregiSync(adminDetail);
   if(r&&r.ok){
    // 2026-10-17: 登録のあと、所属事業所（管理システムの所属店舗）もそのままスマレジへ反映する（入社登録タスクの「所属事業所を入力」工程を廃止したため）。失敗しても登録は有効（毎日の所属同期でも反映される）
-   let aff="";try{const ss=await smFn("store_sync",{user_id:adminDetail,direction:"portal_to_smaregi"});aff=ss&&ss.ok?(ss.added_to_smaregi?`／所属事業所も登録（${ss.added_to_smaregi}件）`:""):"／⚠️所属事業所は後で同期されます"}catch(e){aff="／⚠️所属事業所は後で同期されます"}
+   let aff="";try{const ss=await smFn("store_sync",{user_id:adminDetail,direction:"portal_to_smaregi"});aff=ss&&ss.ok?(ss.added_to_smaregi?`／所属事業所も登録（${ss.added_to_smaregi}件）`:""):"／⚠️所属事業所は後で同期されます（入社登録タスクに確認の工程を追加しました）";if(!(ss&&ss.ok))await hqAddAffiliationStep(adminDetail,"所属事業所がスマレジに登録できませんでした")}catch(e){aff="／⚠️所属事業所は後で同期されます";await hqAddAffiliationStep(adminDetail,"所属事業所がスマレジに登録できませんでした")}
    toast("スマレジに登録しました（スタッフID: "+r.staffId+"）"+aff);
   }
   else toast("同期エラー: "+((r&&(r.error&&r.error.title||JSON.stringify(r.error)))||"不明"),true);

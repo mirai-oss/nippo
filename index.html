@@ -1606,14 +1606,15 @@ async function hqNotifyOnboarding(uid,name,email){
 //   ★承認処理(hr_approve_retirement・Sync7)は未実装のため、現時点では呼び出し元が無い。承認ハンドラ完成時に
 //   `await hqNotifyOffboarding(userId,name,role,effectiveDate)` を成功パスの最後に1行足すだけで繋がる。
 const NIPPO_URL="https://mirai-oss.github.io/nippo/"; // 本部タスク・URL案内用の公開URL
-async function hqNotifyOffboarding(uid,name,role,retirementDate){
+async function hqNotifyOffboarding(uid,name,role,retirementDate,opts){ // opts={corp:法人名の指定, note:説明欄へ足す一文, quiet:失敗時のトーストを出さない}（2026-10-17: 移籍＝旧契約(トーホー)の退職扱いでも使う）
+ opts=opts||{};
  try{
   // 法人: user_stores→stores.corporation_id→corporations.name（入社版RPCが内部で行う対応表と同じ。担当Eの指示書どおり引数p_corpで渡す）
   const {data:us}=await sb.from("user_stores").select("stores(corporations(name))").eq("user_id",uid).limit(1);
   const corp=us&&us[0]&&us[0].stores&&us[0].stores.corporations?us[0].stores.corporations.name:null;
   const args={
    p_user_id:uid,p_name:name,
-   p_corp:corp||"トーホー", // 担当EのRPCはp_corp必須（'LiveGate'|'SK'|'N-Style'|'トーホー'以外は'トーホー'扱い）
+   p_corp:opts.corp||corp||"トーホー", // 担当EのRPCはp_corp必須（'LiveGate'|'SK'|'N-Style'|'トーホー'以外は'トーホー'扱い）
    p_is_employee:role!=="AL", // SHAIN/TENCHO/TEAM/HQ/CEOは社員扱い・ALはアルバイト
    p_retirement_date:retirementDate,p_approved_on:todayStr()
   };
@@ -1624,13 +1625,13 @@ async function hqNotifyOffboarding(uid,name,role,retirementDate){
    if(taskId){
     const link=NIPPO_URL+"?page=admin&u="+uid;
     const {data:t}=await sb.from("hq_tasks").select("description").eq("id",taskId).maybeSingle();
-    if(t&&!(t.description||"").includes(link))await sb.from("hq_tasks").update({description:((t.description||"")+"\n従業員の管理画面: "+link).trim()}).eq("id",taskId);
+    if(t&&!(t.description||"").includes(link))await sb.from("hq_tasks").update({description:((t.description||"")+(opts.note?"\n"+opts.note:"")+"\n従業員の管理画面: "+link).trim()}).eq("id",taskId);
    }
   }catch(e){console.warn("退職タスクへの管理画面リンク追記:",e)}
   return true;
  }catch(e){
   console.warn("退職手続きタスク自動作成:",e);
-  toast("退職手続きの本部タスク作成に失敗しました。本部タスクから手動で作成してください",true);
+  if(!opts.quiet)toast("退職手続きの本部タスク作成に失敗しました。本部タスクから手動で作成してください",true);
   return false;
  }
 }
@@ -7139,6 +7140,14 @@ async function smFn(action,payload){ // smaregi-sync（契約指定）
  }catch(e){return {ok:false,error:String(e)}}
 }
 const smErr=x=>x&&x.ok?null:String((x&&x.error&&typeof x.error!=="string")?JSON.stringify(x.error):(x&&x.error)||"原因不明").slice(0,300);
+let smCorpCache=null;
+async function smCorpName(cid){ // スマレジ契約 → 法人名（本部タスクの法人。見つからなければトーホー）
+ try{
+  if(!smCorpCache){const {data}=await sb.from("corporations").select("id,name");smCorpCache={};(data||[]).forEach(c=>smCorpCache[c.id]=c.name)}
+  const c=smContracts.find(x=>x.contract_id===cid);
+  return (c&&smCorpCache[c.corporation_id])||"トーホー";
+ }catch(e){return "トーホー"}
+}
 const recordChange=(id,status,result)=>sb.rpc("hr_record_retirement_sync",{p_request:id,p_status:status,p_result:result}); // 承認済みの申請へ結果を保存（種別を問わない）
 // 承認済みの「移籍／兼務追加」1件をスマレジへ反映する。req={id,user_id,kind,effective_date,from_contract_id,to_contract_id}
 // 再実行しても二重にならない（sync=登録済みならそのまま／terminate=同じ日付を送り直すだけ）。
@@ -7160,8 +7169,15 @@ async function execContractChange(req){
   res.old_deactivated=!!(t.ok&&past);
   if(!t.ok){await recordChange(req.id,"error",res);return {ok:false,stage:"terminate",error:res.terminate.error,res}}
  }
+ if(req.kind==="transfer"){ // 移籍＝旧契約(トーホー等)の退職扱い → 退職手続きの本部タスク（源泉徴収票の工程を含む）を通常の退職と同じに自動発行（同じ人の未完了タスクがあれば二重に作らない）。アカウント・所属は止めない
+  try{
+   const {data:uu}=await sb.from("users").select("name,role").eq("id",uid).maybeSingle();
+   const corp=await smCorpName(req.from_contract_id);
+   if(uu)res.offboarding_task=await hqNotifyOffboarding(uid,uu.name,uu.role,addDaysStr(req.effective_date,-1),{corp,quiet:true,note:`※移籍（${smLabel(req.from_contract_id)}→${smLabel(to)}）による退職扱い。アカウント・所属は変わりません（LiveGateで勤務を続けます）。源泉徴収票は旧契約（${smShort(req.from_contract_id)}）分のみ。`});
+  }catch(e){res.offboarding_task=false}
+ }
  await recordChange(req.id,"synced",res);
- return {ok:true,staffId:res.sync.staffId,already:res.sync.already,warn:res.store_sync&&!res.store_sync.ok?res.store_sync.error:null,res};
+ return {ok:true,staffId:res.sync.staffId,already:res.sync.already,warn:res.store_sync&&!res.store_sync.ok?res.store_sync.error:null,offboarding:res.offboarding_task,res};
 }
 // 本部が直接登録（承認済みの記録を作って反映）
 async function execDirectChange(uid,kind,to,date,note){
@@ -7218,7 +7234,7 @@ async function adminContractRegView(){
  h+=`<button class="btn" id="bk-run" style="margin-top:10px" ${bkRunning?"disabled":""}>選んだ人をまとめて入社登録（<span id="bk-count">${bkSel.size}</span>名）</button></div>`;
  if(bkResults.length){
   h+=`<div class="card"><h3 style="margin:0 0 6px">実行結果</h3>`;
-  bkResults.forEach(r=>{h+=`<div class="row" style="cursor:default"><span><b>${esc(r.name)}</b><br><span class="muted">${r.ok?`スタッフID ${esc(r.staffId||"—")}${r.already?"（登録済み）":""}${r.warn?` ／ ⚠️所属の反映: ${esc(r.warn)}`:""}`:`${esc(r.stage||"")}: ${esc(r.error||"")}`}</span></span><span class="badge ${r.ok?"g":""}">${r.ok?"✅成功":"❌失敗"}</span></div>`});
+  bkResults.forEach(r=>{h+=`<div class="row" style="cursor:default"><span><b>${esc(r.name)}</b><br><span class="muted">${r.ok?`スタッフID ${esc(r.staffId||"—")}${r.already?"（登録済み）":""}${r.warn?` ／ ⚠️所属の反映: ${esc(r.warn)}`:""}${r.offboarding===true?" ／ 退職手続きタスクを発行":r.offboarding===false?" ／ ⚠️退職手続きタスクの発行に失敗（本部タスクから手動で作成）":""}`:`${esc(r.stage||"")}: ${esc(r.error||"")}`}</span></span><span class="badge ${r.ok?"g":""}">${r.ok?"✅成功":"❌失敗"}</span></div>`});
   h+=`<p class="muted" style="margin:6px 0 0">失敗した人は、もう一度チェックして実行すると続きから再実行できます（登録済みの分は二重になりません）。</p></div>`;
  }
  const reg=(lk||[]).filter(l=>l.contract_id===bkContract&&(!l.effective_to||l.effective_to>=today));

@@ -7210,6 +7210,7 @@ async function adminContractRegView(){
  const linked=u=>(lkOf[u.id]||[]).some(l=>l.contract_id===bkContract);
  const selectable=u=>!linked(u)&&(bkKind==="concurrent"||(lkOf[u.id]||[]).some(l=>l.contract_id!==bkContract));
  let h=`<span class="back" id="adback">← 従業員一覧</span><h2>🏢 他法人スマレジへの入社登録</h2>
+ <div class="card" style="background:#fff8e1;border-color:#f0c24f"><b>⚠️ 最初は、必ず1人だけで試してください</b><br><span style="font-size:13px">スマレジが「これから先の入社日（11/1など）」を受け付けるかは、本番で初めて試します。①1人だけチェックして実行 → 結果（スタッフID・エラー）とスマレジの画面を確認 → ②問題なければ残りをまとめて実行、の順で進めてください。失敗した人は選択に残り、もう一度実行すると続きから再実行できます（二重登録にはなりません）。</span></div>
  <p class="muted" style="margin-top:-8px">黒霧屋のスタッフなどを、LiveGateなど別のスマレジ契約に登録します。<b>移籍</b>＝今の契約を終了して移行先に登録／<b>兼務追加</b>＝今の契約は続けたまま移行先にも追加。どちらもアカウント・ログインは止まりません。</p>
  <div class="card">
   <label style="font-size:13px">登録先のスマレジ契約</label>
@@ -7258,6 +7259,7 @@ function bindAdminContractReg(){
   if(!bkDate){toast("開始日を選んでください",true);return}
   const ids=[...bkSel];if(!ids.length){toast("人をチェックしてください",true);return}
   const kindTxt=bkKind==="transfer"?"移籍（今の契約を終了）":"兼務追加（今の契約は続ける）";
+  if(ids.length>3&&!bkResults.some(r=>r.ok)&&!confirm(`まだ1人も試していません（${ids.length}名を一度に実行しようとしています）。\n最初は1人だけで試して、結果を確認してから残りを実行することをおすすめします。\nこのまま${ids.length}名を実行しますか？`))return;
   if(!confirm(`${ids.length}名を「${smLabel(bkContract)}」のスマレジに入社登録します。\n区分: ${kindTxt}\n開始日: ${bkDate}${bkKind==="transfer"?`（今の契約は ${addDaysStr(bkDate,-1)} で終了）`:""}\n\nスマレジに実際に登録されます。よろしいですか？`))return;
   bkRunning=true;bkResults=[];const b=$("bk-run");b.disabled=true;
   const {data:us}=await sb.from("users").select("id,name").in("id",ids);const nm={};(us||[]).forEach(u=>nm[u.id]=u.name);

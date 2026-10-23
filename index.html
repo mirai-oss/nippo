@@ -7542,10 +7542,15 @@ function bindWageCard(uid){
   if(!r.ok){msg(c,"確認できませんでした: "+(smErr(r)||""));return}
   const lines=(r.wages||[]).map(w=>`${WAGE_DIV[w.division]||"区分"+w.division} ${yen(w.wage)}${w.holidayWage!=null?`（休日${yen(w.holidayWage)}）`:""}／${w.store_name||(w.storeId?"事業所"+w.storeId:"全事業所共通")}／${w.effectiveDate}〜（${w.note||""}）`);
   msg(c,`スマレジの設定 ${r.count}件: ${lines.join(" ／ ")||"なし"}`);
-  if(r.count&&confirm(`スマレジにある賃金設定 ${r.count}件を確認しました（取り込み対象 ${(r.wages||[]).filter(w=>/取り込み対象|スマレジの値で更新/.test(w.note||"")).length}件）。\n管理システムに取り込みますか？（管理システムに未反映の値がある行は上書きしません）`)){
+  const toImport=(r.wages||[]).filter(w=>/取り込み対象/.test(w.note||"")).length,drifts=(r.wages||[]).filter(w=>w.drift);
+  if(toImport&&confirm(`スマレジにある賃金設定のうち、管理システムに無いもの ${toImport}件を取り込みます（初期投入）。\n正本は管理システムなので、管理システムにある設定は上書きしません。よろしいですか？`)){
    const r2=await smFn("wage_pull",{user_id:uid,contract_id:c,import:true});
-   toast(r2.ok?`取り込みました（${r2.imported}件）${r2.conflicts?`／${r2.conflicts}件は管理システム側に未反映の値があるため取り込まず`:""}`:"取り込めませんでした: "+(smErr(r2)||""),!r2.ok);
-   render();
+   toast(r2.ok?`取り込みました（${r2.imported}件）`:"取り込めませんでした: "+(smErr(r2)||""),!r2.ok);
+   render();return;
+  }
+  if(drifts.length&&confirm(`スマレジの値が管理システムと違う設定が ${drifts.length}件あります。\n正本は管理システムです。管理システムの値でスマレジを直しますか？`)){
+   let ok=0,ng=0;for(const d of drifts){const r3=await smFn("wage_update",{user_id:uid,contract_id:c,id:d.row_id});if(r3.ok)ok++;else ng++}
+   toast(`スマレジを管理システムの値に合わせました（成功${ok}件${ng?`／失敗${ng}件`:""}）`,ng>0);render();
   }
  });
 }
@@ -10816,21 +10821,32 @@ function bindPage(){
  if($("adcontractreg"))$("adcontractreg").onclick=()=>{adminMode="contractreg";render()}; // 2026-10-17追加
  if($("adstoremis"))$("adstoremis").onclick=()=>{adminMode="storemis";render()};
  if($("adwagepull"))$("adwagepull").onclick=async()=>{ // 2026-10-23追加: スマレジ→管理システムの賃金の取り込み（読み取りのみ・全契約の在職者）
-  if(!confirm("スマレジ・タイムカードに今入っている賃金（時給・月給。現在有効なものと、これから適用のもの）を、全契約の在職者ぶん、管理システムに取り込みます。\n\n・スマレジには何も書き込みません（読み取りだけ）\n・管理システムにまだ無い設定を追加します\n・管理システムに反映済みの設定でスマレジと値が違うものは、スマレジの値に更新します\n・管理システムに未反映の入力がある設定は、上書きしません\n・日給・営業時間帯別・固定残業代は取り込めません\n\n人数が多いと数分かかります。実行中はこの画面を閉じないでください。よろしいですか？"))return;
+  if(!confirm("スマレジ・タイムカードに今入っている賃金（時給・月給。現在有効なものと、これから適用のもの）を、全契約の在職者ぶん、管理システムに取り込みます。\n\n・スマレジには何も書き込みません（読み取りだけ）\n・管理システムにまだ無い設定だけを追加します（初期投入）\n・正本は管理システムです。管理システムにある設定は、上書きしません（スマレジと値が違うものは、件数をお知らせし、あとで「管理システムに合わせる」ができます）\n・日給・営業時間帯別・固定残業代は取り込めません\n\n人数が多いと数分かかります。実行中はこの画面を閉じないでください。よろしいですか？"))return;
   const b=$("adwagepull");b.disabled=true;
-  const t={imported:0,updated:0,matched:0,conflicts:0,skipped:0,unsupported:0,persons:0,withWage:0,errors:[]};
+  const t={imported:0,drift:0,matched:0,conflicts:0,skipped:0,unsupported:0,persons:0,withWage:0,errors:[],driftRows:[]};
   for(const c of smContracts){
    let off=0,total=null;
    for(let guard=0;guard<200;guard++){
     b.textContent=`取り込み中… ${smShort(c.contract_id)} ${off}/${total==null?"?":total}人`;
     const r=await smFn("wage_pull_all",{contract_id:c.contract_id,offset:off,limit:15});
     if(!r.ok){t.errors.push(`${smShort(c.contract_id)}: ${smErr(r)||"失敗"}`);break}
-    total=r.total;t.imported+=r.imported;t.updated+=r.updated;t.matched+=r.matched;t.conflicts+=r.conflicts;t.skipped+=r.skipped_unmapped_store;t.unsupported+=r.unsupported_rows;t.persons+=r.persons;t.withWage+=r.with_wage;(r.errors||[]).forEach(e=>t.errors.push(e));
+    total=r.total;t.imported+=r.imported;t.drift+=r.drift;(r.drift_rows||[]).forEach(x=>t.driftRows.push(x));t.matched+=r.matched;t.conflicts+=r.conflicts;t.skipped+=r.skipped_unmapped_store;t.unsupported+=r.unsupported_rows;t.persons+=r.persons;t.withWage+=r.with_wage;(r.errors||[]).forEach(e=>t.errors.push(e));
     if(r.done)break;off=r.next_offset;
    }
   }
   b.disabled=false;b.textContent="💴 スマレジの賃金（時給・月給）を管理システムへ取り込む";
-  alert(`取り込みが終わりました。\n\n確認した人: ${t.persons}人（賃金設定があった人 ${t.withWage}人）\n追加: ${t.imported}件 ／ 更新: ${t.updated}件 ／ 一致: ${t.matched}件\n上書きしなかった（管理システム側に未反映の入力あり）: ${t.conflicts}件\n対応する店舗が無く取り込めなかった: ${t.skipped}件\n対象外（日給・営業時間帯別）: ${t.unsupported}件${t.errors.length?`\n\n⚠️エラー ${t.errors.length}件:\n${t.errors.slice(0,8).join("\n")}${t.errors.length>8?"\n…":""}`:""}`);
+  alert(`取り込みが終わりました。\n\n確認した人: ${t.persons}人（賃金設定があった人 ${t.withWage}人）\n追加: ${t.imported}件 ／ 一致: ${t.matched}件\nスマレジと値が違う（管理システムの値を残しました）: ${t.drift}件\n管理システムに未反映の入力があり、確認できなかった: ${t.conflicts}件\n対応する店舗が無く取り込めなかった: ${t.skipped}件\n対象外（日給・営業時間帯別）: ${t.unsupported}件${t.errors.length?`\n\n⚠️エラー ${t.errors.length}件:\n${t.errors.slice(0,8).join("\n")}${t.errors.length>8?"\n…":""}`:""}`);
+  if(t.driftRows.length&&confirm(`スマレジと値が違う設定が ${t.drift}件ありました。\n正本は管理システムです。管理システムの値で、スマレジを直しますか？\n（スマレジの賃金設定が書き換わります。「キャンセル」なら、そのままにします）`)){
+   let ok=0,ng=0,lastErr="";
+   for(let i=0;i<t.driftRows.length;i++){
+    b.disabled=true;b.textContent=`スマレジを直しています… ${i+1}/${t.driftRows.length}`;
+    const d=t.driftRows[i];
+    const r=await smFn("wage_update",{user_id:d.user_id,contract_id:d.contract_id,id:d.row_id}); // 同じ値で更新＝管理システムの値をスマレジへ反映し直す
+    if(r.ok)ok++;else{ng++;lastErr=smErr(r)||""}
+   }
+   b.disabled=false;b.textContent="💴 スマレジの賃金（時給・月給）を管理システムへ取り込む";
+   alert(`スマレジを管理システムの値に合わせました。\n成功 ${ok}件${ng?` ／ 失敗 ${ng}件（${lastErr}）`:""}`);
+  }
   render();
  };
  const payMonthPick=()=>{if(!$("pay-year")||!$("pay-monthsel"))return;payMonth=$("pay-year").value+"-"+String($("pay-monthsel").value).padStart(2,"0");payExtraStores={};render()};

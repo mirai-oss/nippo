@@ -5013,17 +5013,51 @@ async function exportEmployeeCsv(){
    if(data&&data.ok)u.line_code=data.code;
   }catch(e){/* 発行できなくてもCSV自体は続行（該当欄が空欄になるだけ） */}
  }
+ // 2026-10-23追加: 賃金（時給・休日賃金・月給・店舗別時給）と法人をCSVに出す。賃金は本部・社長・マスターだけ（employee_wage_settingsのRLSと同じ）
+ const wageAllowed=me.is_master||["HQ","CEO"].includes(me.role);
+ const wageOf={};
+ if(wageAllowed){
+  try{
+   const {data:ws}=await sb.from("employee_wage_settings").select("user_id,contract_id,division,store_id,wage,holiday_wage,effective_date,sync_status");
+   const today=todayStr(),byUser={};
+   (ws||[]).forEach(w=>{(byUser[w.user_id]=byUser[w.user_id]||[]).push(w)});
+   const yen0=n=>n==null?"":String(n);
+   for(const uid of Object.keys(byUser)){
+    const rowsU=byUser[uid],contracts=[...new Set(rowsU.map(w=>w.contract_id))];
+    const multi=contracts.length>1;
+    const cur={},fut=[],unsynced=rowsU.some(w=>w.sync_status!=="synced");
+    rowsU.forEach(w=>{ // 現在有効＝(契約×区分×店舗)ごとに適用開始日が今日以前で最新の行。これから適用＝未来日の行
+     if(w.effective_date>today){fut.push(w);return}
+     const k=w.contract_id+"|"+w.division+"|"+(w.store_id||"");
+     if(!cur[k]||cur[k].effective_date<w.effective_date)cur[k]=w;
+    });
+    const pick=(div,common)=>contracts.map(c=>{
+     const arr=Object.values(cur).filter(w=>w.contract_id===c&&w.division===div&&(common?!w.store_id:!!w.store_id));
+     if(!arr.length)return null;
+     const v=common?arr.map(w=>div===0?yen0(w.wage):yen0(w.wage)).join("/"):arr.map(w=>`${sname(w.store_id)||"店舗"}:${w.wage}`).join("・");
+     return multi?`${smShort(c)}:${v}`:v;
+    }).filter(Boolean).join("／");
+    const hol=contracts.map(c=>{const w=Object.values(cur).find(x=>x.contract_id===c&&x.division===0&&!x.store_id&&x.holiday_wage!=null);return w?(multi?`${smShort(c)}:${w.holiday_wage}`:String(w.holiday_wage)):null}).filter(Boolean).join("／");
+    const dates=Object.values(cur).map(w=>w.effective_date).sort();
+    wageOf[uid]={hourly:pick(0,true),holiday:hol,monthly:pick(2,true),storeHourly:pick(0,false),since:dates.length?dates[dates.length-1]:"",future:fut.sort((a,b)=>a.effective_date.localeCompare(b.effective_date)).map(w=>`${w.effective_date}から ${multi?smShort(w.contract_id)+" ":""}${WAGE_DIV[w.division]}${w.wage}${w.store_id?"("+(sname(w.store_id)||"店舗")+")":""}`).join("／"),pending:unsynced?"未反映あり":""};
+   }
+  }catch(e){console.warn("CSV賃金の取得:",e)}
+ }
  const qc=v=>'"'+String(v??"").replace(/"/g,'""')+'"';
  // 2026-09-05追加: ユーザー指摘「スマレジではスタッフIDで名前が定義付けされているはずなので、
  // CSVにスタッフIDを必ず紐付けてほしい」に対応（employee_profiles.smaregi_staff_id）
  const head=["氏名","フリガナ","スマレジスタッフID","役職","メール","電話","所属店舗","状態","生年月日","入社日","LINE連携","LINE連携用の合言葉","提出物件数"];
  if(bankAllowed)head.push("振込口座");
+ head.push("法人");
+ if(wageAllowed)head.push("時給（全事業所共通）","休日賃金","月給","店舗別の時給","賃金の適用開始日（現在）","これから適用の賃金","スマレジへの反映");
  const rows=list.map(u=>{
   const p=adminProfs[u.id]||{};
   const storeNames=(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし";
   const bank=adminBankMap[u.id];
   const row=[u.name,p.name_kana||"",p.smaregi_staff_id||"",ROLE_NAME[u.role]||u.role,u.email,p.phone||"",storeNames,u.is_active?"在籍中":"退職・無効",p.birth_date||"",p.hire_date||"",u.line_user_id?"連携済み":"未連携",u.line_user_id?"":(u.line_code||""),submitCountOf(u.id)];
   if(bankAllowed)row.push(bank?(bank.payment_method==="cash"?"現金手渡し":"登録済み"):"未登録");
+  row.push((adminCorpOf[u.id]||[]).join("・"));
+  if(wageAllowed){const w=wageOf[u.id]||{};row.push(w.hourly||"",w.holiday||"",w.monthly||"",w.storeHourly||"",w.since||"",w.future||"",w.pending||"")}
   return row;
  });
  const csv="﻿"+[head].concat(rows).map(r=>r.map(qc).join(",")).join("\r\n");
@@ -5109,7 +5143,7 @@ async function adminView(){
   h+=`<button class="btn sub" id="adretire">🚪 退職・移籍・兼務の申請一覧${retPending>0?`（承認待ち ${retPending}件）`:""}</button>`;
   if(smReady){ // 2026-10-17追加
    const misN=await smMismatchCount();
-   h+=`<button class="btn sub" id="adcontractreg">🏢 他法人スマレジへの入社登録（移籍・兼務）</button><button class="btn sub" id="adstoremis">⚠️ 所属のズレ（管理システム↔スマレジ）${misN>0?`<span class="badge" style="background:#d93025;color:#fff;margin-left:6px">${misN}件</span>`:""}</button>`;
+   h+=`<button class="btn sub" id="adcontractreg">🏢 他法人スマレジへの入社登録（移籍・兼務）</button><button class="btn sub" id="adwagepull">💴 スマレジの賃金（時給・月給）を管理システムへ取り込む</button><button class="btn sub" id="adstoremis">⚠️ 所属のズレ（管理システム↔スマレジ）${misN>0?`<span class="badge" style="background:#d93025;color:#fff;margin-left:6px">${misN}件</span>`:""}</button>`;
   }
  }
  if(can("staff_admin")){
@@ -10781,6 +10815,24 @@ function bindPage(){
  if($("adretire"))$("adretire").onclick=()=>{adminMode="retire";render()}; // 2026-10-03追加
  if($("adcontractreg"))$("adcontractreg").onclick=()=>{adminMode="contractreg";render()}; // 2026-10-17追加
  if($("adstoremis"))$("adstoremis").onclick=()=>{adminMode="storemis";render()};
+ if($("adwagepull"))$("adwagepull").onclick=async()=>{ // 2026-10-23追加: スマレジ→管理システムの賃金の取り込み（読み取りのみ・全契約の在職者）
+  if(!confirm("スマレジ・タイムカードに今入っている賃金（時給・月給。現在有効なものと、これから適用のもの）を、全契約の在職者ぶん、管理システムに取り込みます。\n\n・スマレジには何も書き込みません（読み取りだけ）\n・管理システムにまだ無い設定を追加します\n・管理システムに反映済みの設定でスマレジと値が違うものは、スマレジの値に更新します\n・管理システムに未反映の入力がある設定は、上書きしません\n・日給・営業時間帯別・固定残業代は取り込めません\n\n人数が多いと数分かかります。実行中はこの画面を閉じないでください。よろしいですか？"))return;
+  const b=$("adwagepull");b.disabled=true;
+  const t={imported:0,updated:0,matched:0,conflicts:0,skipped:0,unsupported:0,persons:0,withWage:0,errors:[]};
+  for(const c of smContracts){
+   let off=0,total=null;
+   for(let guard=0;guard<200;guard++){
+    b.textContent=`取り込み中… ${smShort(c.contract_id)} ${off}/${total==null?"?":total}人`;
+    const r=await smFn("wage_pull_all",{contract_id:c.contract_id,offset:off,limit:15});
+    if(!r.ok){t.errors.push(`${smShort(c.contract_id)}: ${smErr(r)||"失敗"}`);break}
+    total=r.total;t.imported+=r.imported;t.updated+=r.updated;t.matched+=r.matched;t.conflicts+=r.conflicts;t.skipped+=r.skipped_unmapped_store;t.unsupported+=r.unsupported_rows;t.persons+=r.persons;t.withWage+=r.with_wage;(r.errors||[]).forEach(e=>t.errors.push(e));
+    if(r.done)break;off=r.next_offset;
+   }
+  }
+  b.disabled=false;b.textContent="💴 スマレジの賃金（時給・月給）を管理システムへ取り込む";
+  alert(`取り込みが終わりました。\n\n確認した人: ${t.persons}人（賃金設定があった人 ${t.withWage}人）\n追加: ${t.imported}件 ／ 更新: ${t.updated}件 ／ 一致: ${t.matched}件\n上書きしなかった（管理システム側に未反映の入力あり）: ${t.conflicts}件\n対応する店舗が無く取り込めなかった: ${t.skipped}件\n対象外（日給・営業時間帯別）: ${t.unsupported}件${t.errors.length?`\n\n⚠️エラー ${t.errors.length}件:\n${t.errors.slice(0,8).join("\n")}${t.errors.length>8?"\n…":""}`:""}`);
+  render();
+ };
  const payMonthPick=()=>{if(!$("pay-year")||!$("pay-monthsel"))return;payMonth=$("pay-year").value+"-"+String($("pay-monthsel").value).padStart(2,"0");payExtraStores={};render()};
  if($("pay-year"))$("pay-year").onchange=payMonthPick;
  if($("pay-monthsel"))$("pay-monthsel").onchange=payMonthPick;

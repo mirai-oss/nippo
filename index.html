@@ -7214,6 +7214,34 @@ async function hqNotifyOnboardingContract(uid,contractId,opts){
 }
 // スマレジに所属事業所が映らなかったとき、その人の入社登録タスクへ工程「所属事業所をスマレジで確認・入力」を足す（べき等・タスクが無ければ何もしない。SQL適用前は何も起きない）
 async function hqAddAffiliationStep(uid,reason){try{await sb.rpc("hq_add_onboarding_affiliation_step",{p_user:uid,p_reason:reason||null})}catch(e){}}
+// 2026-10-23追加: 移籍・兼務追加のとき、元の契約（トーホー等）の「現在の賃金」を移行先（LiveGate等）の賃金設定へコピーしてスマレジへ反映する。
+//   コピーするのは全事業所共通の時給・休日賃金・月給（店舗を指定した時給は店舗の対応が契約ごとに違うためコピーしない）。適用開始日=移行の開始日（月給は月初日）。
+//   移行先に既に賃金設定がある人には何もしない（force=true のときだけ同じ区分の行を上書き）。元の賃金が管理システムに無ければ何もしない。失敗しても登録自体は有効。
+async function copyWagesToContract(uid,srcContract,toContract,startDate,force){
+ const out={copied:0,skippedStore:0,skipped:null,pushOk:null,error:null};
+ try{
+  const {data:ws,error}=await sb.from("employee_wage_settings").select("*").eq("user_id",uid);
+  if(error)throw error;
+  const src=(ws||[]).filter(w=>w.contract_id===srcContract),dst=(ws||[]).filter(w=>w.contract_id===toContract);
+  if(!src.length){out.skipped="元の契約の賃金が管理システムにありません";return out}
+  if(dst.length&&!force){out.skipped="移行先に賃金設定が既にあります";return out}
+  const today=todayStr(),cur={};
+  src.forEach(w=>{ // 区分×店舗ごとに「現在有効（今日以前で最新）」、無ければ最も早い未来日の行
+   const k=w.division+"|"+(w.store_id||""),o=cur[k];
+   const better=!o||(w.effective_date<=today?(o.effective_date>today||o.effective_date<w.effective_date):(o.effective_date>today&&w.effective_date<o.effective_date));
+   if(better)cur[k]=w;
+  });
+  for(const w of Object.values(cur)){
+   if(w.store_id){out.skippedStore++;continue}
+   const date=w.division===2?startDate.slice(0,8)+"01":startDate;
+   const {error:e2}=await sb.rpc("hr_save_wage",{p_user:uid,p_contract:toContract,p_division:w.division,p_store:null,p_wage:w.wage,p_holiday:w.division===0?w.holiday_wage:null,p_date:date});
+   if(e2){out.error=e2.message;return out}
+   out.copied++;
+  }
+  if(out.copied){const r=await smFn("wage_push",{user_id:uid,contract_id:toContract});out.pushOk=!!r.ok;if(!r.ok)out.error=smErr(r)||(r.results||[]).filter(x=>!x.ok).map(x=>x.error).join(" / ")}
+ }catch(e){out.error=String(e&&e.message||e)}
+ return out;
+}
 const recordChange=(id,status,result)=>sb.rpc("hr_record_retirement_sync",{p_request:id,p_status:status,p_result:result}); // 承認済みの申請へ結果を保存（種別を問わない）
 // 承認済みの「移籍／兼務追加」1件をスマレジへ反映する。req={id,user_id,kind,effective_date,from_contract_id,to_contract_id}
 // 再実行しても二重にならない（sync=登録済みならそのまま／terminate=同じ日付を送り直すだけ）。
@@ -7236,6 +7264,11 @@ async function execContractChange(req){
   if(!t.ok){await recordChange(req.id,"error",res);return {ok:false,stage:"terminate",error:res.terminate.error,res}}
  }
  try{res.onboarding_task=await hqNotifyOnboardingContract(uid,to,{note:`※${RET_KIND[req.kind]||"移籍"}（${req.kind==="transfer"?smLabel(req.from_contract_id)+"→":"＋"}${smLabel(to)}）による入社登録。開始日 ${req.effective_date}。`})}catch(e){res.onboarding_task=false} // 移行先(LiveGate等)の入社登録タスク（賃金設定・LINE案内などの通常の入社工程）
+ try{ // 元の契約の現在の賃金を移行先へコピー（移籍=旧契約・兼務=主契約）
+  let src=req.from_contract_id;
+  if(!src){const {data:lks}=await sb.from("employee_smaregi_links").select("contract_id,is_primary,effective_to").eq("user_id",uid);const a=(lks||[]).filter(l=>l.contract_id!==to&&(!l.effective_to||l.effective_to>=todayStr())).sort((x,y)=>Number(y.is_primary)-Number(x.is_primary));src=a[0]&&a[0].contract_id}
+  res.wage_copy=src?await copyWagesToContract(uid,src,to,req.effective_date):{skipped:"元の契約が見つかりません"};
+ }catch(e){res.wage_copy={error:String(e)}}
  if(res.store_sync&&!res.store_sync.ok)await hqAddAffiliationStep(uid,"所属事業所がスマレジに登録できませんでした"); // 所属が映らなかったときだけ、入社登録タスクに確認の工程を足す
  if(req.kind==="transfer"){ // 移籍＝旧契約(トーホー等)の退職扱い → 退職手続きの本部タスク（源泉徴収票の工程を含む）を通常の退職と同じに自動発行（同じ人の未完了タスクがあれば二重に作らない）。アカウント・所属は止めない
   try{
@@ -7245,7 +7278,7 @@ async function execContractChange(req){
   }catch(e){res.offboarding_task=false}
  }
  await recordChange(req.id,"synced",res);
- return {ok:true,staffId:res.sync.staffId,already:res.sync.already,warn:res.store_sync&&!res.store_sync.ok?res.store_sync.error:null,offboarding:res.offboarding_task,onboarding:res.onboarding_task,res};
+ return {ok:true,staffId:res.sync.staffId,already:res.sync.already,warn:res.store_sync&&!res.store_sync.ok?res.store_sync.error:null,offboarding:res.offboarding_task,onboarding:res.onboarding_task,wageCopy:res.wage_copy,res};
 }
 // 本部が直接登録（承認済みの記録を作って反映）
 async function execDirectChange(uid,kind,to,date,note){
@@ -7303,12 +7336,13 @@ async function adminContractRegView(){
  h+=`<button class="btn" id="bk-run" style="margin-top:10px" ${bkRunning?"disabled":""}>選んだ人をまとめて入社登録（<span id="bk-count">${bkSel.size}</span>名）</button></div>`;
  if(bkResults.length){
   h+=`<div class="card"><h3 style="margin:0 0 6px">実行結果</h3>`;
-  bkResults.forEach(r=>{h+=`<div class="row" style="cursor:default"><span><b>${esc(r.name)}</b><br><span class="muted">${r.ok?`スタッフID ${esc(r.staffId||"—")}${r.already?"（登録済み）":""}${r.warn?` ／ ⚠️所属の反映: ${esc(r.warn)}`:""}${r.onboarding===true?" ／ 入社登録タスクを発行":r.onboarding==="exists"?" ／ 入社登録タスクは発行済み":r.onboarding===false?" ／ ⚠️入社登録タスクの発行に失敗（従業員編集から発行できます）":""}${r.offboarding===true?" ／ 退職手続きタスクを発行":r.offboarding===false?" ／ ⚠️退職手続きタスクの発行に失敗（従業員編集から発行できます）":""}`:`${esc(r.stage||"")}: ${esc(r.error||"")}`}</span></span><span class="badge ${r.ok?"g":""}">${r.ok?"✅成功":"❌失敗"}</span></div>`});
+  bkResults.forEach(r=>{h+=`<div class="row" style="cursor:default"><span><b>${esc(r.name)}</b><br><span class="muted">${r.ok?`スタッフID ${esc(r.staffId||"—")}${r.already?"（登録済み）":""}${r.warn?` ／ ⚠️所属の反映: ${esc(r.warn)}`:""}${r.wageCopy?(r.wageCopy.copied?` ／ 賃金をコピー（${r.wageCopy.copied}件${r.wageCopy.pushOk===false?"・⚠️スマレジ反映に失敗":""}）`:r.wageCopy.error?` ／ ⚠️賃金のコピーに失敗（${esc(r.wageCopy.error)}）`:r.wageCopy.skipped?` ／ 賃金コピー: ${esc(r.wageCopy.skipped)}`:""):""}${r.onboarding===true?" ／ 入社登録タスクを発行":r.onboarding==="exists"?" ／ 入社登録タスクは発行済み":r.onboarding===false?" ／ ⚠️入社登録タスクの発行に失敗（従業員編集から発行できます）":""}${r.offboarding===true?" ／ 退職手続きタスクを発行":r.offboarding===false?" ／ ⚠️退職手続きタスクの発行に失敗（従業員編集から発行できます）":""}`:`${esc(r.stage||"")}: ${esc(r.error||"")}`}</span></span><span class="badge ${r.ok?"g":""}">${r.ok?"✅成功":"❌失敗"}</span></div>`});
   h+=`<p class="muted" style="margin:6px 0 0">失敗した人は、もう一度チェックして実行すると続きから再実行できます（登録済みの分は二重になりません）。</p></div>`;
  }
  const reg=(lk||[]).filter(l=>l.contract_id===bkContract&&(!l.effective_to||l.effective_to>=today));
  const nm={};(us||[]).forEach(u=>nm[u.id]=u.name);
- h+=`<div class="card"><h3 style="margin:0 0 6px">この契約（${esc(smLabel(bkContract))}）に登録済みの人（${reg.length}名）</h3>${reg.length?reg.map(l=>`<div class="row" style="cursor:default"><span><b>${esc(nm[l.user_id]||"（退職・無効）")}</b></span><span class="muted">スタッフID ${esc(l.smaregi_staff_id)} ／ ${esc(l.effective_from||"")}〜</span></div>`).join(""):`<p class="muted" style="margin:0">まだいません。</p>`}</div>`;
+ h+=`<div class="card"><h3 style="margin:0 0 6px">💴 登録済みの人へ、元の契約の賃金をコピー</h3><p class="muted" style="margin:0 0 6px;font-size:12px">「${esc(smLabel(bkContract))}」に登録済みで、賃金設定が<b>まだ無い</b>人だけが対象です。元の契約（トーホー等）の現在の賃金（全事業所共通の時給・休日賃金・月給）を、上の「開始日」から適用でコピーし、スマレジにも反映します。店舗を指定した時給はコピーしません。</p><button class="btn sm" id="bk-wagecopy">賃金をまとめてコピー（${reg.length}名を確認）</button><div class="muted" id="bk-wagecopy-msg" style="font-size:12px;margin-top:4px"></div></div>
+ <div class="card"><h3 style="margin:0 0 6px">この契約（${esc(smLabel(bkContract))}）に登録済みの人（${reg.length}名）</h3>${reg.length?reg.map(l=>`<div class="row" style="cursor:default"><span><b>${esc(nm[l.user_id]||"（退職・無効）")}</b></span><span class="muted">スタッフID ${esc(l.smaregi_staff_id)} ／ ${esc(l.effective_from||"")}〜</span></div>`).join(""):`<p class="muted" style="margin:0">まだいません。</p>`}</div>`;
  return h;
 }
 function bindAdminContractReg(){
@@ -7318,6 +7352,26 @@ function bindAdminContractReg(){
  if($("bk-note"))$("bk-note").oninput=e=>{bkNote=e.target.value};
  if($("bk-q"))$("bk-q").onchange=e=>{bkQ=e.target.value;render()};
  if($("bk-store"))$("bk-store").onchange=e=>{bkStore=e.target.value;render()};
+ if($("bk-wagecopy"))$("bk-wagecopy").onclick=async()=>{ // 登録済みで賃金が未設定の人へ、元の契約の賃金をコピー
+  if(!bkContract||!bkDate){toast("登録先の契約と開始日を選んでください",true);return}
+  if(!confirm(`「${smLabel(bkContract)}」に登録済みで賃金設定が無い人へ、元の契約の現在の賃金をコピーします（開始日 ${bkDate}）。\nスマレジの賃金設定が追加されます。よろしいですか？`))return;
+  const b=$("bk-wagecopy"),m=$("bk-wagecopy-msg");b.disabled=true;
+  const today=todayStr();
+  const [{data:lk},{data:ws}]=await Promise.all([sb.from("employee_smaregi_links").select("user_id,contract_id,effective_to,users(is_active)"),sb.from("employee_wage_settings").select("user_id,contract_id")]);
+  const hasWage=new Set((ws||[]).filter(w=>w.contract_id===bkContract).map(w=>w.user_id));
+  const regU=[...new Set((lk||[]).filter(l=>l.contract_id===bkContract&&(!l.effective_to||l.effective_to>=today)&&l.users&&l.users.is_active).map(l=>l.user_id))].filter(u=>!hasWage.has(u));
+  let copied=0,skipped=0,failed=0,pushNg=0,last="";
+  for(let i=0;i<regU.length;i++){
+   m.textContent=`コピー中… ${i+1}/${regU.length}`;
+   const others=(lk||[]).filter(l=>l.user_id===regU[i]&&l.contract_id!==bkContract).sort((a,c)=>String(c.effective_to||"9999").localeCompare(String(a.effective_to||"9999")));
+   if(!others.length){skipped++;continue}
+   const r=await copyWagesToContract(regU[i],others[0].contract_id,bkContract,bkDate);
+   if(r.error){failed++;last=r.error}else if(r.copied){copied++;if(r.pushOk===false)pushNg++}else skipped++;
+  }
+  b.disabled=false;m.textContent="";
+  alert(`賃金のコピーが終わりました。\n\nコピーした人: ${copied}人${pushNg?`（うち${pushNg}人はスマレジへの反映に失敗。従業員編集の「賃金設定」から、もう一度反映できます）`:""}\nコピーしなかった人: ${skipped}人（元の賃金が管理システムに無い・元の契約が無い）\n失敗: ${failed}人${last?`（${last}）`:""}`);
+  render();
+ };
  if($("bk-selall"))$("bk-selall").onclick=()=>{document.querySelectorAll("[data-bksel]:not([disabled])").forEach(c=>{c.checked=true;bkSel.add(c.dataset.bksel)});if($("bk-count"))$("bk-count").textContent=bkSel.size};
  if($("bk-selnone"))$("bk-selnone").onclick=()=>{bkSel=new Set();document.querySelectorAll("[data-bksel]").forEach(c=>{c.checked=false});if($("bk-count"))$("bk-count").textContent=0};
  document.querySelectorAll("[data-bksel]").forEach(c=>c.onchange=e=>{const id=e.target.dataset.bksel;if(e.target.checked)bkSel.add(id);else bkSel.delete(id);if($("bk-count"))$("bk-count").textContent=bkSel.size});
@@ -7479,7 +7533,8 @@ function wageCardHtml(info,rows){
    <input class="inp" type="date" data-wdate="${esc(c)}" value="${esc(today)}" style="margin:0"></div>
    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button class="btn sm" data-wagesave="${esc(c)}">保存してスマレジに反映</button>
    ${bad?`<button class="btn sm sub" data-wagepush="${esc(c)}">未反映の${bad}件をもう一度反映</button>`:""}
-   <button class="btn sm sub" data-wagepull="${esc(c)}">スマレジの今の設定を確認・取り込む</button></div>
+   <button class="btn sm sub" data-wagepull="${esc(c)}">スマレジの今の設定を確認・取り込む</button>
+   ${links.filter(x=>x.contract_id!==c).map(x=>`<button class="btn sm sub" data-wagecopy="${esc(x.contract_id)}>${esc(c)}">${esc(smShort(x.contract_id))}の現在の賃金をコピー</button>`).join("")}</div>
    <div class="muted" id="wagemsg-${esc(c)}" style="font-size:12px;margin-top:4px"></div></div>`;
  });
  return h+`</div>`;
@@ -7507,6 +7562,18 @@ function bindWageCard(uid){
   await push(c);
  });
  document.querySelectorAll("[data-wagepush]").forEach(b=>b.onclick=async()=>{b.disabled=true;await push(b.dataset.wagepush)});
+ document.querySelectorAll("[data-wagecopy]").forEach(b=>b.onclick=async()=>{ // 元の契約の現在の賃金を、この契約へコピー（適用開始日を指定）
+  const [from,to]=b.dataset.wagecopy.split(">");
+  const date=prompt(`${smLabel(from)} の現在の賃金（全事業所共通の時給・休日賃金・月給）を、${smLabel(to)} にコピーしてスマレジに反映します。\n適用開始日（YYYY-MM-DD）を入れてください。`,todayStr());
+  if(!date)return;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){toast("日付の形式が違います（例 2026-11-01）",true);return}
+  b.disabled=true;
+  const r=await copyWagesToContract(uid,from,to,date,true);
+  if(r.error)toast("コピーできませんでした: "+r.error,true);
+  else if(r.skipped)toast(r.skipped,true);
+  else toast(`賃金をコピーしました（${r.copied}件${r.pushOk===false?"・スマレジへの反映に失敗":"・スマレジにも反映"}）${r.skippedStore?`／店舗別の${r.skippedStore}件はコピーしていません`:""}`,r.pushOk===false);
+  render();
+ });
  document.querySelectorAll("[data-wageedit]").forEach(b=>b.onclick=()=>{wageEditId=b.dataset.wageedit;render()});
  document.querySelectorAll("[data-wageeditcancel]").forEach(b=>b.onclick=()=>{wageEditId=null;render()});
  document.querySelectorAll("[data-wageeditsave]").forEach(b=>b.onclick=async()=>{

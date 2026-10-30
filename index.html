@@ -10058,7 +10058,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.86</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.87</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====
@@ -10203,7 +10203,7 @@ async function settingsLarkView(){
  if(!lrList){const {data}=await sb.from("lark_routes").select("*").order("sort_order").order("created_at");lrList=data||[]}
  const tName=id=>{const t=teams.find(x=>x.id===id);return t?t.name:""};
  const sName=id=>{const s=stores.find(x=>x.id===id);return s?s.name:""};
- let h=`<span class="back" id="setback">← 設定</span><h2>🔔 Lark通知の設定</h2>
+ let h=`<span class="back" id="setback">← 設定</span><h2>🔔 通知の設定（Lark／Chatwork／Slack）</h2>
  <p class="muted" style="margin-top:-8px;font-size:13px">「どの動きがあったら」「誰が対象のとき」「どのグループに送るか」を組み合わせて登録します。条件を「すべて」にすると全員が対象です。複数の設定に当てはまる場合は、そのすべてのグループに届きます。</p>`;
  if(!lrList.length)h+=`<p class="muted center" style="margin:16px 0">まだ設定がありません。下の「＋ 通知先を追加」から作成してください。</p>`;
  lrList.forEach(r=>{
@@ -10211,7 +10211,7 @@ async function settingsLarkView(){
   const evs=(r.events||[]).map(e=>LARK_EVENTS[e]||e);
   h+=`<div class="card" style="padding:12px${r.is_active?"":";opacity:.55"}">
    <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
-    <b style="font-size:14px">${esc(r.name)} <span class="badge ${r.kind==="chatwork"?"":"b"}" style="${r.kind==="chatwork"?"background:#d97706":""}">${r.kind==="chatwork"?"Chatwork":"Lark"}</span>${r.is_active?"":" <span class='badge'>停止中</span>"}</b>
+    <b style="font-size:14px">${esc(r.name)} <span class="badge ${r.kind==="chatwork"?"":"b"}" style="${r.kind==="chatwork"?"background:#d97706":r.kind==="slack"?"background:#4a154b":""}">${r.kind==="chatwork"?"Chatwork":r.kind==="slack"?"Slack":"Lark"}</span>${r.is_active?"":" <span class='badge'>停止中</span>"}</b>
     <span style="flex-shrink:0"><button class="btn sm sub" data-lredit="${r.id}" style="margin:0 4px 0 0">編集</button><button class="btn sm sub" data-lrtest="${r.id}" style="margin:0">テスト</button></span>
    </div>
    <p style="margin:6px 0 0;font-size:12px">🔔 ${evs.length?esc(evs.join(" ／ ")):"（未設定）"}</p>
@@ -10224,9 +10224,9 @@ async function settingsLarkView(){
    <p class="muted" style="margin:0">名前（分かりやすい呼び名）</p>
    <input type="text" id="lr-name" value="${esc(r.name||"")}" placeholder="例: チーム長の日報 → 経営グループ" style="margin-top:2px">
    <p class="muted" style="margin:10px 0 2px">送り先の種類</p>
-   <div><span class="chip lr-kind ${(r.kind||"lark")==="lark"?"on":""}" data-k="lark">Lark</span><span class="chip lr-kind ${r.kind==="chatwork"?"on":""}" data-k="chatwork">Chatwork</span></div>
-   <p class="muted" style="margin:10px 0 0">${r.kind==="chatwork"?"ChatworkのルームID（チャット画面URLの末尾の数字）":"Lark Webhook URL"}</p>
-   <input type="text" id="lr-url" value="${esc(r.webhook_url||"")}" placeholder="${r.kind==="chatwork"?"例: 123456789":"https://open.larksuite.com/open-apis/bot/v2/hook/..."}" style="margin-top:2px">
+   <div><span class="chip lr-kind ${(r.kind||"lark")==="lark"?"on":""}" data-k="lark">Lark</span><span class="chip lr-kind ${r.kind==="chatwork"?"on":""}" data-k="chatwork">Chatwork</span><span class="chip lr-kind ${r.kind==="slack"?"on":""}" data-k="slack">Slack</span></div>
+   <p class="muted" style="margin:10px 0 0">${r.kind==="chatwork"?"ChatworkのルームID（チャット画面URLの末尾の数字）":r.kind==="slack"?"Slackの channel_key（ポータル側 slack_channels に登録済みのキー。例: hq.jinji。トークンや部屋IDはここに入れない）":"Lark Webhook URL"}</p>
+   <input type="text" id="lr-url" value="${esc(r.webhook_url||"")}" placeholder="${r.kind==="chatwork"?"例: 123456789":r.kind==="slack"?"例: hq.jinji":"https://open.larksuite.com/open-apis/bot/v2/hook/..."}" style="margin-top:2px">
    <p class="muted" style="margin:10px 0 4px">🔔 通知する動き（複数選べます）</p>
    <div>${Object.entries(LARK_EVENTS).map(([k,v])=>`<span class="chip lr-ev ${(r.events||[]).includes(k)?"on":""}" data-e="${k}" style="font-size:12px">${v}</span>`).join("")}</div>
    <p class="muted" style="margin:10px 0 4px">対象の役職<span style="font-size:11px">（応募の通知では条件は使われません）</span></p>
@@ -10249,6 +10249,7 @@ async function saveLarkRoute(){
  const kind=kindChip?kindChip.dataset.k:"lark";
  if(!name){toast("名前を入力してください",true);return}
  if(kind==="chatwork"){ if(!/^\d+$/.test(url)){toast("ChatworkのルームID（数字）を入力してください",true);return} }
+ else if(kind==="slack"){ if(!/^([a-z0-9][a-z0-9._-]{1,63}|user:[0-9a-f-]{36})$/.test(url)){toast("Slackの channel_key（英小文字・数字・. _ -）を入力してください",true);return} } // v2.6.87 Slack通知基盤
  else if(!/^https?:\/\//.test(url)){toast("Webhook URLを正しく入力してください",true);return}
  const events=[...document.querySelectorAll(".chip.lr-ev.on")].map(c=>c.dataset.e);
  if(!events.length){toast("通知する動きを1つ以上選んでください",true);return}

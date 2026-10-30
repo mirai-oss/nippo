@@ -6331,32 +6331,32 @@ async function adminStoresView(){
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${WX_PRESETS.map(w=>`<button class="btn sm sub" data-stwxpreset="${i}|${w.key}" style="margin:0">${w.label}</button>`).join("")}</div>
   <div style="display:flex;gap:6px"><input type="number" step="0.0001" data-stwxlat="${i}" value="${s.weather_lat??""}" placeholder="緯度" style="flex:1;margin:0;font-size:13px"><input type="number" step="0.0001" data-stwxlon="${i}" value="${s.weather_lon??""}" placeholder="経度" style="flex:1;margin:0;font-size:13px"></div>
   <p class="muted" style="margin:8px 0 2px;font-size:12px">📮 配信グループ所属（日報・週報・月報の自動配信。複数選択可）</p>
-  <div style="display:flex;gap:6px;flex-wrap:wrap">${chanList.length?chanList.map(c=>`<span class="chip stchan ${s.channels.includes(c.id)?"on":""}" data-i="${i}" data-c="${c.id}">${c.kind==="chatwork"?"💬":"📮"} ${esc(c.name)}</span>`).join(""):`<span class="muted" style="font-size:12px">配信グループが未登録です（下の「配信グループ管理」で追加）</span>`}</div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap">${chanList.length?chanList.map(c=>`<span class="chip stchan ${s.channels.includes(c.id)?"on":""}" data-i="${i}" data-c="${c.id}">${c.kind==="chatwork"?"💬":c.kind==="slack"?"🟣":"📮"} ${esc(c.name)}</span>`).join(""):`<span class="muted" style="font-size:12px">配信グループが未登録です（下の「配信グループ管理」で追加）</span>`}</div>
  </div>`).join("");
  h+=`<div class="card"><h3>＋ 店舗を追加</h3><input type="text" id="st-newname" placeholder="店舗名（例: 鳥一代 渋谷店）"><button class="btn sm" id="st-add">追加する</button><p class="muted">追加すると店舗チャットも自動で作成され、店舗番号も自動採番されます</p></div>
  <button class="btn" id="st-save">この内容で保存する</button>
  <div class="card" style="margin-top:20px">
   <h3>📮 配信グループ管理</h3>
-  <p class="muted" style="margin-top:-4px;font-size:13px">経営ダッシュボードの日報・週報・月報の自動配信先（Lark／Chatwork）。店舗の所属は上の各店舗カードで設定します。Secret名はGitHub Secretsに登録した名前のみ（トークンやWebhook URLの値はここには置きません）。</p>
+  <p class="muted" style="margin-top:-4px;font-size:13px">経営ダッシュボードの日報・週報・月報の自動配信先（Lark／Chatwork／Slack）。店舗の所属は上の各店舗カードで設定します。Secret名はGitHub Secretsに登録した名前のみ（トークンやWebhook URLの値はここには置きません）。</p>
   ${(chanList||[]).map((c,ci)=>{
    // 2026-08-28 ユーザー要望（担当D経由）: 「何がどこの誰に送られるか」がひと目で分かるように、
    //   このグループに所属している店舗（各店舗カードのチップの現在状態＝stList[].channels）を要約表示する。
    //   重複設定（同じ店舗が同種のグループに二重登録）にも気づきやすくする
    const memberStores=(stList||[]).filter(s=>s.channels.includes(c.id));
-   const destText=c.kind==="chatwork"?(c.chatwork_room_id?`ルームID ${esc(c.chatwork_room_id)}`:"ルームID未設定"):(c.secret_name?esc(c.secret_name):"Secret名未設定");
+   const destText=c.kind==="chatwork"?(c.chatwork_room_id?`ルームID ${esc(c.chatwork_room_id)}`:"ルームID未設定"):c.kind==="slack"?(c.secret_name?`channel_key ${esc(c.secret_name)}`:"channel_key未設定"):(c.secret_name?esc(c.secret_name):"Secret名未設定"); // v2.6.86 Slack: secret_name欄にchannel_key（ns-portal slack_channels）を入れる
    const repText=c.report_kinds.length?c.report_kinds.map(k=>({daily:"日次",weekly:"週次",monthly:"月次"}[k]||k)).join("・"):"配信種別未選択";
    const dupNote=memberStores.filter(s=>s.channels.filter(id=>(chanList.find(x=>x.id===id)||{}).kind===c.kind).length>1);
    return `<div class="card" style="padding:10px;margin-bottom:8px">
-   <p style="margin:0 0 8px;font-size:12px;background:#f7f9fc;border-radius:6px;padding:6px 8px">${c.kind==="chatwork"?"💬":"📮"} <b>${destText}</b>　${esc(repText)}<br>
+   <p style="margin:0 0 8px;font-size:12px;background:#f7f9fc;border-radius:6px;padding:6px 8px">${c.kind==="chatwork"?"💬":c.kind==="slack"?"🟣":"📮"} <b>${destText}</b>　${esc(repText)}<br>
     対象店舗: ${memberStores.length?memberStores.map(s=>esc(s.name)).join("・"):"（未設定）"}（計${memberStores.length}店）
-    ${dupNote.length?`<br><span style="color:#b03030">⚠️ ${dupNote.map(s=>esc(s.name)).join("・")}は同じ種別（${c.kind==="chatwork"?"Chatwork":"Lark"}）の別グループにも所属しています（重複配信の可能性）</span>`:""}</p>
+    ${dupNote.length?`<br><span style="color:#b03030">⚠️ ${dupNote.map(s=>esc(s.name)).join("・")}は同じ種別（${c.kind==="chatwork"?"Chatwork":c.kind==="slack"?"Slack":"Lark"}）の別グループにも所属しています（重複配信の可能性）</span>`:""}</p>
    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     <input type="text" data-chname="${ci}" value="${esc(c.name)}" placeholder="グループ名（例: group1）" style="flex:1;min-width:120px;margin:0;font-size:13px">
-    <select class="inp" data-chkind="${ci}" style="font-size:13px;margin:0"><option value="lark" ${c.kind==="lark"?"selected":""}>📮 Lark</option><option value="chatwork" ${c.kind==="chatwork"?"selected":""}>💬 Chatwork</option></select>
+    <select class="inp" data-chkind="${ci}" style="font-size:13px;margin:0"><option value="lark" ${c.kind==="lark"?"selected":""}>📮 Lark</option><option value="chatwork" ${c.kind==="chatwork"?"selected":""}>💬 Chatwork</option><option value="slack" ${c.kind==="slack"?"selected":""}>🟣 Slack</option></select>
     <span class="chip ch-active ${c.is_active?"on":""}" data-ci="${ci}">${c.is_active?"有効":"無効"}</span>
    </div>
    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-    <input type="text" data-chsecret="${ci}" value="${esc(c.secret_name)}" placeholder="GitHub Secret名（例: LARK_WEBHOOK_GROUP1／Chatworkは共通でCHATWORK_API_TOKEN）" style="flex:1;min-width:220px;margin:0;font-size:13px">
+    <input type="text" data-chsecret="${ci}" value="${esc(c.secret_name)}" placeholder="${c.kind==="slack"?"Slackのchannel_key（例: keiei.report。ns-portalのslack_channelsに登録済みのもの）":"GitHub Secret名（例: LARK_WEBHOOK_GROUP1／Chatworkは共通でCHATWORK_API_TOKEN）"}" style="flex:1;min-width:220px;margin:0;font-size:13px">
     ${c.kind==="chatwork"?`<input type="text" data-chroom="${ci}" value="${esc(c.chatwork_room_id)}" placeholder="ChatworkルームID（URLのrid以降の数字）" style="flex:1;min-width:160px;margin:0;font-size:13px">`:""}
    </div>
    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
@@ -6456,6 +6456,7 @@ async function saveChannels(){
  collectChannelsDom();
  if(chanList.some(c=>!c.name)){toast("グループ名を入力してください",true);return}
  if(chanList.some(c=>c.kind==="chatwork"&&!c.chatwork_room_id)){toast("ChatworkのグループはルームIDを入力してください",true);return}
+ if(chanList.some(c=>c.kind==="slack"&&!/^[a-z0-9][a-z0-9._-]{1,63}$/.test(c.secret_name||""))){toast("Slackのグループはchannel_key（英小文字・数字・. _ -）を入力してください",true);return} // v2.6.86
  $("ch-save").disabled=true;
  for(const c of chanList){
   const {error}=await sb.from("report_channels").update({name:c.name,kind:c.kind,secret_name:c.secret_name||null,chatwork_room_id:c.kind==="chatwork"?(c.chatwork_room_id||null):null,report_kinds:c.report_kinds.length?c.report_kinds:["daily","weekly","monthly"],is_active:c.is_active}).eq("id",c.id);
@@ -10057,7 +10058,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.79</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.86</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====

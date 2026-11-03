@@ -588,6 +588,12 @@ let rcCostEdit=null; // v2.7 B-3(C7): 求人費用の「入力済み」項目を
 let rcFStatus=""; // v2.5.6 選考ステータス絞り込み
 let csvRows=null,csvBusy=false; // v2.6.5 CSV取り込み
 let rcFrom="",rcTo="",cfgApply=null,applyKeyEdit="al",larkUrl=null; // v2.5.8
+// 2026-11-03追加: sf_payroll_syncは兼務の人だけ「人×年月×契約」で2行になる。画面は人ごとに1つの金額を使うので、固定給・通勤手当を契約をまたいで合算する（片方の契約だけ表示される取り違えを防ぐ）
+function sfMergePay(a,b){
+ if(!a)return {...b};
+ const add=(x,y)=>(x==null&&y==null)?null:(Number(x||0)+Number(y||0));
+ return {...a,fixed_salary_amount:add(a.fixed_salary_amount,b.fixed_salary_amount),commute_allowance:add(a.commute_allowance,b.commute_allowance)};
+}
 let myProf=null,auRole="",auState="",auStore="",auCorp="",adminCorpOf={},adminCorpList=[],auMissing=[],auMissingOpen=false; // v2.6.0／auMissingは2026-09-05追加（LINE未連携・提出物なし等の複数選択絞り込み）
 let lineBulkRunning=false,lineBulkResult=null; // 2026-09-07追加: LINE未連携者への一斉メール送信
 let ivSkipSm=false; // v2.6.1
@@ -3979,7 +3985,7 @@ async function sfManageView(){
  const linkedSet=new Set((profs||[]).filter(pr=>pr.smaregi_staff_id).map(pr=>pr.user_id));
  const unlinkedCount=people.filter(u=>!linkedSet.has(u.id)).length;
  const wageRates=await sfComputeWageRates(sfMgStore,peopleIds);
- const payrollByUser={};(payrollRows||[]).forEach(r=>{payrollByUser[r.user_id]=r}); // 2026-08-29続き
+ const payrollByUser={};(payrollRows||[]).forEach(r=>{payrollByUser[r.user_id]=sfMergePay(payrollByUser[r.user_id],r)}); // 2026-08-29続き／2026-11-03: 兼務の人は契約ごとに2行→合算
  const allocByUser={};(allocRows||[]).forEach(r=>{(allocByUser[r.user_id]=allocByUser[r.user_id]||[]).push(r)}); // 2026-08-29続き
  const adj=sfAdjustStepHtml({dates,people,shByUserDate,presets:filteredPresets,reqs:reqs||[],storeCountMap,salesTotal,wageRates,unlinkedCount,payrollByUser,allocByUser});
  const helpCount=new Set((helpRowsPeriod||[]).map(r=>r.user_id)).size; // A-6 期間中にヘルプ可能を宣言した人数（他店舗含む＝全社共通のsf_help_availability）
@@ -5262,7 +5268,7 @@ async function adminPayrollView(){
   sb.from("sf_payroll_allocations").select("*").eq("period_key",payMonth).in("user_id",idsForIn),
   sb.from("user_stores").select("user_id,store_id").in("user_id",idsForIn)
  ]);
- const payrollByUser={};(payrollRows||[]).forEach(r=>payrollByUser[r.user_id]=r);
+ const payrollByUser={};(payrollRows||[]).forEach(r=>{payrollByUser[r.user_id]=sfMergePay(payrollByUser[r.user_id],r)}); // 2026-11-03: 兼務の人は契約ごとに2行→合算
  const allocByUserStore={};(allocRows||[]).forEach(r=>{
   const byStore=allocByUserStore[r.user_id]=allocByUserStore[r.user_id]||{};
   (byStore[r.store_id]=byStore[r.store_id]||{})[r.kind]=r;
@@ -8219,7 +8225,7 @@ async function sfV12LoadCommon(periodModeOverride){
  const linkedSet=new Set((profs||[]).filter(pr=>pr.smaregi_staff_id).map(pr=>pr.user_id));
  const unlinkedCount=people.filter(u=>!linkedSet.has(u.id)).length;
  const wageRates=await sfComputeWageRates(sfMgStore,peopleIds);
- const payrollByUser={};(payrollRows||[]).forEach(r=>{payrollByUser[r.user_id]=r});
+ const payrollByUser={};(payrollRows||[]).forEach(r=>{payrollByUser[r.user_id]=sfMergePay(payrollByUser[r.user_id],r)}); // 2026-11-03: 兼務の人は契約ごとに2行→合算
  const allocByUser={};(allocRows||[]).forEach(r=>{(allocByUser[r.user_id]=allocByUser[r.user_id]||[]).push(r)});
  const laborByUserDate={};(laborRows||[]).forEach(r=>{
   const key=r.user_id+"|"+r.work_date;const a=laborByUserDate[key]||(laborByUserDate[key]={minutes:0,cost:0,clockIn:null,clockOut:null,tardy:false,early:false});

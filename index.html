@@ -6916,7 +6916,7 @@ async function adminToggle(){
 // 電子サインできるようにしたい。会計・給与仕訳が見れない権限の人でも、店長以上ならこの
 // タブと電子サインの場所を使えるようにしたい」に対応。invoices.html（会計）とは別に、
 // nippo側の独立した画面として作る（cash_handoff_manageフィーチャーで店長以上に開放）。
-let cashMonth=null,cashList=null,cashRecords=null,cashDetail=null,cashPayerSaving=false,cashReceiverSaving=false,cashStoreFilter="",cashWithdrawSaving=false,cashTimer=null;
+let cashMonth=null,cashList=null,cashRecords=null,cashDetail=null,cashCid="",cashHasContract=false,cashPayerSaving=false,cashReceiverSaving=false,cashStoreFilter="",cashWithdrawSaving=false,cashTimer=null;
 function cashMonthSelectHtml(ym){
  const [y,m]=ym.split("-").map(Number);
  const nowY=new Date().getFullYear();
@@ -7729,6 +7729,14 @@ function bindMyDocsPage(){
 //   対象月が終わるまで（翌月になるまで）表示させないでほしい（例: 9月分は10月に入ってから）」。
 //   会計側(invoices.html・給与仕訳タブ、担当C)にも同じ考え方の表示ガードを別途入れてもらう予定
 //   （判定ロジックは「対象月が今月以降なら非表示＝先月以前だけ表示」で担当Cと合わせ済み）
+// 2026-11-03追加: 現金手渡しは「支払う会社（法人＝スマレジの契約）」ごとに分ける（兼務の人は法人が違えば別の行・別のサイン）。
+//   DB(cash_handoff_targets/sf_cash_handoff_signatures)が契約対応になっている場合だけ(cashHasContract)契約で絞る＝SQL適用前の旧DBでも従来どおり動く
+const CASH_DEF_CONTRACT="sez093z1"; // 既定の契約（トーホー）。DB側の既定値と同じ
+const cashK=(uid,cid)=>uid+"|"+(cid||CASH_DEF_CONTRACT);
+const cashOC=()=>cashHasContract?"user_id,year_month,contract_id":"user_id,year_month";
+const cashCF=()=>cashHasContract?{contract_id:cashCid||CASH_DEF_CONTRACT}:{};
+const cashM=()=>cashHasContract?{contract_id:cashCid||CASH_DEF_CONTRACT}:{};
+const cashT=()=>(cashList||[]).find(x=>x.user_id===cashDetail&&(x.contract_id||CASH_DEF_CONTRACT)===(cashCid||CASH_DEF_CONTRACT))||{};
 function cashMonthIsAllowed(ym){
  const t=new Date();
  const curYm=t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0");
@@ -7755,8 +7763,9 @@ async function cashHandoffView(){
  // にした人や金額0円の人が混ざっていた。給与仕訳の画面・本部タスク（hq_create_payroll_tasks）と同じ基準に揃える:
  // 金額>0・その月の非表示(sf_payroll_hidden)を除く・在籍は問わない（退職者にも手渡しが必要）
  const hiddenIds=new Set((hid||[]).map(x=>x.user_id));
+ cashHasContract=(targets||[]).some(t=>t.contract_id!==undefined);
  cashList=(targets||[]).filter(t=>Number(t.amount)>0&&!hiddenIds.has(t.user_id));
- cashRecords={};(recs||[]).forEach(r=>cashRecords[r.user_id]=r);
+ cashRecords={};(recs||[]).forEach(r=>cashRecords[cashK(r.user_id,r.contract_id)]=r);
  if(!cashList.length)return h+`<p class="muted" style="margin-top:16px">この月・現金手渡しの対象者はいません。</p>`;
  const sname=id=>{const s=[...stores,...storesHidden].find(x=>x.id===id);return s?s.name:"所属不明"};
  // 2026-09-08追加: 店舗ごとの絞り込み＋合計件数・合計金額・引き出し済み件数のサマリー
@@ -7770,8 +7779,8 @@ async function cashHandoffView(){
  </div>`;
  const filtered=cashStoreFilter?cashList.filter(t=>(t.store_id||"?")===cashStoreFilter):cashList;
  const totalAmount=filtered.reduce((s,t)=>s+(Number(t.amount)||0),0);
- const withdrawnCount=filtered.filter(t=>cashStatusOf(cashRecords[t.user_id]).withdrawn).length;
- const completedCount=filtered.filter(t=>cashRecords[t.user_id]&&cashRecords[t.user_id].completed_at).length;
+ const withdrawnCount=filtered.filter(t=>cashStatusOf(cashRecords[cashK(t.user_id,t.contract_id)]).withdrawn).length;
+ const completedCount=filtered.filter(t=>{const r=cashRecords[cashK(t.user_id,t.contract_id)];return r&&r.completed_at}).length;
  h+=`<div class="card" style="display:flex;gap:20px;flex-wrap:wrap">
   <div><div class="muted" style="font-size:11px">対象人数</div><div style="font-size:20px;font-weight:700">${filtered.length}名</div></div>
   <div><div class="muted" style="font-size:11px">合計金額</div><div style="font-size:20px;font-weight:700">${Math.round(totalAmount).toLocaleString()}円</div></div>
@@ -7787,8 +7796,8 @@ async function cashHandoffView(){
  Object.entries(byStore).forEach(([sid,people])=>{
   h+=`<div class="card"><h3 style="margin:0 0 8px">🏪 ${esc(sname(sid==="?"?null:sid))}（${people.length}名）</h3>`;
   people.sort((a,b)=>a.name.localeCompare(b.name,"ja")).forEach(p=>{
-   const st=cashStatusOf(cashRecords[p.user_id]);
-   h+=`<div class="row" data-cashopen="${p.user_id}"><span><b>${esc(p.name)}</b><br><span class="muted">${Math.round(p.amount).toLocaleString()}円 ／ <span class="badge ${st.cls}">${st.label}</span></span></span><span class="muted">›</span></div>`;
+   const st=cashStatusOf(cashRecords[cashK(p.user_id,p.contract_id)]);
+   h+=`<div class="row" data-cashopen="${p.user_id}|${esc(p.contract_id||CASH_DEF_CONTRACT)}"><span><b>${esc(p.name)}</b>${p.corp_name?` <span class="badge b">🏢 ${esc(p.corp_name)}</span>`:""}<br><span class="muted">${Math.round(p.amount).toLocaleString()}円 ／ <span class="badge ${st.cls}">${st.label}</span></span></span><span class="muted">›</span></div>`;
   });
   h+=`</div>`;
  });
@@ -7802,18 +7811,18 @@ function cashListForExport(){
   const sa=sname(a.store_id||null),sb=sname(b.store_id||null);
   return sa.localeCompare(sb,"ja")||a.name.localeCompare(b.name,"ja");
  }).map(t=>{
-  const rec=(cashRecords||{})[t.user_id]||{};
+  const rec=(cashRecords||{})[cashK(t.user_id,t.contract_id)]||{};
   const fmt=v=>v?new Date(v).toLocaleString("ja-JP"):"未";
   return {
-   store:sname(t.store_id||null),name:t.name,amount:Math.round(Number(t.amount)||0),
+   store:sname(t.store_id||null),corp:t.corp_name||"",name:t.name,amount:Math.round(Number(t.amount)||0),
    withdrawn:fmt(rec.withdrawn_at),payer:fmt(rec.payer_checked_at),receiver:fmt(rec.receiver_checked_at),completed:fmt(rec.completed_at)
   };
  });
 }
 function cashExportCsv(){
  const rows=cashListForExport();
- const header=["店舗","氏名","金額","引き出し","渡した側確認","受け取った側確認","受け渡し完了"];
- const csv=[header,...rows.map(r=>[r.store,r.name,r.amount,r.withdrawn,r.payer,r.receiver,r.completed])]
+ const header=["店舗","法人","氏名","金額","引き出し","渡した側確認","受け取った側確認","受け渡し完了"];
+ const csv=[header,...rows.map(r=>[r.store,r.corp,r.name,r.amount,r.withdrawn,r.payer,r.receiver,r.completed])]
   .map(row=>row.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\r\n");
  const blob=new Blob(["﻿"+csv],{type:"text/csv"});
  const url=URL.createObjectURL(blob);
@@ -7832,8 +7841,8 @@ function cashExportPrint(){
  p{margin:0 0 12px;color:#555}</style></head><body>
  <h1>💴 現金手渡し一覧（${esc(cashMonth)}分）</h1>
  <p>対象 ${rows.length}名／合計 ${totalAmount.toLocaleString()}円</p>
- <table><thead><tr><th>店舗</th><th>氏名</th><th>金額</th><th>引き出し</th><th>渡した側</th><th>受け取った側</th><th>受け渡し完了</th></tr></thead><tbody>
- ${rows.map(r=>`<tr><td>${esc(r.store)}</td><td>${esc(r.name)}</td><td>${r.amount.toLocaleString()}円</td><td>${esc(r.withdrawn)}</td><td>${esc(r.payer)}</td><td>${esc(r.receiver)}</td><td>${esc(r.completed)}</td></tr>`).join("")}
+ <table><thead><tr><th>店舗</th><th>法人</th><th>氏名</th><th>金額</th><th>引き出し</th><th>渡した側</th><th>受け取った側</th><th>受け渡し完了</th></tr></thead><tbody>
+ ${rows.map(r=>`<tr><td>${esc(r.store)}</td><td>${esc(r.corp)}</td><td>${esc(r.name)}</td><td>${r.amount.toLocaleString()}円</td><td>${esc(r.withdrawn)}</td><td>${esc(r.payer)}</td><td>${esc(r.receiver)}</td><td>${esc(r.completed)}</td></tr>`).join("")}
  </tbody></table>
  <script>window.onload=function(){window.print()}<\/script>
  </body></html>`);
@@ -7855,10 +7864,10 @@ function sigBindCanvas(canvasId){
 function sigClear(canvasId){const cv=$(canvasId);if(!cv)return;cv.getContext("2d").clearRect(0,0,cv.width,cv.height);cv.dataset.sigDrawn=""}
 function sigToBlob(canvasId){const cv=$(canvasId);return new Promise(res=>cv.toBlob(res,"image/png"))}
 async function cashHandoffDetailView(){
- const t=(cashList||[]).find(x=>x.user_id===cashDetail);
+ const t=(cashList||[]).find(x=>x.user_id===cashDetail&&(x.contract_id||CASH_DEF_CONTRACT)===(cashCid||CASH_DEF_CONTRACT));
  if(!t)return `<span class="back" id="cashback">← 一覧</span><div class="alert">対象が見つかりません</div>`;
- const rec=(cashRecords||{})[cashDetail];
- let h=`<span class="back" id="cashback">← 一覧</span><h2>💴 ${esc(t.name)}さんの現金手渡し（${esc(cashMonth)}分）</h2>
+ const rec=(cashRecords||{})[cashK(cashDetail,cashCid)];
+ let h=`<span class="back" id="cashback">← 一覧</span><h2>💴 ${esc(t.name)}さんの現金手渡し（${esc(cashMonth)}分${t.corp_name?`・${esc(t.corp_name)}`:""}）</h2>
  <div class="card"><h3>金額</h3><p style="font-size:22px;font-weight:700;margin:4px 0">${Math.round(t.amount).toLocaleString()}円</p>
   <label class="radio-row"><input type="checkbox" id="cash-amtok" ${rec&&rec.amount_confirmed?"checked":""}> 給与明細と金額に間違いがないことを確認しました</label>
  </div>
@@ -7923,9 +7932,9 @@ async function resolveSignedUrl(bucket,path){
 // 保存直後、その場でcashRecordsを最新化する（renderだけだとメモリ上の古い状態のまま
 // 表示され続けてしまうため）
 async function refreshCashRecord(uid,ym){
- const {data}=await sb.from("sf_cash_handoff_signatures").select("*").eq("user_id",uid).eq("year_month",ym).maybeSingle();
+ const {data}=await sb.from("sf_cash_handoff_signatures").select("*").eq("user_id",uid).eq("year_month",ym).match(cashM()).maybeSingle();
  if(!cashRecords)cashRecords={};
- if(data)cashRecords[uid]=data;
+ if(data)cashRecords[cashK(uid,cashCid)]=data;
 }
 // 2026-09-10追加: ユーザー報告「他の人が現金手渡しのサインをもらったのに、他の人の画面では
 // 反映されてなくて、2重になることはできないのに避けて欲しい（リアルタイムに反映させること）」
@@ -7937,9 +7946,9 @@ async function refreshCashRecord(uid,ym){
 // 画面を最新化する（サーバー側のcash_handoff_completeは元々completed_atをcoalesceする作りで
 // この問題は無かったため、直接upsertしている3箇所だけに追加する）
 async function cashGuardAlreadyDone(field,label){
- const {data}=await sb.from("sf_cash_handoff_signatures").select("*").eq("user_id",cashDetail).eq("year_month",cashMonth).maybeSingle();
+ const {data}=await sb.from("sf_cash_handoff_signatures").select("*").eq("user_id",cashDetail).eq("year_month",cashMonth).match(cashM()).maybeSingle();
  if(!cashRecords)cashRecords={};
- if(data)cashRecords[cashDetail]=data;
+ if(data)cashRecords[cashK(cashDetail,cashCid)]=data;
  if(data&&data[field]){
   toast(`すでに他の人が${label}を確認・サイン済みです（${new Date(data[field]).toLocaleString("ja-JP")}）。画面を更新しました`,true);
   render();
@@ -7953,7 +7962,7 @@ function bindCashHandoffPage(){
  if($("cash-storefilter"))$("cash-storefilter").onchange=()=>{cashStoreFilter=$("cash-storefilter").value;render()};
  if($("cash-export-csv"))$("cash-export-csv").onclick=cashExportCsv;
  if($("cash-export-print"))$("cash-export-print").onclick=cashExportPrint;
- document.querySelectorAll("[data-cashopen]").forEach(rw=>rw.onclick=()=>{cashDetail=rw.dataset.cashopen;render()});
+ document.querySelectorAll("[data-cashopen]").forEach(rw=>rw.onclick=()=>{const [u,c]=rw.dataset.cashopen.split("|");cashDetail=u;cashCid=c||CASH_DEF_CONTRACT;render()});
  document.querySelectorAll("[data-cashsigview]").forEach(b=>b.onclick=async()=>{
   const url=await resolveSignedUrl("cash-signatures",b.dataset.cashsigview);
   if(url)window.open(url,"_blank");else toast("サイン画像を開けませんでした",true);
@@ -7961,10 +7970,10 @@ function bindCashHandoffPage(){
  if($("cash-amtok"))$("cash-amtok").onchange=async()=>{
   const checked=$("cash-amtok").checked;
   await sb.from("sf_cash_handoff_signatures").upsert({
-   user_id:cashDetail,year_month:cashMonth,store_id:(cashList.find(t=>t.user_id===cashDetail)||{}).store_id||null,
-   amount:(cashList.find(t=>t.user_id===cashDetail)||{}).amount||0,
+   user_id:cashDetail,year_month:cashMonth,...cashCF(),store_id:cashT().store_id||null,
+   amount:cashT().amount||0,
    amount_confirmed:checked,created_by:me.id,updated_at:new Date().toISOString()
-  },{onConflict:"user_id,year_month"});
+  },{onConflict:cashOC()});
  };
  if($("sig-payer"))sigBindCanvas("sig-payer");
  if($("sig-receiver"))sigBindCanvas("sig-receiver");
@@ -7984,12 +7993,12 @@ function bindCashHandoffPage(){
     const {error:ue}=await sb.storage.from("cash-signatures").upload(path,file,{contentType:file.type||"image/jpeg"});
     if(ue)throw ue;
    }
-   const t=cashList.find(x=>x.user_id===cashDetail)||{};
+   const t=cashT();
    const {error}=await sb.from("sf_cash_handoff_signatures").upsert({
-    user_id:cashDetail,year_month:cashMonth,store_id:t.store_id||null,amount:t.amount||0,
+    user_id:cashDetail,year_month:cashMonth,...cashCF(),store_id:t.store_id||null,amount:t.amount||0,
     withdrawn_by:me.id,withdrawn_at:new Date().toISOString(),withdrawn_photo_path:path,
     created_by:me.id,updated_at:new Date().toISOString()
-   },{onConflict:"user_id,year_month"});
+   },{onConflict:cashOC()});
    if(error)throw error;
    await refreshCashRecord(cashDetail,cashMonth);
    toast("引き出し確認を保存しました");
@@ -8002,7 +8011,7 @@ function bindCashHandoffPage(){
   try{
    const {error}=await sb.from("sf_cash_handoff_signatures").update({
     withdrawn_at:null,withdrawn_by:null,withdrawn_photo_path:null,updated_at:new Date().toISOString()
-   }).eq("user_id",cashDetail).eq("year_month",cashMonth);
+   }).eq("user_id",cashDetail).eq("year_month",cashMonth).match(cashM());
    if(error)throw error;
    await refreshCashRecord(cashDetail,cashMonth);
    toast("引き出し確認を取り消しました");
@@ -8016,7 +8025,7 @@ function bindCashHandoffPage(){
   try{
    const {error}=await sb.from("sf_cash_handoff_signatures").update({
     completed_at:null,updated_at:new Date().toISOString()
-   }).eq("user_id",cashDetail).eq("year_month",cashMonth);
+   }).eq("user_id",cashDetail).eq("year_month",cashMonth).match(cashM());
    if(error)throw error;
    await refreshCashRecord(cashDetail,cashMonth);
    toast("完了を取り消しました");
@@ -8041,12 +8050,12 @@ function bindCashHandoffPage(){
     const {error:pe}=await sb.storage.from("cash-signatures").upload(photoPath,photoFile,{contentType:photoFile.type||"image/jpeg"});
     if(pe)throw pe;
    }
-   const t=cashList.find(x=>x.user_id===cashDetail)||{};
+   const t=cashT();
    const {error}=await sb.from("sf_cash_handoff_signatures").upsert({
-    user_id:cashDetail,year_month:cashMonth,store_id:t.store_id||null,amount:t.amount||0,
+    user_id:cashDetail,year_month:cashMonth,...cashCF(),store_id:t.store_id||null,amount:t.amount||0,
     payer_id:me.id,payer_checked_at:new Date().toISOString(),payer_signature_path:path,handoff_photo_path:photoPath,
     created_by:me.id,updated_at:new Date().toISOString()
-   },{onConflict:"user_id,year_month"});
+   },{onConflict:cashOC()});
    if(error)throw error;
    await refreshCashRecord(cashDetail,cashMonth);
    toast("渡した側の確認・サインを保存しました");
@@ -8063,12 +8072,12 @@ function bindCashHandoffPage(){
    const path=`${cashDetail}/${cashMonth}_receiver_${Date.now()}.png`;
    const {error:ue}=await sb.storage.from("cash-signatures").upload(path,blob,{contentType:"image/png"});
    if(ue)throw ue;
-   const t=cashList.find(x=>x.user_id===cashDetail)||{};
+   const t=cashT();
    const {error}=await sb.from("sf_cash_handoff_signatures").upsert({
-    user_id:cashDetail,year_month:cashMonth,store_id:t.store_id||null,amount:t.amount||0,
+    user_id:cashDetail,year_month:cashMonth,...cashCF(),store_id:t.store_id||null,amount:t.amount||0,
     receiver_checked_at:new Date().toISOString(),receiver_signature_path:path,
     created_by:me.id,updated_at:new Date().toISOString()
-   },{onConflict:"user_id,year_month"});
+   },{onConflict:cashOC()});
    if(error)throw error;
    await refreshCashRecord(cashDetail,cashMonth);
    toast("受け取った側の確認・サインを保存しました");
@@ -8077,7 +8086,7 @@ function bindCashHandoffPage(){
  };
  if($("cash-complete"))$("cash-complete").onclick=async()=>{
   const btn=$("cash-complete");btn.disabled=true;btn.textContent="処理中...";
-  const {data,error}=await sb.rpc("cash_handoff_complete",{p_user_id:cashDetail,p_year_month:cashMonth});
+  const {data,error}=await sb.rpc("cash_handoff_complete",{p_user_id:cashDetail,p_year_month:cashMonth,...(cashHasContract?{p_contract_id:cashCid||CASH_DEF_CONTRACT}:{})});
   if(error){toast("エラー: "+error.message,true);btn.disabled=false;btn.textContent="✅ 両者確認済み・この受け渡しを完了にする";return}
   await refreshCashRecord(cashDetail,cashMonth);
   toast(data&&data.journal_marked_paid?"完了しました（給与仕訳の状態も振込完了に更新しました）":"完了しました");
@@ -10737,7 +10746,7 @@ function bindPage(){
     const {data:recs}=await sb.from("sf_cash_handoff_signatures").select("*").eq("year_month",ym);
     const newFp=JSON.stringify((recs||[]).map(r=>[r.user_id,r.payer_checked_at,r.receiver_checked_at,r.completed_at,r.withdrawn_at]).sort());
     if(newFp!==fp){
-     cashRecords={};(recs||[]).forEach(r=>cashRecords[r.user_id]=r);
+     cashRecords={};(recs||[]).forEach(r=>cashRecords[cashK(r.user_id,r.contract_id)]=r);
      render();
     }
    }catch(e){}

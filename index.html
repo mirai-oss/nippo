@@ -2159,6 +2159,23 @@ const scoreKey=(base,storeId)=>`${base}__${storeId}`;
 // v2.6.76 予算欄のロックを一時的に外した項目（キー単位）。編集画面を開き直すとまた閉じる
 let unlockedScoreKeys={};
 let weeklyHasUnderachievement=false; // B-11(2026-08-27) weeklyDashPanelHtml()が書く画面を作るたびに更新。submitReport()の必須チェックで参照
+// v2.6.88 Google口コミ数の「実績」を、ハブの日次取得（google_review_snapshots・毎朝8時に自動取得）から自動で入れる。
+//   週の増加 = 月曜（週末）時点の累計 − 前週月曜時点の累計（店舗に紐づく看板ぶんの合計。経営ダッシュボード・日報カードと同じ定義 google_review_store_kpi）。
+//   基準（前週月曜時点の値）は最大3日古いものまで使う（取得できなかった日があっても止まらないように）。
+//   基準がハブに無い店（口コミ取得の対象外の店・日次取得が始まる前の週）は map に入れず、従来どおり手入力に戻る。
+async function fetchReviewAuto(storeIds,weekStart,weekEnd){
+ const map={};
+ try{
+  const d=n=>{const x=new Date(weekStart+"T00:00:00Z");x.setUTCDate(x.getUTCDate()+n);return x.toISOString().slice(0,10)};
+  const {data:rows}=await sb.from("google_review_snapshots").select("store_id,as_of_date").in("store_id",storeIds).gte("as_of_date",d(-3)).lte("as_of_date",d(-1));
+  const baseOf={}; (rows||[]).forEach(r=>{if(!baseOf[r.store_id]||r.as_of_date>baseOf[r.store_id])baseOf[r.store_id]=r.as_of_date});
+  await Promise.all(storeIds.filter(sid=>baseOf[sid]).map(async sid=>{
+   const {data:k}=await sb.rpc("google_review_store_kpi",{p_store:sid,p_date:weekEnd});
+   if(k&&k.week_inc!=null&&k.as_of_date)map[sid]={value:Number(k.week_inc),asOf:k.as_of_date,baseAsOf:baseOf[sid],complete:k.as_of_date>=weekEnd,baseOld:baseOf[sid]<d(-1)};
+  }));
+ }catch(e){}
+ return map;
+}
 // v2.6.76 先週の「次週目標」を、今週の予算として引き継ぐ。既定では変更できない
 //   （社長・本部・チーム長・店長だけ変更できる。それ以外はいつも表示のみ）
 async function fetchCarriedBudgets(storeIds,weekStart,authorId){
@@ -2219,7 +2236,7 @@ function weeklyScorecardHtml(storeName,vals,editable){
  //   ロックを外して元と違う値にした場合は「当初の目標」を小さく残す（opts.orig）
  // B-10(2026-08-27) opts.reverse=trueのときはautoRowと同じく「予算÷実績×100」に反転（少ないほど良い項目用）
  const manualRow=(label,opts)=>{
-  const{bKey,aKey,origKey,bVal,aVal,fmt,locked,orig,canOverride,changedBy,changedAt,reverse}=opts;
+  const{bKey,aKey,origKey,bVal,aVal,fmt,locked,orig,canOverride,changedBy,changedAt,reverse,auto,asOfKey,autoAsOf}=opts; // v2.6.88 auto={value,asOf,complete}=自動取得した実績
   const hasB=bVal!=null&&bVal!=="",hasA=aVal!=null&&aVal!=="";
   const b=hasB?Number(bVal):null,a=hasA?Number(aVal):null;
   const diff=(hasB&&hasA)?a-b:null;
@@ -2237,9 +2254,12 @@ function weeklyScorecardHtml(storeName,vals,editable){
   }else{
    bCell=`<input type="number" step="0.1" inputmode="decimal" class="inp scorecalc" data-fkd="${bKey}" value="${bVal==null||bVal===""?"":esc(bVal)}" style="width:76px;margin:0;text-align:right;font-size:12px;padding:4px 6px;background:#fffbe6">`;
   }
+  const autoBadge=(d,warn)=>`<span class="muted" style="font-size:10px;white-space:nowrap">自動${d?"（〜"+fmtDate(d)+"）":""}${warn?" ⚠️":""}</span>`;
   const aCell=editable
-   ?`<input type="number" step="0.1" inputmode="decimal" class="inp scorecalc" data-fkd="${aKey}" value="${aVal==null||aVal===""?"":esc(aVal)}" style="width:76px;margin:0;text-align:right;font-size:12px;padding:4px 6px;background:#fffbe6">`
-   :(hasA?fmt(a):"—");
+   ?(auto // v2.6.88 自動取得できた項目は入力欄を出さず、値を hidden で form に残す（提出時に answers へ保存される）
+     ?`<span style="font-size:12px">${fmt(Number(auto.value))}</span> ${autoBadge(auto.asOf,!auto.complete)}<input type="hidden" data-fkd="${aKey}" value="${auto.value}">${asOfKey?`<input type="hidden" data-fkd="${asOfKey}" value="${auto.asOf}">`:""}`
+     :`<input type="number" step="0.1" inputmode="decimal" class="inp scorecalc" data-fkd="${aKey}" value="${aVal==null||aVal===""?"":esc(aVal)}" style="width:76px;margin:0;text-align:right;font-size:12px;padding:4px 6px;background:#fffbe6">`)
+   :(hasA?fmt(a)+(autoAsOf?" "+autoBadge(autoAsOf,false):""):"—");
   // v2.6.76 引き継いだ元の目標を、常にformへ残しておく（提出時、変更履歴として answers に保存されるように）
   const origHidden=(editable&&orig!=null&&origKey)?`<input type="hidden" data-fkd="${origKey}" value="${orig}">`:"";
   const changedNote=(changedBy&&changedAt)?`<br>${esc(changedBy)}が${new Date(changedAt).toLocaleDateString("ja-JP")}に変更`:"";
@@ -2256,11 +2276,11 @@ function weeklyScorecardHtml(storeName,vals,editable){
    ${autoRow("売上",vals.salesTgt,vals.salesAct,yen)}
    ${manualRow("PA時間数（少ないほど◎）",{bKey:vals.paBudgetKey,aKey:vals.paActualKey,origKey:vals.paOrigKey,bVal:vals.paBudget,aVal:vals.paActual,fmt:n=>num1(n)+"h",locked:vals.paLocked,orig:vals.paOrig,canOverride:vals.canOverride,changedBy:vals.paChangedBy,changedAt:vals.paChangedAt,reverse:true})}
    ${autoRow("原価率（低いほど◎）",vals.costTgt,vals.costAct,pct1,true)}
-   ${manualRow("Google口コミ数",{bKey:vals.reviewBudgetKey,aKey:vals.reviewActualKey,origKey:vals.reviewOrigKey,bVal:vals.reviewBudget,aVal:vals.reviewActual,fmt:num1,locked:vals.reviewLocked,orig:vals.reviewOrig,canOverride:vals.canOverride,changedBy:vals.reviewChangedBy,changedAt:vals.reviewChangedAt})}
+   ${manualRow("Google口コミ数",{bKey:vals.reviewBudgetKey,aKey:vals.reviewActualKey,origKey:vals.reviewOrigKey,bVal:vals.reviewBudget,aVal:vals.reviewActual,fmt:num1,locked:vals.reviewLocked,orig:vals.reviewOrig,canOverride:vals.canOverride,changedBy:vals.reviewChangedBy,changedAt:vals.reviewChangedAt,auto:vals.reviewAuto,asOfKey:vals.reviewAsOfKey,autoAsOf:vals.reviewAutoAsOf})}
    ${manualRow("ダイニー点数",{bKey:vals.diniiBudgetKey,aKey:vals.diniiActualKey,origKey:vals.diniiOrigKey,bVal:vals.diniiBudget,aVal:vals.diniiActual,fmt:num1,locked:vals.diniiLocked,orig:vals.diniiOrig,canOverride:vals.canOverride,changedBy:vals.diniiChangedBy,changedAt:vals.diniiChangedAt})}
   </table>
   ${hasUnder?`<p style="margin:8px 0 0;font-size:11px;color:#c0392b">⚠️ 赤字の項目は未達です</p>`:""}
-  ${editable?`<p class="muted" style="margin:8px 0 0;font-size:11px">黄色い欄（実績）は毎回手入力です。予算欄の🔒は先週の「次週目標」から引き継いだもので、勝手に変えられないよう基本ロックされています（変更すると元の目標も記録されます）</p>`:""}</div>`;
+  ${editable?`<p class="muted" style="margin:8px 0 0;font-size:11px">黄色い欄（実績）は毎回手入力です。${vals.reviewAuto?`Google口コミ数の実績は Google から自動で入ります（${fmtDate(vals.reviewAuto.baseAsOf)}時点→${fmtDate(vals.reviewAuto.asOf)}時点で増えた件数。${vals.reviewAuto.baseOld?"基準が少し前の日なので、その間に増えたぶんも含みます。":""}${vals.reviewAuto.complete?"":"⚠️ 月曜ぶんがまだ入っていません。火曜の朝8時以降に「🔄 取り込む」を押すと確定します。"}）`:""}予算欄の🔒は先週の「次週目標」から引き継いだもので、勝手に変えられないよう基本ロックされています（変更すると元の目標も記録されます）</p>`:""}</div>`;
  return {html,hasUnder};
 }
 // 週報を「書く」画面用。所属店舗ぶん（チーム長は担当店舗ぶん）をスコアカードで見せる
@@ -2270,9 +2290,10 @@ async function weeklyDashPanelHtml(){
  if(!storeIds.length)return "";
  const {weekStart,weekEnd}=weekRangeFor(todayStr()); // v2.6.69 業務日基準
  const ymList=ymListFor(weekStart,weekEnd);
- const [{act,tgt,tm},extra,carried]=await Promise.all([
+ const [{act,tgt,tm},extra,carried,reviewAuto]=await Promise.all([
   fetchDashRange(storeIds,weekStart,weekEnd,ymList),fetchDashExtra(storeIds,ymList),
-  fetchCarriedBudgets(storeIds,weekStart,me.id) // v2.6.76
+  fetchCarriedBudgets(storeIds,weekStart,me.id), // v2.6.76
+  fetchReviewAuto(storeIds,weekStart,weekEnd) // v2.6.88 Google口コミ数の実績を自動取得
  ]);
  const canOverride=["TEAM","TENCHO","HQ","CEO"].includes(me.role)||me.is_master; // v2.6.76 予算のロックを外せる役職（マスター管理も含む）
  const cardResults=(me.stores||[]).map(s=>{
@@ -2287,7 +2308,8 @@ async function weeklyDashPanelHtml(){
    salesAct:sAct.length?dashSum(sAct,"sales"):null, salesTgt:sTgt.length?dashSum(sTgt,"sales_target"):null,
    costAct:sAct.length?costAct:null, costTgt:sTm.length?Math.round(dashSum(sTm,"cost_rate")/sTm.length*10)/10:null, // 月をまたぐ週は平均
    paBudgetKey:k("paBudget"),paActualKey:k("paActual"),paOrigKey:k("paBudgetOrig"),paBudget:paVal,paActual:form[k("paActual")],paLocked:paCarried!=null,paOrig:paCarried,
-   reviewBudgetKey:k("reviewBudget"),reviewActualKey:k("reviewActual"),reviewOrigKey:k("reviewBudgetOrig"),reviewBudget:reviewVal,reviewActual:form[k("reviewActual")],reviewLocked:reviewCarried!=null,reviewOrig:reviewCarried,
+   reviewBudgetKey:k("reviewBudget"),reviewActualKey:k("reviewActual"),reviewOrigKey:k("reviewBudgetOrig"),reviewBudget:reviewVal,reviewActual:reviewAuto[s.id]?reviewAuto[s.id].value:form[k("reviewActual")],reviewLocked:reviewCarried!=null,reviewOrig:reviewCarried,
+   reviewAuto:reviewAuto[s.id]||null,reviewAsOfKey:k("reviewActualAsOf"), // v2.6.88
    diniiBudgetKey:k("diniiBudget"),diniiActualKey:k("diniiActual"),diniiOrigKey:k("diniiBudgetOrig"),diniiBudget:diniiVal,diniiActual:form[k("diniiActual")],diniiLocked:diniiCarried!=null,diniiOrig:diniiCarried,
    canOverride,
   },true);
@@ -2350,6 +2372,7 @@ async function weeklyDashPanelForReport(r){
    paChangedBy:ans[k("paBudgetChangedBy")], paChangedAt:ans[k("paBudgetChangedAt")],
    reviewBudget:ans[k("reviewBudget")], reviewActual:ans[k("reviewActual")], reviewOrig:ans[k("reviewBudgetOrig")],
    reviewChangedBy:ans[k("reviewBudgetChangedBy")], reviewChangedAt:ans[k("reviewBudgetChangedAt")],
+   reviewAutoAsOf:ans[k("reviewActualAsOf")]||null, // v2.6.88 自動取得だった週は「自動」と表示
    diniiBudget:ans[k("diniiBudget")], diniiActual:ans[k("diniiActual")], diniiOrig:ans[k("diniiBudgetOrig")],
    diniiChangedBy:ans[k("diniiBudgetChangedBy")], diniiChangedAt:ans[k("diniiBudgetChangedAt")],
   },false).html;
@@ -10073,7 +10096,7 @@ async function settingsView(){
   </details></div>`;
  h+=`<div class="card"><p class="muted">多言語表示などは次のバージョンで追加予定です。</p></div>
   <button class="btn sub" id="logoutbtn">ログアウト</button>
-  <p class="muted center" style="margin-top:16px">v2.6.87</p>`;
+  <p class="muted center" style="margin-top:16px">v2.6.88</p>`;
  return h;
 }
 // ===== v2.4 権限設定画面 =====

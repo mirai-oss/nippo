@@ -5245,7 +5245,7 @@ async function adminView(){
    const canSet=me.is_master||["HQ","CEO"].includes(me.role);
    h+=`<div class="card" style="border-color:#4a154b;margin-bottom:8px"><h3>💬 Slack 連携</h3>
     <p class="muted" style="margin:0">管理システムのメールと同じメールで Slack に登録した人は自動で紐づきます（毎朝 9:30 と Slack 参加時）。今すぐ照合することもできます。</p>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn sm sub" id="au-slack-sync">🔄 いま Slack と照合する</button></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn sm sub" id="au-slack-sync">🔄 いま Slack と照合する</button><button class="btn sm sub" id="au-slack-testme" ${adminSlackInvite&&adminSlackInvite.url?"":"disabled"}>✉️ 自分（${esc(me.email||"")}）に招待メールを試しに送る</button></div>
     <p style="margin:10px 0 0;font-size:13px"><b>招待リンク:</b> ${adminSlackInvite&&adminSlackInvite.url?`<span style="word-break:break-all">${esc(adminSlackInvite.url)}</span>`:'<span style="color:#c0392b">未設定（Slack の「メンバーを招待」→「招待リンクをコピー」で作ったリンクを下に入れてください）</span>'}</p>
     ${canSet?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><input type="text" id="au-slack-url" placeholder="https://join.slack.com/t/…" style="flex:1;min-width:220px;margin:0" value="${esc((adminSlackInvite&&adminSlackInvite.url)||"")}"><button class="btn sm sub" id="au-slack-seturl">保存</button></div>`:""}
     <p class="muted" style="margin:10px 0 0">今表示されている未連携 ${tgt.length} 名へ、招待リンクと「管理システムのメールで登録してください」の案内をまとめて送れます（LINE 連携済み ${withLine} 名は LINE、それ以外の ${tgt.length-withLine} 名は登録メール宛）。</p>
@@ -12197,6 +12197,12 @@ function bindPage(){
   const nl=(r.newly_linked||[]).map(x=>x.name).join("・");
   toast(`照合しました: 紐づき ${r.linked}名${r.newly_linked&&r.newly_linked.length?`（新しく: ${nl}）`:""}／未連携 ${r.unlinked_users}名／Slack 側で該当なし ${r.unmatched_slack?r.unmatched_slack.length:0}名`);
   render();
+ };
+ if($("au-slack-testme"))$("au-slack-testme").onclick=async()=>{ // 文面と差出人（info@ns0314.com）を自分で確かめる用
+  $("au-slack-testme").disabled=true;
+  const r=await slackLinkApi({op:"invite",user_id:me.id,channel:"email"});
+  $("au-slack-testme").disabled=false;
+  toast(r&&r.ok?"自分宛てに送りました。メールを確認してください（届くまで数十秒）":"送れませんでした: "+((r&&r.error)||"不明"),!(r&&r.ok));
  };
  if($("au-slack-seturl"))$("au-slack-seturl").onclick=async()=>{
   const url=$("au-slack-url").value.trim();if(!url){toast("招待リンクを入れてください",true);return}

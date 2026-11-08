@@ -4989,6 +4989,15 @@ let adminMode="list",adminDetail=null,adminUsers=[],adminStoresMap={};
 let adminLineLinkInfo=null; // 2026-09-05追加 管理者が代理発行したLINE連携用の合言葉（対象は adminDetail）
 let adminProfs={}; // v2.6.45 入社情報（user_id をキー）
 let adminBankMap={}; // 2026-09-05追加 振込口座（user_idをキー。master/HQのみ取得）
+// 2026-11-08追加: Slack 連携（user_slack＝従業員↔Slack の紐づけ。LINE と同じく一覧の目印・絞り込み・従業員画面からの招待に使う）
+//   方針（ユーザー）: 入社前は LINE、入社後は Slack。紐づけは「管理システムのメール＝Slack 登録メール」で自動（EF slack-link / slack-events）
+let adminSlackMap={},adminSlackInvite=null,slackMembers=null,slackBulkRunning=false,slackBulkResult=null;
+async function slackLinkApi(body){
+ const {data:{session}}=await sb.auth.getSession();
+ const res=await fetch(SUPA_URL+"/functions/v1/slack-link",{method:"POST",headers:{Authorization:"Bearer "+(session?session.access_token:SUPA_KEY),apikey:SUPA_KEY,"Content-Type":"application/json"},body:JSON.stringify(body)});
+ return await res.json().catch(()=>({ok:false,error:"応答を読めません（HTTP "+res.status+"）"}));
+}
+const SLACK_MATCH_LABEL={email:"メール一致（照合）",team_join:"Slack 参加時にメール一致",manual:"本部が手で紐づけ"};
 // 2026-09-05追加: 「何が提出されてるか」の見える化用。extra内の配列（写真アップロード項目）を数える
 function submitCountOf(uid){
  const p=adminProfs[uid];
@@ -5021,7 +5030,7 @@ async function exportEmployeeCsv(){
   if(auStore&&!(adminStoresMap[u.id]||[]).includes(auStore))return false;
    if(auCorp&&!(adminCorpOf[u.id]||[]).includes(auCorp))return false; // 2026-10-17追加: 法人で絞り込み
   if(auMissing.length){
-   const hit=(auMissing.includes("line")&&!u.line_user_id)||(auMissing.includes("doc")&&submitCountOf(u.id)===0)||(bankAllowed&&auMissing.includes("bank")&&!adminBankMap[u.id]);
+   const hit=(auMissing.includes("line")&&!u.line_user_id)||(auMissing.includes("slack")&&!adminSlackMap[u.id])||(auMissing.includes("doc")&&submitCountOf(u.id)===0)||(bankAllowed&&auMissing.includes("bank")&&!adminBankMap[u.id]);
    if(!hit)return false;
   }
   if(q){
@@ -5109,6 +5118,7 @@ async function openAdminUserByLink(uid){
   if(!u)return; // 見えない・存在しない人は何もしない（ふつうのadmin一覧のまま）
   adminUsers=us||[];adminStoresMap={};(uss||[]).forEach(x=>{(adminStoresMap[x.user_id]=adminStoresMap[x.user_id]||[]).push(x.store_id)});
   adminProfs={};(profs||[]).forEach(x=>adminProfs[x.user_id]=x);adminBankMap={};
+  try{const {data:sl}=await sb.from("user_slack").select("user_id,slack_user_id,slack_name,slack_display_name,matched_by,matched_at");adminSlackMap={};(sl||[]).forEach(x=>adminSlackMap[x.user_id]=x)}catch(e){} // 2026-11-08追加
   adminDetail=uid;adminMode="edit";euRole=u.role;euStores=[...(adminStoresMap[uid]||[])];euTeam=u.team_id||null;
   const q=new URLSearchParams(location.search);q.delete("u");history.replaceState({},"",location.pathname+(q.toString()?"?"+q.toString():"")); // 開いたらuだけ消す（再読み込みで毎回開かないように）
  }catch(e){console.warn("管理画面リンクを開けませんでした:",e)}
@@ -5125,12 +5135,14 @@ async function adminView(){
  if(adminMode==="contractreg")return await adminContractRegView(); // 2026-10-17追加
  if(adminMode==="storemis")return await adminStoreMisView();
  const bankAllowed=me.is_master||me.role==="HQ"; // payroll_bank_accountsのRLSと同じ条件
- const [{data:us,error},{data:uss},{data:ntfs},{data:profs},bankRes]=await Promise.all([
+ const [{data:us,error},{data:uss},{data:ntfs},{data:profs},bankRes,slackRes,slackInvRes]=await Promise.all([
   sb.from("users").select("*"),
   sb.from("user_stores").select("user_id,store_id"),
   sb.from("notifications").select("*").eq("recipient_id",me.id).eq("type","join_registered").is("read_at",null).order("created_at",{ascending:false}).limit(20),
   sb.from("employee_profiles").select("*"), // v2.6.45 生年月日から年齢を出す／入社情報の編集に使う
-  bankAllowed?sb.from("payroll_bank_accounts").select("user_id,payment_method,bank_name,branch_name,account_holder_kana"):Promise.resolve({data:null}) // 2026-09-05追加
+  bankAllowed?sb.from("payroll_bank_accounts").select("user_id,payment_method,bank_name,branch_name,account_holder_kana"):Promise.resolve({data:null}), // 2026-09-05追加
+  sb.from("user_slack").select("user_id,slack_user_id,slack_name,slack_display_name,matched_by,matched_at"), // 2026-11-08追加
+  sb.from("app_settings").select("value").eq("key","slack_invite").maybeSingle() // 2026-11-08追加: Slack の招待リンク
  ]);
  if(error)return `<div class="alert">読み込みエラー: ${esc(error.message)}</div>`;
  // 2026-10-17追加: 法人（スマレジの契約リンク＝兼務の人は両方／リンクが無い人は所属店舗の法人）。一覧の絞り込み・検索・CSVに使う
@@ -5151,6 +5163,8 @@ async function adminView(){
  adminStoresMap={};(uss||[]).forEach(x=>{(adminStoresMap[x.user_id]=adminStoresMap[x.user_id]||[]).push(x.store_id)});
  adminProfs={};(profs||[]).forEach(x=>adminProfs[x.user_id]=x); // v2.6.45
  adminBankMap={};(bankRes.data||[]).forEach(x=>adminBankMap[x.user_id]=x); // 2026-09-05追加
+ adminSlackMap={};((slackRes&&slackRes.data)||[]).forEach(x=>adminSlackMap[x.user_id]=x); // 2026-11-08追加
+ adminSlackInvite=(slackInvRes&&slackInvRes.data&&slackInvRes.data.value)||null;
  const order={CEO:0,HQ:1,TEAM:2,TENCHO:3,SHAIN:4,AL:5};
  adminUsers.sort((a,b)=>(order[a.role]??9)-(order[b.role]??9)||a.name.localeCompare(b.name,"ja"));
  const sname=id=>{const s=stores.find(x=>x.id===id);return s?s.name:""};
@@ -5181,6 +5195,7 @@ async function adminView(){
   const missingMatch=u=>{
    if(!auMissing.length)return true;
    if(auMissing.includes("line")&&!u.line_user_id)return true;
+   if(auMissing.includes("slack")&&!adminSlackMap[u.id])return true; // 2026-11-08追加
    if(auMissing.includes("doc")&&submitCountOf(u.id)===0)return true;
    if(bankAllowed&&auMissing.includes("bank")&&!adminBankMap[u.id])return true;
    return false;
@@ -5209,6 +5224,7 @@ async function adminView(){
   <details class="card" id="au-missing-details" style="margin:0 0 8px" ${auMissingOpen?"open":""}>
    <summary style="cursor:pointer">未連携・未提出だけ探す${auMissing.length?`（${auMissing.length}件選択中）`:""} <span class="muted" style="font-size:11px">（複数選択可）</span></summary>
    <label class="radio-row"><input type="checkbox" class="au-missing-cb" value="line" ${auMissing.includes("line")?"checked":""}> 💚 LINE未連携のみ</label>
+   <label class="radio-row"><input type="checkbox" class="au-missing-cb" value="slack" ${auMissing.includes("slack")?"checked":""}> 💬 Slack未連携のみ</label>
    <label class="radio-row"><input type="checkbox" class="au-missing-cb" value="doc" ${auMissing.includes("doc")?"checked":""}> 📎 提出物（身分証明書等）未提出のみ</label>
    ${bankAllowed?`<label class="radio-row"><input type="checkbox" class="au-missing-cb" value="bank" ${auMissing.includes("bank")?"checked":""}> 🏦 振込口座未登録のみ</label>`:""}
   </details>`;
@@ -5223,16 +5239,31 @@ async function adminView(){
     ${lineBulkResult?`<p style="margin-top:8px;font-size:13px">✅ ${lineBulkResult.sentCount}件送信・❌${lineBulkResult.failedCount}件失敗${lineBulkResult.failed&&lineBulkResult.failed.length?`（${lineBulkResult.failed.map(f=>esc(f.name)+":"+esc(f.reason)).join("・")}）`:""}</p>`:""}
    </div>`;
   }
+  // 2026-11-08追加: 「Slack未連携のみ」で絞っているときだけ、照合・一斉招待・招待リンク設定を出す
+  if(auMissing.includes("slack")){
+   const tgt=shown.filter(u=>!adminSlackMap[u.id]&&u.is_active), withLine=tgt.filter(u=>u.line_user_id).length;
+   const canSet=me.is_master||["HQ","CEO"].includes(me.role);
+   h+=`<div class="card" style="border-color:#4a154b;margin-bottom:8px"><h3>💬 Slack 連携</h3>
+    <p class="muted" style="margin:0">管理システムのメールと同じメールで Slack に登録した人は自動で紐づきます（毎朝 9:30 と Slack 参加時）。今すぐ照合することもできます。</p>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn sm sub" id="au-slack-sync">🔄 いま Slack と照合する</button></div>
+    <p style="margin:10px 0 0;font-size:13px"><b>招待リンク:</b> ${adminSlackInvite&&adminSlackInvite.url?`<span style="word-break:break-all">${esc(adminSlackInvite.url)}</span>`:'<span style="color:#c0392b">未設定（Slack の「メンバーを招待」→「招待リンクをコピー」で作ったリンクを下に入れてください）</span>'}</p>
+    ${canSet?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><input type="text" id="au-slack-url" placeholder="https://join.slack.com/t/…" style="flex:1;min-width:220px;margin:0" value="${esc((adminSlackInvite&&adminSlackInvite.url)||"")}"><button class="btn sm sub" id="au-slack-seturl">保存</button></div>`:""}
+    <p class="muted" style="margin:10px 0 0">今表示されている未連携 ${tgt.length} 名のうち、LINE 連携済みの ${withLine} 名へ、招待リンクと「${"管理システムのメールで登録してください"}」の案内を LINE でまとめて送れます。</p>
+    ${slackBulkRunning?`<p class="muted" style="margin-top:8px">送信中…</p>`:`<button class="btn sm" id="au-slack-bulk" style="margin-top:8px" ${withLine&&adminSlackInvite&&adminSlackInvite.url?"":"disabled"}>${withLine}名へ LINE で一斉に招待を送る</button>`}
+    ${slackBulkResult?`<p style="margin-top:8px;font-size:13px">✅ ${slackBulkResult.sent}件送信・❌${slackBulkResult.failed.length}件失敗${slackBulkResult.failed.length?`（${slackBulkResult.failed.map(f=>esc(f.name)+":"+esc(f.reason)).join("・")}）`:""}</p>`:""}
+   </div>`;
+  }
   if(!shown.length)h+=`<p class="muted center" style="margin-top:16px">該当する従業員はいません</p>`;
   // 2026-09-05追加: 「LINE連携されてるか・身分証明書等アップロードしたか・何が提出されてるか」を
   // 一覧で一発で見えるようにしてほしいというユーザー要望に対応
   shown.forEach(u=>{
    const lineBadge=u.line_user_id?'<span class="badge g">💚LINE</span>':'<span class="badge" style="background:#999">LINE未連携</span>';
+   const slackBadge=adminSlackMap[u.id]?'<span class="badge" style="background:#4a154b" title="'+esc(adminSlackMap[u.id].slack_name||"")+'">💬Slack</span>':'<span class="badge" style="background:#999">Slack未連携</span>'; // 2026-11-08追加
    const subN=submitCountOf(u.id);
    const subBadge=subN?`<span class="badge b">📎提出${subN}件</span>`:"";
    const bank=adminBankMap[u.id];
    const bankBadge=bankAllowed?(bank?(bank.payment_method==="cash"?'<span class="badge g">💴現金手渡し</span>':'<span class="badge g">🏦口座登録済</span>'):'<span class="badge" style="background:#c0392b">🏦振込先未登録</span>'):"";
-   h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b>${ageOf(u.id)!=null?`（${ageOf(u.id)}）`:""} <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">退職・無効</span>'} ${lineBadge}${subBadge?" "+subBadge:""}${bankBadge?" "+bankBadge:""}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}${(adminCorpOf[u.id]||[]).length?" ／ 🏢 "+adminCorpOf[u.id].map(esc).join("・"):""}${(!u.is_active&&u.deactivated_at)?" ／ 退職 "+new Date(u.deactivated_at).toLocaleDateString("ja-JP"):""}</span></span><span class="muted">›</span></div>`;
+   h+=`<div class="row" data-au="${u.id}"><span><b>${esc(u.name)}</b>${ageOf(u.id)!=null?`（${ageOf(u.id)}）`:""} <span class="badge b">${ROLE_NAME[u.role]||u.role}</span>${u.concurrent_role?' <span class="badge g">店長兼任</span>':""}${u.is_active?"":' <span class="badge">退職・無効</span>'} ${lineBadge} ${slackBadge}${subBadge?" "+subBadge:""}${bankBadge?" "+bankBadge:""}<br><span class="muted">${esc(u.email)} ／ ${(adminStoresMap[u.id]||[]).map(sname).filter(Boolean).join("・")||"所属なし"}${(adminCorpOf[u.id]||[]).length?" ／ 🏢 "+adminCorpOf[u.id].map(esc).join("・"):""}${(!u.is_active&&u.deactivated_at)?" ／ 退職 "+new Date(u.deactivated_at).toLocaleDateString("ja-JP"):""}</span></span><span class="muted">›</span></div>`;
   });
  }
  return h;
@@ -6813,8 +6844,24 @@ async function adminEditView(){
    </div>`
   :`<p class="muted" style="margin:0">❌ 未連携です。今後シフト提出の締切通知等がLINEに届くようになります。</p>
    <button class="btn sm" id="eu-line-issue" style="margin-top:8px">🔗 連携用の合言葉を発行する</button>`}
- </div>
- <div class="card"><h3>📎 提出物</h3>
+ </div>`;
+ // 2026-11-08追加: Slack 連携（入社後の連絡は Slack へ。メール一致で自動紐づけ／LINE で招待を送る／手で紐づける）
+ {const sl=adminSlackMap[u.id];
+ h+=`<div class="card"><h3>💬 Slack連携</h3>
+  ${sl?`<p style="margin:0">✅ 連携済み：<b>${esc(sl.slack_name||sl.slack_display_name||sl.slack_user_id)}</b>${sl.matched_at?`（${new Date(sl.matched_at).toLocaleDateString("ja-JP")}・${SLACK_MATCH_LABEL[sl.matched_by]||sl.matched_by||""}）`:""}</p>
+   <p class="muted" style="font-size:12px;margin:4px 0 0">Slack ID: ${esc(sl.slack_user_id)}。勤怠確認のボタンや承認依頼がこの人の Slack に届きます。</p>
+   <button class="btn sm sub" id="eu-slack-unlink" style="margin-top:8px">紐づけを外す（別の人に紐づいていた時など）</button>`
+  :`<p class="muted" style="margin:0">❌ 未連携です。本人が「${esc(u.email)}」で Slack に登録すると自動で紐づきます。</p>
+   ${adminSlackInvite&&adminSlackInvite.url?"":`<p style="margin:6px 0 0;font-size:12px;color:#c0392b">招待リンクが未設定です（従業員一覧 →「未連携・未提出だけ探す」→ Slack未連携のみ → 招待リンクを保存）。</p>`}
+   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+    <button class="btn sm" id="eu-slack-invite" ${u.line_user_id&&adminSlackInvite&&adminSlackInvite.url?"":"disabled"} title="${u.line_user_id?"":"LINE 未連携のため LINE では送れません"}">📱 LINE で Slack の招待を送る</button>
+    <button class="btn sm sub" id="eu-slack-copy" ${adminSlackInvite&&adminSlackInvite.url?"":"disabled"}>📋 招待の文面をコピー（手渡し用）</button>
+    <button class="btn sm sub" id="eu-slack-pick">👤 Slack のメンバーから選んで紐づける</button>
+   </div>
+   ${slackMembers?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><select id="eu-slack-sel" style="flex:1;min-width:220px;margin:0"><option value="">（メールが違う人を手で紐づける）</option>${slackMembers.filter(m=>!m.linked_user_id).map(m=>`<option value="${esc(m.id)}">${esc(m.name)}${m.display_name?"（"+esc(m.display_name)+"）":""} ${esc(m.email_masked)}</option>`).join("")}</select><button class="btn sm" id="eu-slack-link">この人に紐づける</button></div>
+   <p class="muted" style="font-size:11px;margin:4px 0 0">まだ誰にも紐づいていない Slack メンバーだけ出しています。</p>`:""}`}
+ </div>`;}
+ h+=`<div class="card"><h3>📎 提出物</h3>
   <p style="font-size:13px;line-height:1.9;margin:0">${(()=>{const items=Object.entries((prof&&prof.extra)||{}).filter(([,v])=>Array.isArray(v)&&v.length);return items.length?items.map(([k,v])=>`${esc(k)}: `+v.map((ph,x)=>`<a data-photo-src="${esc(ph)}" href="#" target="_blank">写真${x+1}</a>`).join(" ")).join("<br>"):'<span class="muted">提出物なし</span>'})()}</p>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
    <input type="text" id="eu-doclabel" placeholder="項目名（例: 身分証明書）" style="flex:1;min-width:140px;margin:0">
@@ -11994,6 +12041,40 @@ function bindPage(){
   if(u){u.line_user_id=null;u.line_linked_at=null}
   adminLineLinkInfo=null;toast("LINE連携を解除しました");render();
  };
+ // 2026-11-08追加: Slack 連携の操作
+ if($("eu-slack-invite"))$("eu-slack-invite").onclick=async()=>{
+  if(!confirm("この人の LINE に Slack の招待リンクを送ります。よろしいですか？"))return;
+  $("eu-slack-invite").disabled=true;
+  const r=await slackLinkApi({op:"invite",user_id:adminDetail,channel:"line"});
+  if(!r||!r.ok){toast("送れませんでした: "+((r&&r.error)||"不明"),true);$("eu-slack-invite").disabled=false;return}
+  toast("LINE に Slack の招待を送りました");
+ };
+ if($("eu-slack-copy"))$("eu-slack-copy").onclick=async()=>{
+  const r=await slackLinkApi({op:"invite",user_id:adminDetail,channel:"copy"});
+  if(!r||!r.text){toast("文面を作れませんでした: "+((r&&r.error)||"不明"),true);return}
+  try{await navigator.clipboard.writeText(r.text);toast("招待の文面をコピーしました（LINE やメールに貼って渡してください）")}catch(e){prompt("コピーして渡してください",r.text)}
+ };
+ if($("eu-slack-pick"))$("eu-slack-pick").onclick=async()=>{
+  $("eu-slack-pick").disabled=true;$("eu-slack-pick").textContent="読み込み中…";
+  const r=await slackLinkApi({op:"members"});
+  if(!r||!r.ok){toast("Slack のメンバーを取れませんでした: "+((r&&r.error)||"不明"),true);$("eu-slack-pick").disabled=false;$("eu-slack-pick").textContent="👤 Slack のメンバーから選んで紐づける";return}
+  slackMembers=r.members||[];render();
+ };
+ if($("eu-slack-link"))$("eu-slack-link").onclick=async()=>{
+  const sid=$("eu-slack-sel").value;if(!sid){toast("Slack のメンバーを選んでください",true);return}
+  const m=(slackMembers||[]).find(x=>x.id===sid);
+  if(!confirm(`${(adminUsers.find(x=>x.id===adminDetail)||{}).name} さんを Slack の「${m?m.name:sid}」に紐づけます。よろしいですか？`))return;
+  const r=await slackLinkApi({op:"link",user_id:adminDetail,slack_user_id:sid});
+  if(!r||!r.ok){toast("紐づけできませんでした: "+((r&&r.error)||"不明"),true);return}
+  adminSlackMap[adminDetail]={user_id:adminDetail,slack_user_id:sid,slack_name:r.slack_name||(m&&m.name)||"",matched_by:"manual",matched_at:new Date().toISOString()};
+  slackMembers=null;toast("Slack と紐づけました");render();
+ };
+ if($("eu-slack-unlink"))$("eu-slack-unlink").onclick=async()=>{
+  if(!confirm("Slack の紐づけを外しますか？（本人の Slack には何も起きません。勤怠確認のボタンは押せなくなります）"))return;
+  const r=await slackLinkApi({op:"unlink",user_id:adminDetail});
+  if(!r||!r.ok){toast("外せませんでした: "+((r&&r.error)||"不明"),true);return}
+  delete adminSlackMap[adminDetail];toast("Slack の紐づけを外しました");render();
+ };
  if($("eu-docupload"))$("eu-docupload").onclick=async()=>{
   const label=$("eu-doclabel").value.trim();
   const files=$("eu-docfile").files;
@@ -12099,6 +12180,40 @@ function bindPage(){
  if($("au-missing-details"))$("au-missing-details").ontoggle=()=>{auMissingOpen=$("au-missing-details").open};
  if($("au-clear"))$("au-clear").onclick=()=>{auRole="";auState="";auStore="";auCorp="";auMissing=[];render()};
  if($("au-csv"))$("au-csv").onclick=exportEmployeeCsv; // 2026-09-05追加
+ // 2026-11-08追加: Slack の照合・招待リンク設定・一斉招待
+ if($("au-slack-sync"))$("au-slack-sync").onclick=async()=>{
+  $("au-slack-sync").disabled=true;$("au-slack-sync").textContent="照合中…";
+  const r=await slackLinkApi({op:"sync"});
+  if(!r||!r.ok){toast("照合できませんでした: "+((r&&r.error)||"不明"),true);render();return}
+  const nl=(r.newly_linked||[]).map(x=>x.name).join("・");
+  toast(`照合しました: 紐づき ${r.linked}名${r.newly_linked&&r.newly_linked.length?`（新しく: ${nl}）`:""}／未連携 ${r.unlinked_users}名／Slack 側で該当なし ${r.unmatched_slack?r.unmatched_slack.length:0}名`);
+  render();
+ };
+ if($("au-slack-seturl"))$("au-slack-seturl").onclick=async()=>{
+  const url=$("au-slack-url").value.trim();if(!url){toast("招待リンクを入れてください",true);return}
+  const r=await slackLinkApi({op:"set_invite",url});
+  if(!r||!r.ok){toast("保存できませんでした: "+((r&&r.error)||"不明"),true);return}
+  adminSlackInvite={url};toast("招待リンクを保存しました");render();
+ };
+ if($("au-slack-bulk"))$("au-slack-bulk").onclick=async()=>{
+  const targets=adminUsers.filter(u=>{
+   if(auRole&&u.role!==auRole)return false;
+   if(auState==="active"&&!u.is_active)return false;
+   if(auState==="inactive"&&u.is_active)return false;
+   if(auStore&&!(adminStoresMap[u.id]||[]).includes(auStore))return false;
+   if(auCorp&&!(adminCorpOf[u.id]||[]).includes(auCorp))return false;
+   return u.is_active&&!adminSlackMap[u.id]&&!!u.line_user_id;
+  });
+  if(!targets.length){toast("対象者がいません",true);return}
+  if(!confirm(`${targets.length}名の LINE に Slack の招待リンクを送ります。よろしいですか？`))return;
+  slackBulkRunning=true;slackBulkResult=null;render();
+  const res={sent:0,failed:[]};
+  for(const u of targets){
+   try{const r=await slackLinkApi({op:"invite",user_id:u.id,channel:"line"});if(r&&r.ok)res.sent++;else res.failed.push({name:u.name,reason:(r&&r.error)||"不明"})}catch(e){res.failed.push({name:u.name,reason:String(e)})}
+   await new Promise(r=>setTimeout(r,250));
+  }
+  slackBulkRunning=false;slackBulkResult=res;render();
+ };
  if($("au-linebulk"))$("au-linebulk").onclick=async()=>{ // 2026-09-07追加
   const targetIds=adminUsers.filter(u=>{
    if(auRole&&u.role!==auRole)return false;

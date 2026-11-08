@@ -1782,6 +1782,8 @@ async function loadMe(uid,opts){
   await new Promise(r=>setTimeout(r,400));
  }
  if(!u){renderLogin("ユーザー情報を取得できませんでした。管理者にお問い合わせください。");await sb.auth.signOut();return}
+ // 2026-11-08追加: Slack 紐づけ済みなら LINE 関係の表示は出さない（入社後の連絡は Slack。LINE 連携は Slack 紐づけ時に自動で外れる）
+ try{const {data:sl0}=await sb.from("user_slack").select("slack_user_id").eq("user_id",u.id).maybeSingle();meSlackLinked=!!sl0}catch(e){meSlackLinked=null}
  if(!u.is_active){
   // 2026-10-03追加(補足Q1=a): 退職後も「📄 自分の書類」（源泉徴収票等）だけは本人が見られる。
   //   hr_documentsに本人の行がある場合に限り、書類ページ専用でログインを通す（他の画面・データは
@@ -1800,8 +1802,8 @@ async function loadMe(uid,opts){
  // （応募者としてLINE連携済みなら register_via_invite 側で既に引き継がれているのでここには来ない）
  if(opts&&opts.afterJoin){
   // 2026-11-08: Slack（入社後の連絡先）が未連携なら案内を出す。LINE 未連携も従来どおり案内（Slack 移行が終わるまで）
-  try{const [{data:sl},{data:inv}]=await Promise.all([sb.from("user_slack").select("slack_user_id").eq("user_id",u.id).maybeSingle(),sb.from("app_settings").select("value").eq("key","slack_invite").maybeSingle()]);meSlackLinked=!!sl;joinSlackInvite=(inv&&inv.value)||null}catch(e){meSlackLinked=null;joinSlackInvite=null}
-  if(!u.line_user_id||meSlackLinked===false)showLineJoinPrompt=true;
+  try{const {data:inv}=await sb.from("app_settings").select("value").eq("key","slack_invite").maybeSingle();joinSlackInvite=(inv&&inv.value)||null}catch(e){joinSlackInvite=null}
+  if(!meSlackLinked)showLineJoinPrompt=true;
  }
  stores=st||[];
  { // v2.7 バグ修正: 本部(hq_pseudo_store)等の疑似店舗を、店舗の所属選択肢（従業員編集・招待・シフト管理等）に含める
@@ -3301,7 +3303,7 @@ async function sfSubmitView(){
     <p style="margin:8px 0 0;font-size:13px">入力済 ${enteredCount} / ${dates.length}日</p>
     <p style="margin:4px 0 0;font-size:13px">未入力 ${dates.length-enteredCount}日</p>
     <p style="margin:4px 0 0;font-size:13px">提出期限 ${p.deadline.getMonth()+1}/${p.deadline.getDate()}</p>
-    <p style="margin:8px 0 0">${me.line_user_id?'<span class="sf-badge green">LINE連携済</span>':'<span class="sf-badge red">LINE未連携</span>'}</p>
+    <p style="margin:8px 0 0">${meSlackLinked?'<span class="sf-badge green">Slack連携済</span>':me.line_user_id?'<span class="sf-badge green">LINE連携済</span>':'<span class="sf-badge red">LINE未連携</span>'}</p>
    </div>
   </div></div>
  </div>`;
@@ -5035,7 +5037,7 @@ async function exportEmployeeCsv(){
   if(auStore&&!(adminStoresMap[u.id]||[]).includes(auStore))return false;
    if(auCorp&&!(adminCorpOf[u.id]||[]).includes(auCorp))return false; // 2026-10-17追加: 法人で絞り込み
   if(auMissing.length){
-   const hit=(auMissing.includes("line")&&!u.line_user_id)||(auMissing.includes("slack")&&!adminSlackMap[u.id])||(auMissing.includes("doc")&&submitCountOf(u.id)===0)||(bankAllowed&&auMissing.includes("bank")&&!adminBankMap[u.id]);
+   const hit=(auMissing.includes("line")&&!u.line_user_id&&!adminSlackMap[u.id])||(auMissing.includes("slack")&&!adminSlackMap[u.id])||(auMissing.includes("doc")&&submitCountOf(u.id)===0)||(bankAllowed&&auMissing.includes("bank")&&!adminBankMap[u.id]);
    if(!hit)return false;
   }
   if(q){
@@ -5199,7 +5201,7 @@ async function adminView(){
   // 複数選択（OR条件＝どれか1つでも当てはまる人を表示）
   const missingMatch=u=>{
    if(!auMissing.length)return true;
-   if(auMissing.includes("line")&&!u.line_user_id)return true;
+   if(auMissing.includes("line")&&!u.line_user_id&&!adminSlackMap[u.id])return true;
    if(auMissing.includes("slack")&&!adminSlackMap[u.id])return true; // 2026-11-08追加
    if(auMissing.includes("doc")&&submitCountOf(u.id)===0)return true;
    if(bankAllowed&&auMissing.includes("bank")&&!adminBankMap[u.id])return true;
@@ -5237,7 +5239,7 @@ async function adminView(){
   // 大変」に対応。「LINE未連携のみ」で絞り込んでいるときだけ、今表示されている人たちへ
   // まとめてLINE連携メールを送るボタンを出す（既に合言葉が発行済みの人はその合言葉を使い回す）
   if(auMissing.includes("line")){
-   const targetCount=shown.filter(u=>!u.line_user_id).length;
+   const targetCount=shown.filter(u=>!u.line_user_id&&!adminSlackMap[u.id]).length;
    h+=`<div class="card" style="border-color:var(--blue);margin-bottom:8px"><h3>📧 LINE連携メールの一斉送信</h3>
     <p class="muted" style="margin:0">今表示されている未連携の${targetCount}名へ、登録メールアドレス宛にLINE連携のお願いメールをまとめて送ります（合言葉が未発行の人はこのタイミングで発行されます）。</p>
     ${lineBulkRunning?`<p class="muted" style="margin-top:8px">送信中…（人数が多いと数十秒かかります）</p>`:`<button class="btn sm" id="au-linebulk" style="margin-top:8px">${targetCount}名へ一斉送信する</button>`}
@@ -5262,7 +5264,7 @@ async function adminView(){
   // 2026-09-05追加: 「LINE連携されてるか・身分証明書等アップロードしたか・何が提出されてるか」を
   // 一覧で一発で見えるようにしてほしいというユーザー要望に対応
   shown.forEach(u=>{
-   const lineBadge=u.line_user_id?'<span class="badge g">💚LINE</span>':'<span class="badge" style="background:#999">LINE未連携</span>';
+   const lineBadge=adminSlackMap[u.id]?"":u.line_user_id?'<span class="badge g">💚LINE</span>':'<span class="badge" style="background:#999">LINE未連携</span>'; // 2026-11-08: Slack 紐づけ済みは LINE を見せない
    const slackBadge=adminSlackMap[u.id]?'<span class="badge" style="background:#4a154b" title="'+esc(adminSlackMap[u.id].slack_name||"")+'">💬Slack</span>':'<span class="badge" style="background:#999">Slack未連携</span>'; // 2026-11-08追加
    const subN=submitCountOf(u.id);
    const subBadge=subN?`<span class="badge b">📎提出${subN}件</span>`:"";
@@ -6838,7 +6840,7 @@ async function adminEditView(){
  <p class="muted" style="margin-top:-8px">${esc(u.email)}</p>`;
  // 2026-09-05追加: 「LINE連携はどこでやるの？身分証明書の追加は？口座情報は？」というユーザー要望に
  // 対応し、見るだけでなくこの画面から本人に代わって操作できるようにした
- h+=`<div class="card"><h3>💚 LINE連携</h3>
+ if(!adminSlackMap[u.id])h+=`<div class="card"><h3>💚 LINE連携</h3>
   ${u.line_user_id?`<p style="margin:0">✅ 連携済み${u.line_linked_at?`（${new Date(u.line_linked_at).toLocaleDateString("ja-JP")}）`:""}</p>
    <button class="btn sm sub" id="eu-line-unlink" style="margin-top:8px">連携を解除する（機種変更時など）</button>`
   :adminLineLinkInfo&&adminLineLinkInfo.oa?`
@@ -9957,7 +9959,7 @@ async function lineJoinPromptView(){
    ${joinSlackInvite&&joinSlackInvite.url?`<a href="${esc(joinSlackInvite.url)}" class="btn" style="background:#4a154b;display:block;text-align:center;text-decoration:none;color:#fff;font-size:17px;padding:15px" target="_blank" rel="noopener">💬 Slack に登録する</a>`:`<p class="muted" style="margin:0">招待リンクは本部から LINE かメールで届きます（届かないときは店長に聞いてください）。</p>`}
    <button class="btn sm" id="slack-join-check" style="margin-top:14px;width:100%">🔄 Slack に登録した／紐づいたか確認する</button>
   </div>`;
- if(me.line_user_id)return slackBox+`<p style="margin-top:14px"><button class="btn sm sub" id="line-join-skip" style="width:100%">あとで登録する（スキップ）</button></p>`;
+ if(me.line_user_id||meSlackLinked)return slackBox+`<p style="margin-top:14px"><button class="btn sm sub" id="line-join-skip" style="width:100%">あとで登録する（スキップ）</button></p>`;
  return slackBox+`<div class="card"><h3>💚 LINE連携もお願いします</h3>
   <p class="muted" style="margin:0">Slack への切り替えが終わるまでは、シフト提出の締切などのお知らせは LINE にも届きます。</p>
   ${lineLinkInfo&&lineLinkInfo.oa?`
@@ -10023,7 +10025,7 @@ async function settingsView(){
    <input type="password" id="pf-pw" placeholder="新しいパスワード（8文字以上）" autocomplete="new-password">
    <input type="password" id="pf-pw2" placeholder="確認のためもう一度" autocomplete="new-password">
    <button class="btn sm" id="pf-pwsave">パスワードを変更</button></div>
-  <div class="card"><h3>💚 シフト連絡用LINE</h3>
+  ${meSlackLinked?`<div class="card"><h3>💬 連絡は Slack に届きます</h3><p class="muted" style="margin:0">Slack と紐づいています。勤怠の確認やお知らせは Slack に届きます（LINE の連携は使いません）。</p></div>`:`<div class="card"><h3>💚 シフト連絡用LINE</h3>
    <p class="muted" style="margin:0">シフト提出の締切が近いときなどに、LINEでお知らせが届くようになります。</p>
    ${me.line_user_id?`
     <p style="margin:10px 0 0">✅ 連携済みです</p>
@@ -10038,7 +10040,7 @@ async function settingsView(){
    `:`
     <button class="btn sm" id="line-link-start" style="margin-top:8px">LINEと連携する</button>
    `}
-  </div>`;
+  </div>`}`;
  if(can("format_config")){
   h+=`<div class="card"><h3>🛠 カスタマイズ</h3>
    <button class="btn sm" id="set-join" style="margin-bottom:8px">入社フォームの項目設定</button>
@@ -12263,7 +12265,7 @@ function bindPage(){
    if(auState==="inactive"&&u.is_active)return false;
    if(auStore&&!(adminStoresMap[u.id]||[]).includes(auStore))return false;
    if(auCorp&&!(adminCorpOf[u.id]||[]).includes(auCorp))return false; // 2026-10-17追加: 法人で絞り込み
-   return !u.line_user_id;
+   return !u.line_user_id&&!adminSlackMap[u.id]; // 2026-11-08: Slack 紐づけ済みには LINE 連携メールを送らない
   }).map(u=>u.id);
   if(!targetIds.length){toast("対象者がいません",true);return}
   if(!confirm(`${targetIds.length}名へLINE連携メールを送信します。よろしいですか？`))return;

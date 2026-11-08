@@ -9957,6 +9957,7 @@ async function lineJoinPromptView(){
    <p style="margin:8px 0 12px;font-size:14px">勤怠の確認・シフト・お知らせは <b>Slack</b> に届きます。下のボタンから登録してください。<br>
     <b>登録するメールは、いま入社登録で使った「${esc(me.email||"")}」にしてください。</b>同じメールだと自動で管理システムと紐づきます。</p>
    ${joinSlackInvite&&joinSlackInvite.url?`<a href="${esc(joinSlackInvite.url)}" class="btn" style="background:#4a154b;display:block;text-align:center;text-decoration:none;color:#fff;font-size:17px;padding:15px" target="_blank" rel="noopener">💬 Slack に登録する</a>`:`<p class="muted" style="margin:0">招待リンクは本部から LINE かメールで届きます（届かないときは店長に聞いてください）。</p>`}
+   <p style="margin:10px 0 0;font-size:13px;text-align:center"><a href="${esc((joinSlackInvite&&joinSlackInvite.guide_url)||"https://mirai-oss.github.io/ns-portal/docs/guide_slack_setup.pdf")}" target="_blank" rel="noopener">📄 登録のしかた・顔写真の登録方法（PDF）</a></p>
    <button class="btn sm" id="slack-join-check" style="margin-top:14px;width:100%">🔄 Slack に登録した／紐づいたか確認する</button>
   </div>`;
  if(me.line_user_id||meSlackLinked)return slackBox+`<p style="margin-top:14px"><button class="btn sm sub" id="line-join-skip" style="width:100%">あとで登録する（スキップ）</button></p>`;

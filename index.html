@@ -3175,8 +3175,12 @@ let sfCorrectionEditKey=null; // B-1(2026-08-29) "uid|ds|kind"。勤怠修正申
 let arStore=null,arMode="half",arMonth=null,arHalf=null,arDate=null,arFrom=null,arTo=null; // v2.7 実績確認（シフトから分離。日別/半月/月次/期間で自由に遡れる）
 let sfActualSub="fulfill"; // 2026-08-29続き（モックアップ準拠）: ④実績・差分のサブタブ（叶え率／差分）
 
+// 2026-11-08 ユーザー指示: 全員向けのシフト締切・提出リマインド等の LINE 通知は停止（Slack に専用チャンネルを作ってから移す）。
+//   false の間は、自動リマインド（sfEnsureReminders）と手動の再通知・未提出通知・出勤強化日の通知を送らない（画面には「停止中」と出す）
+const LINE_SHIFT_NOTIFY=false;
 // v2.6.81 未提出者へのLINEリマインド。hq_generate_today()と同じ「画面を開いたときにチェック」方式（外部cronなし）
 async function sfEnsureReminders(){
+ if(!LINE_SHIFT_NOTIFY)return; // 2026-11-08 停止中
  if(!(me.is_master||["CEO","HQ","TEAM","TENCHO"].includes(me.role)))return;
  if(sessionStorage.getItem("sf_reminder_checked_"+todayStr()))return; // 同じセッション内で2回叩かない（最終防衛はDB側のユニーク制約）
  sessionStorage.setItem("sf_reminder_checked_"+todayStr(),"1");
@@ -4393,6 +4397,7 @@ function bindShiftPage(){
  document.querySelectorAll("[data-sfreqday]").forEach(b=>b.onclick=()=>{sfReqDate=b.dataset.sfreqday;render()});
  // B-2 ③ 未確認者への再通知・変更申請の対応済み処理（店長・本部）
  if($("sfcf-notify"))$("sfcf-notify").onclick=async()=>{
+  if(!LINE_SHIFT_NOTIFY){toast("LINE での通知は停止中です（Slack のシフト用チャンネルを準備中）",true);return} // 2026-11-08
   $("sfcf-notify").disabled=true;
   const p=sfPeriodFromIdx(sfMgPeriodIdx);
   const [{data:shifts},{data:members}]=await Promise.all([
@@ -4472,6 +4477,7 @@ function bindShiftPage(){
  // A-2(2026-08-29) 未提出者に通知（まだ1日も入力していない人へ・手動）。
  //   sf_reminder_targets（自動リマインド）は「今日が締切日」限定なので、それとは別物として今すぐ送る
  if($("sfmg-notify-unsubmitted"))$("sfmg-notify-unsubmitted").onclick=async()=>{
+  if(!LINE_SHIFT_NOTIFY){toast("LINE での通知は停止中です（Slack のシフト用チャンネルを準備中）",true);return} // 2026-11-08
   const b=$("sfmg-notify-unsubmitted");b.disabled=true;
   const p=sfPeriodFromIdx(sfMgPeriodIdx);
   const dates=sfDateList(p);
@@ -4500,8 +4506,8 @@ function bindShiftPage(){
   b.disabled=true;
   const {error}=await sb.from("sf_boost_days").upsert({store_id:sfMgStore,work_date:ds,message:message||null,incentive_type:type,incentive_amount:amount,created_by:me.id,updated_at:new Date().toISOString()},{onConflict:"store_id,work_date"});
   if(error){toast("保存エラー: "+error.message,true);b.disabled=false;return}
-  // 対象店舗の全員へLINE即時通知
-  const {data:members}=await sb.from("user_stores").select("users(id,name,line_user_id,is_active)").eq("store_id",sfMgStore);
+  // 対象店舗の全員へLINE即時通知（2026-11-08: LINE 通知停止中は保存だけして送らない）
+  const {data:members}=LINE_SHIFT_NOTIFY?await sb.from("user_stores").select("users(id,name,line_user_id,is_active)").eq("store_id",sfMgStore):{data:[]};
   const targets=(members||[]).map(m=>m.users).filter(u=>u&&u.is_active&&u.line_user_id);
   const incentiveText=type==="hourly"?`（時給+${amount||0}円）`:type==="shift"?`（1勤務+${amount||0}円）`:"";
   let sent=0;

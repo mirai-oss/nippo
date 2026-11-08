@@ -604,6 +604,7 @@ let lineToken=null,lineSecret=null,lineOa=null; // v2.6.20 求人用LINE
 let lineHealthChecked=false,lineHealthOk=null,lineHealthErr=""; // 2026-08-28 LINE接続の生存確認（応募者管理を開くたびに1回・ユーザー報告への対応）
 let lineLinkInfo=null; // v2.6.81 従業員本人のLINE連携（発行した合言葉・OA。応募者側のline_intakeとは独立）
 let showLineJoinPrompt=false; // 2026-09-01追加: 入社登録直後、LINE未連携ならその場で連携を促す画面を出すフラグ
+let meSlackLinked=null,joinSlackInvite=null; // 2026-11-08追加: 入社登録直後の Slack 登録案内（方針: 入社後の連絡は Slack。登録メール＝管理システムのメールで自動紐づけ）
 let dashId=null,dashPw=null,dashLog; // v2.6.57 売上ダッシュボード連携
 let teams=[],euTeam=null,lrList=null,lrEdit=null; // v2.6.2 チーム・日報Lark通知
 // v2.6.3 Lark通知のイベント（この動きがあったら通知する）
@@ -1797,7 +1798,11 @@ async function loadMe(uid,opts){
  }
  // 2026-09-01追加: 入社登録直後にLINEが未連携なら、ホーム画面の前にその場で連携を促す
  // （応募者としてLINE連携済みなら register_via_invite 側で既に引き継がれているのでここには来ない）
- if(opts&&opts.afterJoin&&!u.line_user_id)showLineJoinPrompt=true;
+ if(opts&&opts.afterJoin){
+  // 2026-11-08: Slack（入社後の連絡先）が未連携なら案内を出す。LINE 未連携も従来どおり案内（Slack 移行が終わるまで）
+  try{const [{data:sl},{data:inv}]=await Promise.all([sb.from("user_slack").select("slack_user_id").eq("user_id",u.id).maybeSingle(),sb.from("app_settings").select("value").eq("key","slack_invite").maybeSingle()]);meSlackLinked=!!sl;joinSlackInvite=(inv&&inv.value)||null}catch(e){meSlackLinked=null;joinSlackInvite=null}
+  if(!u.line_user_id||meSlackLinked===false)showLineJoinPrompt=true;
+ }
  stores=st||[];
  { // v2.7 バグ修正: 本部(hq_pseudo_store)等の疑似店舗を、店舗の所属選択肢（従業員編集・招待・シフト管理等）に含める
   const {data:sh}=await sb.from("stores").select("id,name").eq("is_active",false).not("smaregi_store_id","is",null).order("sort_order");
@@ -9942,8 +9947,19 @@ let gasSaved=null,gasCalNow=""; // v2.6.38 面接Meetの接続先が登録済み
 // 2026-09-01追加: 入社登録直後、LINE未連携ならその場で連携してもらう画面。
 // 「LINEと連携する」の実体は settings画面と同じ user_issue_line_code（bindPage()側のハンドラを共用）
 async function lineJoinPromptView(){
- return `<div class="card"><h3>💚 最後にLINE連携をお願いします</h3>
-  <p class="muted" style="margin:0">今後、シフト提出の締切が近いときなどのお知らせはLINEで届きます。入社登録の完了案内もこちらに届きますので、いま連携をお願いします。</p>
+ // 2026-11-08追加: Slack の登録案内を先頭に（入社後の連絡は Slack）。登録メールを管理システムと同じにすれば自動で紐づく
+ const slackBox=meSlackLinked?`<div class="card" style="background:#f3eef5;border:2px solid #4a154b"><h3 style="margin:0">💬 Slack は登録済みです</h3><p class="muted" style="margin:6px 0 0">勤怠の確認やお知らせは Slack に届きます。</p></div>`
+  :`<div class="card" style="background:#f3eef5;border:3px solid #4a154b;padding:18px 16px">
+   <p style="margin:0 0 4px;text-align:center;font-size:13px;color:#4a154b;font-weight:700">入社後の連絡は Slack です</p>
+   <h3 style="margin:0;text-align:center;font-size:18px">💬 Slack にご登録をお願いします</h3>
+   <p style="margin:8px 0 12px;font-size:14px">勤怠の確認・シフト・お知らせは <b>Slack</b> に届きます。下のボタンから登録してください。<br>
+    <b>登録するメールは、いま入社登録で使った「${esc(me.email||"")}」にしてください。</b>同じメールだと自動で管理システムと紐づきます。</p>
+   ${joinSlackInvite&&joinSlackInvite.url?`<a href="${esc(joinSlackInvite.url)}" class="btn" style="background:#4a154b;display:block;text-align:center;text-decoration:none;color:#fff;font-size:17px;padding:15px" target="_blank" rel="noopener">💬 Slack に登録する</a>`:`<p class="muted" style="margin:0">招待リンクは本部から LINE かメールで届きます（届かないときは店長に聞いてください）。</p>`}
+   <button class="btn sm" id="slack-join-check" style="margin-top:14px;width:100%">🔄 Slack に登録した／紐づいたか確認する</button>
+  </div>`;
+ if(me.line_user_id)return slackBox+`<p style="margin-top:14px"><button class="btn sm sub" id="line-join-skip" style="width:100%">あとで登録する（スキップ）</button></p>`;
+ return slackBox+`<div class="card"><h3>💚 LINE連携もお願いします</h3>
+  <p class="muted" style="margin:0">Slack への切り替えが終わるまでは、シフト提出の締切などのお知らせは LINE にも届きます。</p>
   ${lineLinkInfo&&lineLinkInfo.oa?`
    <div style="background:#f0fff4;border:2px solid #06c755;border-radius:8px;padding:14px;margin-top:14px">
     <p style="margin:0 0 10px;font-size:14px">下のボタンを押すとLINEが開き、文字が入った状態になりますので、<b>そのまま送信してください。</b></p>
@@ -12321,6 +12337,12 @@ function bindPage(){
  };
  // 2026-09-01追加: 入社登録直後のLINE連携案内画面
  if($("line-join-skip"))$("line-join-skip").onclick=()=>{showLineJoinPrompt=false;lineLinkInfo=null;render()};
+ if($("slack-join-check"))$("slack-join-check").onclick=async()=>{ // 2026-11-08追加
+  $("slack-join-check").disabled=true;$("slack-join-check").textContent="確認中...";
+  const {data:sl}=await sb.from("user_slack").select("slack_user_id").eq("user_id",me.id).maybeSingle();
+  if(sl){meSlackLinked=true;toast("Slack の登録が確認できました！");if(me.line_user_id){showLineJoinPrompt=false;lineLinkInfo=null}render();}
+  else{toast("まだ確認できませんでした。Slack の登録（メール確認まで）を終えてから、もう一度お試しください。登録したメールが違う場合は本部で紐づけます。",true);$("slack-join-check").disabled=false;$("slack-join-check").textContent="🔄 Slack に登録した／紐づいたか確認する"}
+ };
  if($("line-join-check"))$("line-join-check").onclick=async()=>{
   $("line-join-check").disabled=true;$("line-join-check").textContent="確認中...";
   const {data:u}=await sb.from("users").select("line_user_id,line_linked_at").eq("id",me.id).maybeSingle();

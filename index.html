@@ -5248,8 +5248,8 @@ async function adminView(){
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn sm sub" id="au-slack-sync">🔄 いま Slack と照合する</button><button class="btn sm sub" id="au-slack-testme" ${adminSlackInvite&&adminSlackInvite.url?"":"disabled"}>✉️ 自分（${esc(me.email||"")}）に招待メールを試しに送る</button></div>
     <p style="margin:10px 0 0;font-size:13px"><b>招待リンク:</b> ${adminSlackInvite&&adminSlackInvite.url?`<span style="word-break:break-all">${esc(adminSlackInvite.url)}</span>`:'<span style="color:#c0392b">未設定（Slack の「メンバーを招待」→「招待リンクをコピー」で作ったリンクを下に入れてください）</span>'}</p>
     ${canSet?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><input type="text" id="au-slack-url" placeholder="https://join.slack.com/t/…" style="flex:1;min-width:220px;margin:0" value="${esc((adminSlackInvite&&adminSlackInvite.url)||"")}"><button class="btn sm sub" id="au-slack-seturl">保存</button></div>`:""}
-    <p class="muted" style="margin:10px 0 0">今表示されている未連携 ${tgt.length} 名へ、招待リンクと「管理システムのメールで登録してください」の案内をまとめて送れます（LINE 連携済み ${withLine} 名は LINE、それ以外の ${tgt.length-withLine} 名は登録メール宛）。</p>
-    ${slackBulkRunning?`<p class="muted" style="margin-top:8px">送信中…</p>`:`<button class="btn sm" id="au-slack-bulk" style="margin-top:8px" ${tgt.length&&adminSlackInvite&&adminSlackInvite.url?"":"disabled"}>${tgt.length}名へ一斉に招待を送る（LINE ${withLine}・メール ${tgt.length-withLine}）</button>`}
+    <p class="muted" style="margin:10px 0 0">今表示されている未連携 ${tgt.length} 名へ、招待リンクと「管理システムのメールで登録してください」の案内をまとめて送れます。<b>初めて送る人は LINE とメールの両方</b>（LINE をブロックしている人がいても届くように）、2 回目以降は LINE 連携済みなら LINE、それ以外はメールに送ります（LINE 連携済み ${withLine} 名）。</p>
+    ${slackBulkRunning?`<p class="muted" style="margin-top:8px">送信中…</p>`:`<button class="btn sm" id="au-slack-bulk" style="margin-top:8px" ${tgt.length&&adminSlackInvite&&adminSlackInvite.url?"":"disabled"}>${tgt.length}名へ一斉に招待を送る</button>`}
     ${slackBulkResult?`<p style="margin-top:8px;font-size:13px">✅ ${slackBulkResult.sent}件送信・❌${slackBulkResult.failed.length}件失敗${slackBulkResult.failed.length?`（${slackBulkResult.failed.map(f=>esc(f.name)+":"+esc(f.reason)).join("・")}）`:""}</p>`:""}
    </div>`;
   }
@@ -6854,8 +6854,9 @@ async function adminEditView(){
   :`<p class="muted" style="margin:0">❌ 未連携です。本人が「${esc(u.email)}」で Slack に登録すると自動で紐づきます。</p>
    ${adminSlackInvite&&adminSlackInvite.url?"":`<p style="margin:6px 0 0;font-size:12px;color:#c0392b">招待リンクが未設定です（従業員一覧 →「未連携・未提出だけ探す」→ Slack未連携のみ → 招待リンクを保存）。</p>`}
    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
-    <button class="btn sm" id="eu-slack-invite" ${u.line_user_id&&adminSlackInvite&&adminSlackInvite.url?"":"disabled"} title="${u.line_user_id?"":"LINE 未連携のため LINE では送れません"}">📱 LINE で Slack の招待を送る</button>
-    <button class="btn sm" id="eu-slack-email" ${u.email&&adminSlackInvite&&adminSlackInvite.url?"":"disabled"}>✉️ メール（${esc(u.email||"未登録")}）で送る</button>
+    <button class="btn sm" id="eu-slack-both" ${(u.line_user_id||u.email)&&adminSlackInvite&&adminSlackInvite.url?"":"disabled"}>📱✉️ LINE とメールの両方に送る（初回向け）</button>
+    <button class="btn sm sub" id="eu-slack-invite" ${u.line_user_id&&adminSlackInvite&&adminSlackInvite.url?"":"disabled"} title="${u.line_user_id?"":"LINE 未連携のため LINE では送れません"}">📱 LINE だけ</button>
+    <button class="btn sm sub" id="eu-slack-email" ${u.email&&adminSlackInvite&&adminSlackInvite.url?"":"disabled"}>✉️ メールだけ（${esc(u.email||"未登録")}）</button>
     <button class="btn sm sub" id="eu-slack-copy" ${adminSlackInvite&&adminSlackInvite.url?"":"disabled"}>📋 招待の文面をコピー（手渡し用）</button>
     <button class="btn sm sub" id="eu-slack-pick">👤 Slack のメンバーから選んで紐づける</button>
    </div>
@@ -12050,6 +12051,15 @@ function bindPage(){
   if(!r||!r.ok){toast("送れませんでした: "+((r&&r.error)||"不明"),true);$("eu-slack-invite").disabled=false;return}
   toast("LINE に Slack の招待を送りました");
  };
+ if($("eu-slack-both"))$("eu-slack-both").onclick=async()=>{
+  const uu=adminUsers.find(x=>x.id===adminDetail)||{};
+  if(!confirm(`${uu.name} さんに Slack の招待を LINE${uu.line_user_id?"":"（未連携なので送れません）"}とメール（${uu.email||"未登録"}）の両方に送ります。よろしいですか？`))return;
+  $("eu-slack-both").disabled=true;
+  const r=await slackLinkApi({op:"invite",user_id:adminDetail,channel:"both"});
+  $("eu-slack-both").disabled=false;
+  if(!r||!r.ok){toast("送れませんでした: "+((r&&r.error)||"不明"),true);return}
+  toast("送りました（"+String(r.sent_via||"").replace("line","LINE").replace("email","メール").replace("+","＋")+"）"+(r.warnings&&r.warnings.length?"／一部失敗: "+r.warnings.join("・"):""),!!(r.warnings&&r.warnings.length));
+ };
  if($("eu-slack-email"))$("eu-slack-email").onclick=async()=>{
   const uu=adminUsers.find(x=>x.id===adminDetail)||{};
   if(!confirm(`${uu.email} に Slack の招待リンクをメールで送ります。よろしいですか？`))return;
@@ -12221,7 +12231,7 @@ function bindPage(){
   });
   if(!targets.length){toast("対象者がいません",true);return}
   const nL=targets.filter(u=>u.line_user_id).length;
-  if(!confirm(`${targets.length}名に Slack の招待リンクを送ります（LINE ${nL}名・メール ${targets.length-nL}名）。よろしいですか？`))return;
+  if(!confirm(`${targets.length}名に Slack の招待リンクを送ります（初めての人は LINE とメールの両方、2 回目以降は LINE 連携済み ${nL}名が LINE・ほかはメール）。よろしいですか？`))return;
   slackBulkRunning=true;slackBulkResult=null;render();
   const res={sent:0,failed:[]};
   for(const u of targets){

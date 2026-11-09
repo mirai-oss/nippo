@@ -7282,7 +7282,7 @@ function bindPostJoinForm(uid,via){
   const b=$(prefix+"-submit");b.disabled=true;
   try{
    if(ye){ // v2: 対象年度つき。RPC が年度の引数を持たない版なら p_data.target_year だけで呼び直す
-    let r1=await sb.rpc("onboarding_save_year_end",{p_user:uid,p_data:{...ye,target_year:year},p_via:via,p_target_year:year});
+    let r1=await sb.rpc("onboarding_save_year_end",{p_user:uid,p_data:{...ye,target_year:year},p_via:via,p_year:year});
     if(r1.error&&/p_target_year|PGRST202|does not exist/i.test(r1.error.message||""))r1=await sb.rpc("onboarding_save_year_end",{p_user:uid,p_data:{...ye,target_year:year},p_via:via});
     if(r1.error)throw r1.error;
    }

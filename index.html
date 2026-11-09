@@ -7931,7 +7931,7 @@ async function adminToggle(){
 // 電子サインできるようにしたい。会計・給与仕訳が見れない権限の人でも、店長以上ならこの
 // タブと電子サインの場所を使えるようにしたい」に対応。invoices.html（会計）とは別に、
 // nippo側の独立した画面として作る（cash_handoff_manageフィーチャーで店長以上に開放）。
-let cashMonth=null,cashList=null,cashRecords=null,cashDetail=null,cashCid="",cashHasContract=false,cashPayerSaving=false,cashReceiverSaving=false,cashStoreFilter="",cashWithdrawSaving=false,cashTimer=null;
+let cashMonth=null,cashList=null,cashRecords=null,cashDetail=null,cashCid="",cashHasContract=false,cashCancelReady=false,cashFinCorps=[],cashCancelSaving=false,cashPayerSaving=false,cashReceiverSaving=false,cashStoreFilter="",cashWithdrawSaving=false,cashTimer=null;
 function cashMonthSelectHtml(ym){
  const [y,m]=ym.split("-").map(Number);
  const nowY=new Date().getFullYear();
@@ -8747,6 +8747,7 @@ function bindMyDocsPage(){
 // 2026-11-03追加: 現金手渡しは「支払う会社（法人＝スマレジの契約）」ごとに分ける（兼務の人は法人が違えば別の行・別のサイン）。
 //   DB(cash_handoff_targets/sf_cash_handoff_signatures)が契約対応になっている場合だけ(cashHasContract)契約で絞る＝SQL適用前の旧DBでも従来どおり動く
 const CASH_DEF_CONTRACT="sez093z1"; // 既定の契約（トーホー）。DB側の既定値と同じ
+const CASH_CANCEL_RESET_PAID=false; // U-25の回答待ち: trueにすると取消時に給与仕訳の「振込完了」印(paid_at)もその人×月×法人だけ戻す
 const cashK=(uid,cid)=>uid+"|"+(cid||CASH_DEF_CONTRACT);
 const cashOC=()=>cashHasContract?"user_id,year_month,contract_id":"user_id,year_month";
 const cashCF=()=>cashHasContract?{contract_id:cashCid||CASH_DEF_CONTRACT}:{};
@@ -8767,12 +8768,17 @@ async function cashHandoffView(){
  if(!cashMonthIsAllowed(cashMonth)){
   return h+`<div class="alert" style="margin-top:16px">この月の給料はまだ確定していません。月が終わって翌月になってから（給料月の翌月1日以降）表示されます。月を間違えてのサイン・処理を防ぐための制限です。</div>`;
  }
- const [{data:targets,error:e1},{data:recs,error:e2},{data:hid}]=await Promise.all([
+ const [{data:targets,error:e1},{data:recs,error:e2},{data:hid},{data:fin,error:e3}]=await Promise.all([
   sb.rpc("cash_handoff_targets",{p_year_month:cashMonth}),
   sb.from("sf_cash_handoff_signatures").select("*").eq("year_month",cashMonth),
-  sb.from("sf_payroll_hidden").select("user_id").eq("year_month",cashMonth)
+  sb.from("sf_payroll_hidden").select("user_id").eq("year_month",cashMonth),
+  sb.rpc("cash_handoff_finalized_corps",{p_year_month:cashMonth})
  ]);
  if(e1)return h+`<div class="alert">読み込みエラー: ${esc(e1.message)}</div>`;
+ // 2026-11-09: 給料確定（月×法人）済みの分だけ表示する版のSQLが入っているか（無ければ従来どおり）
+ cashCancelReady=!e3;cashFinCorps=e3?[]:(fin||[]);
+ if(cashCancelReady&&!cashFinCorps.length)return h+`<div class="alert" style="margin-top:16px">この月は、まだ「給料確定」が押されていません。給与仕訳で給料確定をすると、その会社の現金手渡しの対象者がここに表示されます。</div>`;
+ if(cashCancelReady)h+=`<p class="muted" style="font-size:11px;margin:4px 0">給料確定済み: ${cashFinCorps.map(c=>esc(c.corp_name)).join("・")}</p>`;
  // 2026-10-07修正（ユーザー報告「給料確定タスクの人数は直ったが現金手渡し・サインが更新されていない」）:
  // 従来は在籍中(is_active)のみ表示していたため、退職済みでも給与が出ている人が漏れ、逆に「この月は対象外（非表示）」
  // にした人や金額0円の人が混ざっていた。給与仕訳の画面・本部タスク（hq_create_payroll_tasks）と同じ基準に揃える:
@@ -8926,7 +8932,13 @@ async function cashHandoffDetailView(){
  if(rec&&rec.payer_checked_at&&rec.receiver_checked_at&&!rec.completed_at){
   h+=`<button class="btn" id="cash-complete">✅ 両者確認済み・この受け渡しを完了にする</button>`;
  }
- if(rec&&rec.completed_at){
+ if(cashCancelReady&&rec&&(rec.payer_checked_at||rec.receiver_checked_at||rec.completed_at)){
+  // 2026-11-09追加（U-24）: 手渡しの取消。サイン・確認日時・完了日時をリセットして最初からやり直せる。サイン画像は消さず退避し、取消履歴に残す
+  h+=`${rec.completed_at?`<div class="info">🎉 ${new Date(rec.completed_at).toLocaleString("ja-JP")} に完了しました。</div>`:""}
+  <button class="btn sm sub" id="cash-cancel" style="margin-top:6px" ${cashCancelSaving?"disabled":""}>${cashCancelSaving?"取消中...":"↩️ 手渡しを取り消す（サイン・確認をやり直す）"}</button>
+  <p class="muted" style="font-size:11px;margin:4px 0 0">※渡した側・受け取った側のサインと確認がリセットされ、もう一度サインできます。以前のサイン画像は消さずに履歴へ残ります（誰が・いつ・理由も記録）。引き出し確認はそのまま残ります。</p>`;
+ }
+ if(!cashCancelReady&&rec&&rec.completed_at){
   // 2026-09-09追加: ユーザー要望「間違えて手渡し。サイン完了したときに取り消しできるように
   // してほしい」に対応。完了フラグ（completed_at）だけを取り消すボタンを追加（引き出し確認の
   // 取り消し＝cash-withdraw-undoと同じ考え方）。給与仕訳側の「振込完了」（payroll_journal_records.
@@ -8936,6 +8948,14 @@ async function cashHandoffDetailView(){
   h+=`<div class="info">🎉 ${new Date(rec.completed_at).toLocaleString("ja-JP")} に完了しました。給与仕訳・会計ダッシュボードの状態も「振込完了」に更新されています。</div>
   <button class="btn sm sub" id="cash-complete-undo" style="margin-top:6px">↩️ 完了を取り消す（間違えて完了にした場合）</button>
   <p class="muted" style="font-size:11px;margin:4px 0 0">※ここでの取り消しは「サイン完了」の状態だけを戻します。給与仕訳側で既に「振込完了」扱いになっている場合は、そちらは別途、給与仕訳タブの「振込完了を取り消す」から取り消してください。</p>`;
+ }
+ if(cashCancelReady){
+  const {data:hist}=await sb.from("sf_cash_handoff_cancellations").select("*,canceller:users!sf_cash_handoff_cancellations_cancelled_by_fkey(name)")
+   .eq("user_id",cashDetail).eq("year_month",cashMonth).eq("contract_id",cashCid||CASH_DEF_CONTRACT).order("cancelled_at",{ascending:false});
+  if(hist&&hist.length)h+=`<div class="card"><h3>🗂 取消履歴（${hist.length}件）</h3>${hist.map(x=>{
+   const ap=x.archived_paths||{};
+   const imgs=[["payer_signature","渡した側のサイン"],["receiver_signature","受け取った側のサイン"],["handoff_photo","手渡し写真"]].filter(([k])=>ap[k]).map(([k,l])=>`<button class="btn sm sub" data-cashsigview="${esc(ap[k])}">${l}</button>`).join(" ");
+   return `<div class="row" style="display:block"><b>${new Date(x.cancelled_at).toLocaleString("ja-JP")}</b>　${esc(x.canceller&&x.canceller.name||"")}<br><span class="muted">理由: ${esc(x.reason)}${x.prev_completed_at?"（完了済みから取消）":""}</span>${imgs?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">${imgs}</div>`:""}</div>`}).join("")}</div>`;
  }
  return h;
 }
@@ -9032,6 +9052,34 @@ function bindCashHandoffPage(){
    toast("引き出し確認を取り消しました");
    render();
   }catch(e){toast("取り消しエラー: "+(e&&e.message?e.message:e),true)}
+ };
+ // 2026-11-09追加（U-24）: 手渡しの取消（理由必須）。サイン画像はarchive名へコピーして履歴に残し、サイン・確認・完了をリセット
+ if($("cash-cancel"))$("cash-cancel").onclick=async()=>{
+  const reason=(prompt("この手渡しを取り消す理由を入力してください（必須・200文字まで）\n例: 金額を間違えて渡した／サインする人を間違えた")||"").trim();
+  if(!reason)return;
+  if(reason.length>200){toast("理由は200文字までです",true);return}
+  if(!confirm("この手渡しを取り消します。\n・渡した側／受け取った側のサインと確認がリセットされ、もう一度サインできます\n・以前のサイン画像は消さずに履歴へ残ります\nよろしいですか？"))return;
+  cashCancelSaving=true;render();
+  try{
+   const rec=(cashRecords||{})[cashK(cashDetail,cashCid)]||{};
+   const ts=Date.now(),arch={};
+   const keep=async(key,path)=>{
+    if(!path)return;
+    const ext=(path.match(/\.[A-Za-z0-9]+$/)||[".png"])[0];
+    const dest=`${cashDetail}/archive/${cashMonth}_${key}_cancelled_${ts}${ext}`;
+    const {error}=await sb.storage.from("cash-signatures").copy(path,dest);
+    if(error)throw new Error("画像の退避に失敗したため取り消しを中止しました（"+error.message+"）");
+    arch[key]=dest;
+   };
+   await keep("payer_signature",rec.payer_signature_path);
+   await keep("receiver_signature",rec.receiver_signature_path);
+   await keep("handoff_photo",rec.handoff_photo_path);
+   const {error}=await sb.rpc("cash_handoff_cancel",{p_user_id:cashDetail,p_year_month:cashMonth,p_contract_id:cashCid||CASH_DEF_CONTRACT,p_reason:reason,p_archived:arch,p_reset_paid:CASH_CANCEL_RESET_PAID});
+   if(error)throw error;
+   await refreshCashRecord(cashDetail,cashMonth);
+   toast("手渡しを取り消しました。もう一度サインできます");
+  }catch(e){toast("取り消しエラー: "+(e&&e.message?e.message:e),true)}
+  cashCancelSaving=false;render();
  };
  // 2026-09-09追加: 完了（サイン完了）の取り消し。completed_atだけを戻す（給与仕訳側のpaid_atや
  // 本部タスクのチェックはここでは触らない＝画面上の案内文どおり）

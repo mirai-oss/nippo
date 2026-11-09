@@ -7636,7 +7636,7 @@ function bindWageCard(uid){
  const push=async(c)=>{
   msg(c,"スマレジに反映中…");
   const r=await smFn("wage_push",{user_id:uid,contract_id:c});
-  if(r.ok){toast(`スマレジに反映しました（${r.pushed}件）`);render()}
+  if(r.ok){const adj=(r.results||[]).filter(x=>x.date_adjusted);toast(adj.length?`スマレジに反映しました（${r.pushed}件）。⚠️ ${adj.length}件は適用開始日がスマレジ側の初期設定の日付（${adj.map(x=>x.date_adjusted.applied).join("・")}）に変わりました。内容を確認してください`:`スマレジに反映しました（${r.pushed}件）`,!!adj.length);render()} // 2026-11-09: 救済で日付が変わったら知らせる
   else{msg(c,"反映できませんでした: "+(smErr(r)||(r.results||[]).filter(x=>!x.ok).map(x=>x.error).join(" / ")||"不明"));toast("スマレジへの反映に失敗した設定があります（内容は画面に表示）",true);render()}
  };
  document.querySelectorAll("[data-wagesave]").forEach(b=>b.onclick=async()=>{

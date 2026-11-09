@@ -565,6 +565,7 @@ let chatQ="",tskQ="",chatMeta={}; // v2.1 検索・メッセージ操作
 let chatReply=null,chatInvite=false,chatInviteSel=[]; // v2.2 返信・招待
 let permMatrix=null,permUserSel=null,permUserVals=null,permUsersCache=null; // v2.4 権限設定
 let rcList=null,rcSeg="active",rcQ="",rcDetail=null,rcForms=null,applyFormDef=null; // v2.5 応募者管理
+let rcFunnel=false,rcFunnelAll=false,rcExitFocus=false; // 2026-11-10 Phase 4: 離脱集計タブ／離脱の記録カードへ注目
 let rcCal=false,rcCalMonth=null,rcCalDay=null; // B-7 面接カレンダー（月表示・日クリックで当日一覧）
 let rcOnlyWait=false; // v2.6.31 未対応だけに絞るか
 let cfgShowOff=false; // v2.6.50 設定画面で「停止中の項目」も出すか（既定は隠す）
@@ -1192,13 +1193,12 @@ async function renderJoin(){
      <div id="j-stationbox" style="margin-top:6px"></div>
      <input type="text" id="j-stnote" placeholder="備考（例: 自転車で10分、バス利用）" style="margin-top:6px;font-size:14px">`:""}</div>`;
   // 2026-11-10 Phase 2: 通勤情報（交通費の自動照合に使う。任意。register_via_invite は変えず、登録直後に RPC onboarding_save_commute で保存）
-  if(F.addr.on)h+=`<div class="card" data-joinsec><h3>通勤について <span class="muted" style="font-size:12px;font-weight:normal">（任意・交通費の確認に使います）</span></h3>
-    <p class="muted" style="margin:0 0 4px">通勤手段</p>
-    <select id="j-cm-method"><option value="">選んでください</option><option value="train">電車</option><option value="train_bus">電車＋バス</option><option value="bus">バス</option><option value="bike">自転車</option><option value="walk">徒歩</option><option value="car">車・バイク</option><option value="other">その他</option></select>
-    <input type="text" id="j-cm-route" placeholder="経路（例: 田町→新橋 JR山手線）" style="margin-top:6px">
-    <input type="number" inputmode="numeric" min="0" id="j-cm-fare" placeholder="片道の交通費（円。例: 160）" style="margin-top:6px">
-    <label style="display:flex;gap:6px;align-items:center;margin-top:6px;font-size:14px"><input type="checkbox" id="j-cm-bus" style="width:auto;margin:0">バスを使う</label>
-    <input type="text" id="j-cm-note" placeholder="特記（例: 雨の日はバス、定期あり）" style="margin-top:6px"></div>`;
+  // 2026-11-10 Phase 2 改良: 入力欄は共通部品 commuteEditFormHtml（従業員編集・設定ページと同じ）。手段が自転車/徒歩/車なら経路・運賃欄を畳み、送信内容を下に表示する。
+  //   「経路の候補から選ぶ」UI は本人画面には付けない: 駅すぱあと API のキーはサーバー側（Edge Function commute-route）だけが持ち、本人のブラウザからは呼べない設計のため。候補の確認・承認は本部が Slack で行う。
+  if(F.addr.on)h+=`<div class="card" data-joinsec><h3>通勤について <span class="muted" style="font-size:12px;font-weight:normal">（任意）</span></h3>
+    <p class="muted" style="margin:0;font-size:12px">交通費の確認に使います。分からないところは空欄のままで大丈夫です（あとで本部が確認します）。電車・バスの経路の候補は本部側で調べますので、ここでは普段の通い方を書いてください。</p>
+    ${commuteEditFormHtml(null,"j-cm",{saveBtn:false})}
+    <p id="j-cm-summary" class="muted" style="margin:8px 0 0;font-size:12px"></p></div>`;
   if(F.ename.on||F.erel.on||F.ephone.on)h+=`<div class="card" data-joinsec><h3>緊急連絡先${(F.ename.req||F.erel.req||F.ephone.req)?' <span class="req">必須</span>':""}</h3>
     ${F.ename.on?`<input type="text" id="j-ename" placeholder="氏名" value="${esc(pf.ename)}">`:""}
     ${F.erel.on?`<input type="text" id="j-erel" placeholder="続柄（例: 父）" value="${esc(pf.erel)}">`:""}
@@ -1227,6 +1227,9 @@ async function renderJoin(){
  </div>`;
  $("app").innerHTML=h;
  $("j-submit").onclick=doJoin;
+ // 2026-11-10 Phase 2: 通勤欄の出し分け（手段で畳む）と「送信される内容」の確認表示
+ bindCommuteForm("j-cm",v=>{if($("j-cm-summary"))$("j-cm-summary").textContent=commuteSummaryText(v)});
+ if($("j-cm-summary"))$("j-cm-summary").textContent=commuteSummaryText(commuteFormValues("j-cm"));
  bindZip("j-zip","j-addr"); // v2.6.23 郵便番号から住所を自動で入れる（v2.6.45 住所→郵便番号の逆も）
  bindPhone("j-phone");bindPhone("j-ephone"); // v2.6.45
  if($("j-station"))$("j-station").onclick=()=>showStations("j-stationbox","j-addr"); // v2.6.48
@@ -1544,9 +1547,10 @@ async function doJoin(){
  if(st)extra["最寄り駅"]=st+(stNote?`／${stNote}`:"");
  else if(stNote)extra["最寄り駅"]=stNote;
  // 2026-11-10 Phase 2: 通勤情報は extra にも控える（SQL 未適用で RPC が無くても失われない。スマレジの管理者メモにも載る）
- if(!acctOnly){const cmSel=$("j-cm-method");const cmLabel=cmSel&&cmSel.value?cmSel.options[cmSel.selectedIndex].text:"";
-  if(cmLabel)extra["通勤手段"]=cmLabel;if(val("j-cm-route"))extra["通勤経路"]=val("j-cm-route");if(val("j-cm-fare")!=="")extra["片道交通費"]=val("j-cm-fare")+"円";
-  if($("j-cm-bus")&&$("j-cm-bus").checked)extra["バス利用"]="あり";if(val("j-cm-note"))extra["通勤特記"]=val("j-cm-note")}
+ const cmV=acctOnly?null:commuteFormValues("j-cm"); // 2026-11-10 改良: 数字チェック・手段に応じた欄だけを送る
+ if(cmV&&cmV.error){toast(cmV.error,true);return}
+ if(cmV&&!cmV.empty){if(cmV.method)extra["通勤手段"]=CM_METHOD_LABEL[cmV.method]||cmV.method;if(cmV.route)extra["通勤経路"]=cmV.route;if(cmV.fare!==null)extra["片道交通費"]=cmV.fare+"円";
+  if(cmV.bus)extra["バス利用"]="あり";if(cmV.note)extra["通勤特記"]=cmV.note}
  const ph=val("j-phone");
  if(ph&&!phoneOk(ph)){toast("電話番号の桁数をご確認ください（10桁または11桁）",true);return} // v2.6.48
  const smId=joinSmSel||null; // v2.5.2 照合で本人確認したスマレジスタッフ
@@ -1595,7 +1599,7 @@ async function doJoin(){
  if(!linked&&smWanted)try{let sr=await smaregiSync(data.user.id);if(!sr||!sr.ok){await new Promise(r=>setTimeout(r,3000));sr=await smaregiSync(data.user.id)}}catch(e){} // 2026-11-10: 起動直後の 503 対策で 1 回だけ再試行
  else if(!linked)try{await sb.rpc("set_my_smaregi_skip")}catch(e){}
  // 2026-11-10 Phase 2: 通勤情報（任意）。register_via_invite は変えず別 RPC。SQL 未適用（RPC 無し）なら黙ってスキップ
- if(!acctOnly)try{const cmM=val("j-cm-method"),cmF=val("j-cm-fare");if(cmM||cmF||val("j-cm-route")){await sb.rpc("onboarding_save_commute",{p_user:data.user.id,p_method:cmM||null,p_route_text:val("j-cm-route")||null,p_claimed_fare:cmF===""?null:Number(cmF),p_uses_bus:!!($("j-cm-bus")&&$("j-cm-bus").checked),p_note:val("j-cm-note")||null,p_via:"nippo_join"})}}catch(e){}
+ if(cmV&&!cmV.empty)try{await sb.rpc("onboarding_save_commute",{p_user:data.user.id,p_method:cmV.method||null,p_route_text:cmV.route||null,p_claimed_fare:cmV.fare,p_uses_bus:cmV.bus,p_note:cmV.note||null,p_via:"nippo_join"})}catch(e){}
  try{await sb.rpc("notify_join_complete")}catch(e){}
  hqNotifyOnboarding(data.user.id,name,email); // 2026-09-01追加(B-18): 本部タスク自動作成フック（await不要・失敗しても登録自体は継続）
  await loadMe(data.user.id,{afterJoin:true}); // 2026-09-01追加: LINE未連携ならその場で連携画面を出す
@@ -5587,6 +5591,7 @@ async function recruitView(){
  }
  if(rcJobs)return await recruitJobsView(); // v2.6.16 求人タイトルの登録
  if(rcCal)return recruitCalendarView(); // B-7 面接カレンダー
+ if(rcFunnel)return await recruitFunnelView(); // 2026-11-10 Phase 4 離脱集計
  if(!rcCosts){const {data:c}=await sb.from("recruit_costs").select("*");rcCosts=c||[]}
  if(!rcHiredInfo){ // 採用者の在籍情報
   rcHiredInfo={users:[],profs:[]};
@@ -5628,7 +5633,7 @@ async function recruitView(){
  let h=`<h2>📥 応募者管理</h2>`;
  // 2026-08-28 LINE接続が切れていたら一覧の一番上で警告（設定画面を開かなくても気づけるように）
  if(lineHealthOk===false)h+=`<div class="alert" style="background:#fef2f2;border-left:4px solid #c0392b">⚠️ <b>求人用LINEに接続できませんでした</b>（${esc(lineHealthErr)}）。応募者へのLINE送信ができない可能性があります。設定 →「💚 求人用LINEの連携」で確認してください。</div>`;
- h+=`<div class="card" style="padding:10px 12px;display:flex;justify-content:flex-end"><button class="btn sm sub" id="rc-cal-open">📅 面接カレンダー</button></div>`;
+ h+=`<div class="card" style="padding:10px 12px;display:flex;justify-content:flex-end"><button class="btn sm sub" id="rc-cal-open">📅 面接カレンダー</button>${can("recruit_all")?`<button class="btn sm sub" id="rc-funnel-open" style="margin-left:6px">📊 離脱集計</button>`:""}</div>`;
  // v2.6.24 担当店舗だけの人には、その旨と全社共通の設定を出さない
  const rcAll=can("recruit_all");
  if(!rcAll)h+=`<div class="info" style="margin-top:-4px">🏪 <b>${esc((me.stores||[]).map(s=>s.name).join("・")||"所属店舗なし")}</b> の応募者のみ表示しています${(me.stores||[]).length?"":"（所属店舗が未設定のため何も表示されません。本部にご相談ください）"}</div>`;
@@ -5745,6 +5750,7 @@ async function recruitView(){
   const form=(rcForms||[]).find(f=>f.key===a.form_key);
   const fNew=rcFormNew(a),mNew=rcMsgNew(a),od=rcOverdue(a); // v2.6.15 フォーム回答／v2.6.16 メッセージ／v2.6.21 面接日超過
   const col=APPLICANT_COLOR[a.status]||"#2b6cb0";
+  const exitBadge=a.exit_reason?`<span class="badge" style="background:#7a5c3e" title="${esc(EXIT_STAGE_LABEL[a.exit_stage]||a.exit_stage||"")}">🚪 ${esc(EXIT_REASON_LABEL[a.exit_reason]||a.exit_reason)}</span>`:""; // 2026-11-10 Phase 4 離脱理由
   // v2.6.17 ① 選考ステータスを一覧のままプルダウンで変えられる
   const stSel=`<select data-rcst2="${a.id}" style="border:1.5px solid ${col};color:${col};background:#fff;border-radius:999px;font-size:11px;font-weight:700;padding:2px 2px 2px 7px;max-width:116px">${Object.entries(APPLICANT_STATUS).map(([k,v])=>`<option value="${k}"${a.status===k?" selected":""}>${v}</option>`).join("")}</select>`;
   // v2.6.18 店舗のプルダウン（一覧でそのまま変えられる。②と③の両方で使う）
@@ -5771,7 +5777,7 @@ async function recruitView(){
   const moveAt=a.last_msg_at||a.last_actor_at||a.updated_at;
   const touched=rcTouchAt(a); // v2.6.53 並び順と同じ値を表示する（別々に数えるとズレるため）
   const moveTxt=move?`・${move==="応募者から"?"🔴":"✅"} ${esc(move)} ${moveAt?fmtDue(moveAt):""}`:(touched?`・更新 ${fmtDue(new Date(touched).toISOString())}`:"");
-  h+=`<div class="row" data-rcrow="${a.id}" style="cursor:default${od?";background:#fff1f2":wait?";background:#fff7ed":rcLineNew(a)?";background:#f0fff4":""}"><span style="flex:1;min-width:0"><b>${rcNameAge(a)}</b>${a.line_user_id?LINE_ICON:""} <span style="display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;vertical-align:middle">${stSel}${ivIn}${invBtn}${wait?`<span class="badge" style="background:#c0392b">🔴 未対応</span><button class="btn sm sub" data-rcdone="${a.id}" style="margin:0;font-size:11px;padding:2px 8px">対応済みにする</button>`:""}${fNew?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span>':""}${mNew?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span>':""}${rcLineNew(a)?'<span class="badge" style="background:#06c755">💚 LINEが連携されました</span>':""}${od?'<span class="badge" style="background:#c0392b">⚠️ 面接日超過</span>':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</span><br>
+  h+=`<div class="row" data-rcrow="${a.id}" style="cursor:default${od?";background:#fff1f2":wait?";background:#fff7ed":rcLineNew(a)?";background:#f0fff4":""}"><span style="flex:1;min-width:0"><b>${rcNameAge(a)}</b>${a.line_user_id?LINE_ICON:""} <span style="display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;vertical-align:middle">${stSel}${exitBadge}${ivIn}${invBtn}${wait?`<span class="badge" style="background:#c0392b">🔴 未対応</span><button class="btn sm sub" data-rcdone="${a.id}" style="margin:0;font-size:11px;padding:2px 8px">対応済みにする</button>`:""}${fNew?'<span class="badge" style="background:#d97706">📝 フォーム回答が届きました</span>':""}${mNew?'<span class="badge" style="background:#0e7490">💬 メッセージが届きました</span>':""}${rcLineNew(a)?'<span class="badge" style="background:#06c755">💚 LINEが連携されました</span>':""}${od?'<span class="badge" style="background:#c0392b">⚠️ 面接日超過</span>':""}${a.user_id?'<span class="badge g">入社済み</span>':""}</span><br>
    <span class="muted">${form?esc(form.title.replace("応募フォーム","")):esc(a.job_type||"")}・${storeSel("font-size:11px;padding:1px 3px;border:1px solid var(--line);border-radius:6px;background:#fff;color:inherit;max-width:136px;font-family:inherit")}${hint?"<span> 求人: "+esc(hint.split("、")[0].split(",")[0].slice(0,14))+"</span>":""}・${APPLICANT_SOURCE[a.source]||esc(a.source)}・応募 ${fmtDue(a.applied_at)}${a.interview_at?`・面接 ${fmtDue(a.interview_at)}`:""}・${asgTxt}${moveTxt}</span></span><button class="btn sm sub" data-rcopen="${a.id}" style="flex-shrink:0;margin:0;font-size:12px;padding:6px 10px">詳細</button></div>`;
  });
  if(list.length>rcShown)h+=`<button class="btn sm sub" id="rc-more" style="margin-top:10px;width:100%">▼ さらに100件表示する（残り ${list.length-rcShown}件）</button>`;
@@ -5941,6 +5947,69 @@ async function rcShareInvite(a){
  copyText(text);toast("この端末では共有メニューが使えないため、文面をコピーしました");
 }
 // v2.6.16 求人掲載タイトルの登録画面
+// ===== 2026-11-10 Phase 4（入社登録ワークフロー）: 採用の離脱区分（applicants.exit_stage / exit_reason / exit_source / exit_note / exited_at）と離脱集計（recruit_funnel_v） =====
+//   入社中止（Slack の ⛔ 中止）は exit_source='onboarding' で自動記録される。ここは採用担当が手で記録する入口（exit_source='manual'）。
+const RC_EXIT_STATUSES=["rejected","declined","noshow","retired"]; // この状態にしたら離脱の記録を促す
+const EXIT_STAGE_LABEL={before_interview:"面接前",interview:"面接",after_hire:"採用後（入社登録の前）",during_registration:"入社登録の途中",first_shift:"初回勤務"};
+const EXIT_REASON_LABEL={interview_noshow:"面接に来なかった",declined_before_interview:"面接前に辞退",no_contact_after_hire:"採用後に連絡が取れない",dropped_during_registration:"入社登録の途中で離脱",first_shift_noshow:"初回勤務に来なかった",declined_before_start:"勤務開始前に辞退",company_reason:"会社都合（不採用など）",other:"その他"};
+const EXIT_SOURCE_LABEL={manual:"手入力",onboarding:"入社中止（Slack）",shift:"シフト"};
+function rcExitDefault(a){ // 状態と面接・採用の有無から、離脱段階・理由の初期値を決める（人が直せる）
+ if(a.exit_stage||a.exit_reason)return {stage:a.exit_stage||"",reason:a.exit_reason||""};
+ const hadIv=!!a.interview_at,hired=!!(a.hired_at||a.user_id||a.invite_token);
+ if(a.status==="noshow")return hired?{stage:"first_shift",reason:"first_shift_noshow"}:{stage:"interview",reason:"interview_noshow"};
+ if(a.status==="declined")return hired?{stage:"after_hire",reason:"declined_before_start"}:hadIv?{stage:"interview",reason:"other"}:{stage:"before_interview",reason:"declined_before_interview"};
+ if(a.status==="rejected")return {stage:hadIv?"interview":"before_interview",reason:"company_reason"};
+ if(a.status==="retired")return {stage:"first_shift",reason:"other"};
+ return {stage:"",reason:""};
+}
+function rcExitCardHtml(a){
+ const d=rcExitDefault(a);
+ const recorded=a.exit_source==="onboarding"
+  ?`<br>⛔ <b>入社中止（Slack）で記録済み</b>: ${esc(EXIT_STAGE_LABEL[a.exit_stage]||a.exit_stage||"")}／${esc(EXIT_REASON_LABEL[a.exit_reason]||a.exit_reason||"")}${a.exited_at?`（${fmtDue(a.exited_at)}）`:""}。ここで保存すると上書きされます。`
+  :a.exit_reason?`<br>✅ 記録済み（${EXIT_SOURCE_LABEL[a.exit_source]||esc(a.exit_source||"")}${a.exited_at?`・${fmtDue(a.exited_at)}`:""}）`:"";
+ return `<div class="card" id="rc-exitcard" style="${rcExitFocus?"background:#fff7ed;border-left:4px solid #d97706":""}"><h3>🚪 離脱の記録${a.exit_reason?"":' <span class="muted" style="font-size:12px;font-weight:normal">（まだ記録がありません）</span>'}</h3>
+  <p class="muted" style="margin:0 0 6px;font-size:12px">どの段階で・なぜ離脱したかを残します（「📊 離脱集計」に使います）。${recorded}</p>
+  <p class="muted" style="margin:6px 0 2px">離脱した段階</p>
+  <select class="inp" id="rc-exstage" style="margin:0"><option value="">選んでください</option>${Object.entries(EXIT_STAGE_LABEL).map(([k,v])=>`<option value="${k}"${d.stage===k?" selected":""}>${v}</option>`).join("")}</select>
+  <p class="muted" style="margin:8px 0 2px">理由</p>
+  <select class="inp" id="rc-exreason" style="margin:0"><option value="">選んでください</option>${Object.entries(EXIT_REASON_LABEL).map(([k,v])=>`<option value="${k}"${d.reason===k?" selected":""}>${v}</option>`).join("")}</select>
+  <p class="muted" style="margin:8px 0 2px">メモ（任意）</p>
+  <textarea rows="2" id="rc-exnote" placeholder="例: 他社に決まったと連絡あり">${esc(a.exit_note||"")}</textarea>
+  <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" id="rc-exsave" style="margin:0">離脱を記録する</button>${a.exit_reason?`<button class="btn sm sub" id="rc-exclear" style="margin:0">記録を消す</button>`:""}</div></div>`;
+}
+async function recruitFunnelView(){
+ const {data,error}=await sb.from("recruit_funnel_v").select("*");
+ let h=`<span class="back" id="rc-funnel-back">← 応募者管理</span><h2>📊 離脱集計</h2>
+ <p class="muted" style="margin-top:-8px">応募 → 採用 のあいだに、どの段階で何人が離脱したか（応募月×店舗×媒体）。理由は応募者カードの「🚪 離脱の記録」か、Slack の入社中止（⛔）から入ります。</p>`;
+ if(error)return h+`<div class="alert">集計を読み込めませんでした（${esc(error.message)}）。集計ビューが未作成か、権限がありません。</div>`;
+ const REASONS=Object.keys(EXIT_REASON_LABEL);
+ const colOf=r=>REASONS.map(k=>k==="other"?"exit_other":k);
+ const monthKey=r=>String(r.applied_month||"").slice(0,7);
+ const rows=(data||[]).filter(r=>monthKey(r));
+ const months=[...new Set(rows.map(monthKey))].sort().reverse();
+ const shown=rcFunnelAll?months:months.slice(0,6);
+ const use=rows.filter(r=>shown.includes(monthKey(r)));
+ const zero=()=>({applicants:0,hired:0,reasons:Object.fromEntries(REASONS.map(k=>[k,0]))});
+ const add=(s,r)=>{s.applicants+=+r.applicants||0;s.hired+=+r.hired||0;REASONS.forEach((k,i)=>s.reasons[k]+=+r[colOf(r)[i]]||0);return s};
+ const total=use.reduce(add,zero());
+ const exitOf=c=>REASONS.reduce((s,k)=>s+c.reasons[k],0);
+ const usedReasons=REASONS.filter(k=>total.reasons[k]>0);
+ const th=(v,al)=>`<th style="padding:4px 6px;text-align:${al||"center"};font-weight:${al?"700":"normal"};font-size:${al?"12px":"11px"}">${v}</th>`;
+ const td=(v,al)=>`<td style="padding:4px 6px;border-top:1px solid var(--line);text-align:${al||"right"};${al==="left"?"white-space:nowrap":""}">${v}</td>`;
+ h+=`<p style="margin:0 0 6px"><span class="chip ${rcFunnelAll?"on":""}" id="rc-funnel-all" style="font-size:12px">${rcFunnelAll?"全期間を表示中（タップで直近6ヶ月）":"直近6ヶ月を表示中（タップで全期間）"}</span></p>`;
+ if(!use.length)return h+`<p class="muted center" style="margin-top:16px">まだ集計できる応募がありません</p>`;
+ h+=`<div class="card"><h3>月ごとの合計</h3><div style="overflow-x:auto"><table style="font-size:12px;border-collapse:collapse;min-width:420px"><tr style="background:#f2f4f7">${th("月","left")}${th("応募","center")}${th("採用","center")}${th("離脱","center")}${usedReasons.map(k=>th(EXIT_REASON_LABEL[k])).join("")}</tr>`;
+ shown.forEach(m=>{const c=use.filter(r=>monthKey(r)===m).reduce(add,zero());h+=`<tr>${td(m,"left")}${td(c.applicants)}${td(c.hired)}${td(exitOf(c))}${usedReasons.map(k=>td(c.reasons[k]||"")).join("")}</tr>`});
+ h+=`<tr style="font-weight:700">${td("合計","left")}${td(total.applicants)}${td(total.hired)}${td(exitOf(total))}${usedReasons.map(k=>td(total.reasons[k]||"")).join("")}</tr></table></div></div>`;
+ // 店舗×媒体の明細（ビューは担当者ごとにも分かれているので、ここでまとめ直す）
+ const groups=new Map();
+ use.forEach(r=>{const k=[monthKey(r),r.store_name||"",r.source||""].join("|");if(!groups.has(k))groups.set(k,{month:monthKey(r),store:r.store_name||"",source:r.source||"",c:zero()});add(groups.get(k).c,r)});
+ const list=[...groups.values()].sort((a,b)=>b.month.localeCompare(a.month)||a.store.localeCompare(b.store)||a.source.localeCompare(b.source));
+ h+=`<div class="card"><h3>店舗・媒体ごと</h3><div style="overflow-x:auto"><table style="font-size:12px;border-collapse:collapse;min-width:560px"><tr style="background:#f2f4f7">${th("月","left")}${th("店舗","left")}${th("媒体","left")}${th("応募","center")}${th("採用","center")}${th("離脱","center")}${usedReasons.map(k=>th(EXIT_REASON_LABEL[k])).join("")}</tr>`;
+ list.forEach(g=>{h+=`<tr>${td(g.month,"left")}${td(esc(g.store||"店舗未設定"),"left")}${td(APPLICANT_SOURCE[g.source]||esc(g.source||"—"),"left")}${td(g.c.applicants)}${td(g.c.hired)}${td(exitOf(g.c))}${usedReasons.map(k=>td(g.c.reasons[k]||"")).join("")}</tr>`});
+ h+=`</table></div><p class="muted" style="margin:6px 0 0;font-size:11px">「離脱」＝理由が記録された人数。理由がまだ記録されていない不採用・辞退は数に入りません（応募者カードの「🚪 離脱の記録」で入れてください）。</p></div>`;
+ return h;
+}
 async function recruitJobsView(){
  if(!rcJobList){const {data:j}=await sb.from("job_postings").select("*").order("title");rcJobList=j||[]}
  const storeOpts=sel=>`<option value="">店舗: 未設定</option>`+(stores||[]).map(s=>`<option value="${s.id}"${sel===s.id?" selected":""}>${esc(s.name)}</option>`).join("");
@@ -6144,6 +6213,7 @@ function recruitDetailView(){
   <p class="muted" style="margin:8px 0 0">選考メモ</p>
   <textarea rows="3" id="rc-note" placeholder="面接の所感・連絡の記録など">${esc(a.note||"")}</textarea>
   <button class="btn" id="rc-save">保存する</button></div>`;
+ if(RC_EXIT_STATUSES.includes(a.status)||a.exit_reason)h+=rcExitCardHtml(a); // 2026-11-10 Phase 4 離脱の記録
  if(a.status!=="hired"&&!a.user_id){
   const defRole=a.form_key==="shain"?"SHAIN":"AL";
   h+=`<div class="card" style="background:#f0fff4"><h3>✅ 採用する → 招待リンク発行</h3>
@@ -6211,6 +6281,7 @@ async function saveApplicant(){
  $("rc-save").disabled=true;
  const {error}=await sb.from("applicants").update(upd).eq("id",a.id);
  if(error){toast("保存エラー: "+error.message,true);$("rc-save").disabled=false;return}
+ if(st!==a.status&&RC_EXIT_STATUSES.includes(st)&&!a.exit_reason)rcExitFocus=true; // 2026-11-10 Phase 4
  toast("保存しました");rcList=null;rcHiredInfo=null;render();
 }
 async function hireApplicant(){
@@ -6842,6 +6913,163 @@ function fareCardHtml(u,prof){
  return `<div class="card"><h3>🚃 通勤の交通費（表示専用・自動計算）</h3>${body}</div>`;
 }
 
+// ===== 2026-11-10 Phase 2（入社登録ワークフロー）: 通勤・交通費のカード（従業員編集＝本部／設定＝本人／入社フォーム＝入力欄の共通部品） =====
+//   読むだけ: employee_commute（RLS: 本部・社長・マスター か 本人）、employee_commute_settings／ui_automation_jobs（本部のみ）。
+//   書くのは RPC onboarding_save_commute（申請内容の修正。本人 or 本部）だけ。承認・🔁 再検索・🚌 スマレジへの交通費設定は Slack #本部-人事 の入社スレッドのボタンで行う（ここからは呼ばない）。
+//   「経路の候補から選ぶ」UI を本人画面に付けない理由: 駅すぱあと API のキーはサーバー側（Edge Function commute-route）だけが持ち、本人のブラウザからは呼べない設計のため。
+//   表が無い（SQL 未適用）・権限が無い環境でも落ちない（本部のカードは「未対応」表示、本人のカードは出さない）。住所は表示しない。
+const CM_METHOD_LABEL={train:"電車",train_bus:"電車＋バス",bus:"バス",bike:"自転車",walk:"徒歩",car:"車・バイク",other:"その他"};
+const CM_NO_FARE_METHODS=["bike","walk","car"]; // 経路・運賃の入力が要らない通勤手段
+const CM_JUDGE_LABEL={auto_approvable:"自動承認できます（承認ボタンは人が押します）",hq_review:"本部の確認が必要",person_review:"本人に確認が必要",search_failed:"検索できません（人が確認して承認）",approved:"承認済み",rejected:"差し戻し"};
+const CM_VIA_LABEL={nippo_join:"入社フォーム",nippo_hq:"本部が修正",nippo_self:"本人が修正",slack:"Slack",extra_import:"旧フォームから移行"};
+const CM_PAY_LABEL={per_shift:"勤務回数ごと",per_day:"勤務日数ごと",monthly:"月額"};
+const CM_SYNC_LABEL={pending:"未処理",queued:"自動操作の順番待ち",synced:"スマレジに反映済み",error:"エラー",manual:"管理画面で手入力（自動書き込み OFF）"};
+const UI_JOB_KIND_LABEL={smaregi_commute:"交通費",smaregi_tax:"源泉所得税",smaregi_payslip:"Web給与明細",smaregi_email:"メール",smaregi_read:"読み取り"};
+const UI_JOB_STATUS_LABEL={pending:"待機中",claimed:"Mac が受け取り",running:"実行中",success:"成功",failed:"失敗",cancelled:"取消"};
+const yenFmt=v=>(v==null||v==="")?"—":"¥"+Number(v).toLocaleString();
+async function loadCommuteInfo(uid,{self=false}={}){
+ try{
+  const [a,b,c]=await Promise.all([
+   sb.from("employee_commute").select("*").eq("user_id",uid).maybeSingle(),
+   self?Promise.resolve({data:[]}):sb.from("employee_commute_settings").select("*").eq("user_id",uid).order("created_at",{ascending:false}).limit(10),
+   self?Promise.resolve({data:[]}):sb.from("ui_automation_jobs").select("id,kind,status,attempts,max_attempts,error,error_kind,dry_run,created_at,finished_at,next_retry_at").eq("user_id",uid).order("created_at",{ascending:false}).limit(10),
+  ]);
+  if(a.error)return {unsupported:true,error:a.error.message};
+  return {commute:a.data||null,settings:(b&&b.data)||[],jobs:(c&&c.data)||[]};
+ }catch(e){return {unsupported:true,error:String((e&&e.message)||e)}}
+}
+// 入力欄（入社フォーム j-cm-*／本部 cmh-*／本人 cms-* で共通）
+function commuteEditFormHtml(c,prefix,{saveBtn=true}={}){
+ const m=(c&&c.method)||"";
+ const noFare=CM_NO_FARE_METHODS.includes(m);
+ return `<div id="${prefix}-form" style="margin-top:${saveBtn?"10px;border-top:1px dashed var(--line);padding-top:8px":"6px"}">
+  <p class="muted" style="margin:0 0 2px">通勤のしかた</p>
+  <select class="inp" id="${prefix}-method"><option value="">選んでください</option>${Object.entries(CM_METHOD_LABEL).map(([k,v])=>`<option value="${k}"${m===k?" selected":""}>${v}</option>`).join("")}</select>
+  <div id="${prefix}-transit" style="${noFare?"display:none":""}">
+   <p class="muted" style="margin:8px 0 2px">経路（駅名や路線。例: 田町→新橋 JR山手線）</p>
+   <input type="text" id="${prefix}-route" value="${esc((c&&c.route_text)||"")}" placeholder="例: 田町→新橋 JR山手線">
+   <p class="muted" style="margin:8px 0 2px">片道の交通費（円・数字だけ。例: 160）</p>
+   <input type="number" inputmode="numeric" min="0" step="1" id="${prefix}-fare" value="${c&&c.claimed_oneway_fare!=null?c.claimed_oneway_fare:""}" placeholder="例: 160" style="width:100%;border:1px solid #bbb;border-radius:8px;padding:10px;font-size:16px;box-sizing:border-box">
+   <label style="display:flex;gap:6px;align-items:center;margin-top:6px;font-size:14px"><input type="checkbox" id="${prefix}-bus" style="width:auto;margin:0"${c&&c.uses_bus?" checked":""}>バスを使う</label>
+  </div>
+  <p class="muted" style="margin:8px 0 2px">特記（例: 雨の日はバス、定期あり）</p>
+  <input type="text" id="${prefix}-note" value="${esc((c&&c.special_note)||"")}" placeholder="例: 雨の日はバス、定期あり">
+  ${saveBtn?`<button class="btn sm" id="${prefix}-save" style="margin-top:8px">${c?"申請内容を直して保存":"通勤情報を登録"}</button>`:""}
+ </div>`;
+}
+function commuteFormValues(prefix){
+ const g=id=>$(prefix+"-"+id);
+ const method=g("method")?g("method").value:"";
+ const noFare=CM_NO_FARE_METHODS.includes(method);
+ const fareRaw=(!noFare&&g("fare"))?g("fare").value.trim():"";
+ let fare=null;
+ if(fareRaw!==""){
+  if(!/^\d+$/.test(fareRaw))return {error:"片道の交通費は数字だけで入れてください（例: 160）"};
+  fare=Number(fareRaw);
+  if(fare>100000)return {error:"片道の交通費が大きすぎます（10万円以下）"};
+ }
+ const route=(!noFare&&g("route"))?g("route").value.trim():"";
+ const note=g("note")?g("note").value.trim():"";
+ return {method,route,fare,bus:!noFare&&!!(g("bus")&&g("bus").checked),note,noFare,empty:!method&&fare===null&&!route&&!note};
+}
+function commuteSummaryText(v){
+ if(v.error)return "⚠️ "+v.error;
+ if(v.empty)return "通勤情報は送りません（空欄のまま）";
+ const parts=[];
+ if(v.method)parts.push(CM_METHOD_LABEL[v.method]||v.method);
+ if(!v.noFare){if(v.route)parts.push(v.route);parts.push(v.fare===null?"片道の交通費: 未記入（本部が調べます）":"片道 "+yenFmt(v.fare));if(v.bus)parts.push("バスあり")}
+ if(v.note)parts.push("特記: "+v.note);
+ return "送信される内容: "+parts.join("・");
+}
+function bindCommuteForm(prefix,onChange){
+ ["method","route","fare","bus","note"].forEach(id=>{const el=$(prefix+"-"+id);if(!el)return;el.oninput=el.onchange=()=>{const v=commuteFormValues(prefix);const t=$(prefix+"-transit");if(t)t.style.display=v.noFare?"none":"";if(onChange)onChange(v)}});
+}
+function commuteActorName(id){const u=(adminUsers||[]).find(x=>x.id===id)||(tskUsers||[]).find(x=>x.id===id);return u?u.name:"本部"}
+function commuteCardHtml(info,{uid,self}){
+ if(!info)return "";
+ const title=`<h3>🚃 通勤・交通費${self?"":"（入社登録ワークフロー）"}</h3>`;
+ if(info.unsupported)return self?"":`<div class="card">${title}<p class="muted" style="margin:0">この環境ではまだ使えません（${esc(info.error||"表が未作成か権限なし")}）。</p></div>`;
+ const c=info.commute;
+ const approved=!!c&&c.judgement==="approved";
+ const prefix=self?"cms":"cmh";
+ let h=`<div class="card">${title}`;
+ if(!c){
+  h+=`<p class="muted" style="margin:0">${self?"通勤情報はまだ登録されていません。電車やバスで通う方は、下から登録してください（交通費の確認に使います）。":"本人からの通勤情報はまだありません（入社フォームで未記入）。必要なら下から本部が代わりに登録できます。"}</p>`;
+  h+=commuteEditFormHtml(null,prefix);
+ }else{
+  const m=CM_METHOD_LABEL[c.method]||c.method||"—";
+  h+=`<p style="font-size:13px;line-height:1.9;margin:0"><b>本人の申請</b>${c.submitted_at?`<span class="muted">（${fmtDue(c.submitted_at)}・${CM_VIA_LABEL[c.submitted_via]||esc(c.submitted_via||"")}）</span>`:""}<br>
+   通勤のしかた: ${esc(m)}${c.home_station?`　最寄り駅: ${esc(c.home_station)}`:""}<br>
+   経路: ${esc(c.route_text||"—")}<br>片道の申請額: <b>${yenFmt(c.claimed_oneway_fare)}</b>　バス: ${c.uses_bus?"あり":"なし"}${c.special_note?`<br>特記: ${esc(c.special_note)}`:""}</p>`;
+  const jl=c.judgement?(CM_JUDGE_LABEL[c.judgement]||c.judgement):"未判定（Slack の「🔁 再検索」で経路を調べます）";
+  const jColor=approved?"var(--green)":(c.judgement==="person_review"||c.judgement==="search_failed")?"#d97706":c.judgement==="rejected"?"var(--red)":c.judgement?"var(--blue)":"#6b7280";
+  h+=`<p style="font-size:13px;margin:10px 0 0"><b>判定</b>: <span class="badge" style="background:${jColor}">${esc(jl)}</span>${c.judged_at?` <span class="muted">（${fmtDue(c.judged_at)}）</span>`:""}</p>`;
+  if((c.judgement_reasons||[]).length)h+=`<ul style="margin:4px 0 0 18px;padding:0;font-size:12px">${c.judgement_reasons.map(r=>`<li>${esc(r)}</li>`).join("")}</ul>`;
+  if(approved)h+=`<p style="font-size:13px;margin:6px 0 0">✅ 承認額（片道）: <b>${yenFmt(c.approved_fare)}</b>${c.approved_by?`　承認者: ${esc(commuteActorName(c.approved_by))}`:""}${c.approved_at?`　${fmtDue(c.approved_at)}`:""}${c.approve_note?`<br>メモ: ${esc(c.approve_note)}`:""}</p>`;
+  const sr=c.search_result||null;
+  if(sr){
+   h+=`<details style="margin-top:8px"><summary style="cursor:pointer;font-size:13px"><b>🔎 経路の検索結果</b> <span class="muted" style="font-size:11px">（${sr.from?esc(sr.from):"?"} → ${sr.to?esc(sr.to):"?"}${sr.store_name?`・${esc(sr.store_name)}`:""}${sr.searched_at?`・${fmtDue(sr.searched_at)}`:""}）</span></summary>`;
+   if(sr.error)h+=`<p class="alert" style="margin:6px 0 0;font-size:12px">${esc(sr.error)}</p>`;
+   const cands=Array.isArray(sr.candidates)?sr.candidates:[];
+   if(cands.length){
+    const reasonable=new Set(sr.reasonable_indexes||[]);
+    const td=(v,al)=>`<td style="padding:4px 6px;border-top:1px solid var(--line);text-align:${al||"right"}">${v}</td>`;
+    h+=`<div style="overflow-x:auto"><table style="font-size:12px;border-collapse:collapse;margin-top:6px;min-width:470px"><tr style="background:#f2f4f7"><th style="padding:4px 6px;text-align:left">経路</th><th style="padding:4px 6px">片道</th><th style="padding:4px 6px">往復</th><th style="padding:4px 6px">所要</th><th style="padding:4px 6px">乗換</th><th style="padding:4px 6px">バス</th><th style="padding:4px 6px">判定</th></tr>`;
+    cands.forEach(cd=>{
+     const isComputed=sr.computed_index===cd.index;
+     h+=`<tr style="${isComputed?"background:#f0fff4;font-weight:700":""}">${td(esc(cd.summary||""),"left")}${td(yenFmt(cd.fare))}${td(yenFmt(cd.round))}${td(cd.time_min!=null?cd.time_min+"分":"—")}${td(cd.transfers!=null?cd.transfers+"回":"—","center")}${td(cd.uses_bus?"🚌":"—","center")}${td(isComputed?"★ 最安":reasonable.has(cd.index)?"✓":"—","center")}</tr>`;
+    });
+    h+=`</table></div><p class="muted" style="margin:4px 0 0;font-size:11px">金額は駅すぱあと API の応答そのままです（AI が推測した金額ではありません）。★＝「最速＋15分以内・乗換2回以内・徒歩1.5km以内」の候補（✓）のうち最安。最安だからといって自動で否認はせず、承認は人が押します。</p>`;
+   }else if(!sr.error)h+=`<p class="muted" style="margin:6px 0 0;font-size:12px">候補はありません</p>`;
+   h+=`</details>`;
+  }
+  if(!self){
+   if((info.settings||[]).length){
+    h+=`<details style="margin-top:8px"><summary style="cursor:pointer;font-size:13px"><b>🚌 スマレジへの交通費設定（履歴）</b> <span class="muted" style="font-size:11px">（${info.settings.length}件）</span></summary>`;
+    info.settings.forEach(s=>{
+     const amt=s.scope==="per_store"?`店舗ごと: ${esc(Object.entries(s.store_amounts||{}).map(([k,v])=>`${k}=${v}`).join(", "))}`:yenFmt(s.amount);
+     h+=`<div class="cmt" style="font-size:12px">${CM_PAY_LABEL[s.pay_type]||esc(s.pay_type||"")}　${amt}${s.cap_amount!=null?`　上限 ${yenFmt(s.cap_amount)}${s.cap_unit&&s.cap_unit!=="unknown"?"/"+esc(s.cap_unit):""}`:""}　適用 ${esc(s.effective_date||"—")}<br>
+      <span class="muted">状態: ${CM_SYNC_LABEL[s.sync_status]||esc(s.sync_status||"")}${s.verified_at?`・スマレジで照合済み ${fmtDue(s.verified_at)}`:""}${s.sync_error?`・⚠️ ${esc(s.sync_error)}`:""}${s.note?`・メモ: ${esc(s.note)}`:""}・登録 ${fmtDue(s.created_at)}</span></div>`;
+    });
+    h+=`</details>`;
+   }
+   if((info.jobs||[]).length){
+    h+=`<details style="margin-top:8px"><summary style="cursor:pointer;font-size:13px"><b>🤖 Mac の自動操作ジョブ</b> <span class="muted" style="font-size:11px">（${info.jobs.length}件）</span></summary>`;
+    info.jobs.forEach(j=>{
+     h+=`<div class="cmt" style="font-size:12px">${UI_JOB_KIND_LABEL[j.kind]||esc(j.kind||"")}${j.dry_run?"（読むだけ）":""}　<b>${esc(UI_JOB_STATUS_LABEL[j.status]||j.status||"")}</b>　試行 ${j.attempts||0}/${j.max_attempts||"-"}${(j.next_retry_at&&j.status==="pending"&&j.attempts)?`・次回 ${fmtDue(j.next_retry_at)}`:""}<br>
+      <span class="muted">${j.error?`⚠️ ${esc(j.error)}${j.error_kind?`（${esc(j.error_kind)}）`:""}・`:""}作成 ${fmtDue(j.created_at)}${j.finished_at?`・完了 ${fmtDue(j.finished_at)}`:""}</span></div>`;
+    });
+    h+=`</details>`;
+   }
+  }
+  if(self&&approved){
+   h+=`<p class="muted" style="margin:10px 0 0">承認済みのため、ここからは変更できません。引っ越しなどで経路が変わるときは店長か本部に伝えてください。</p>`;
+  }else{
+   if(approved)h+=`<p class="muted" style="margin:10px 0 0;font-size:12px">※承認済みです。申請内容を直しても承認額は変わりません（変える場合は Slack のスレッドで再承認）。</p>`;
+   h+=commuteEditFormHtml(c,prefix);
+  }
+ }
+ if(!self)h+=`<p class="muted" style="margin:10px 0 0;font-size:12px">承認・🔁 再検索・🚌 スマレジへの交通費設定は Slack #本部-人事 の入社スレッドのボタンで行います。ここでできるのは申請内容の修正だけです。</p>`;
+ h+=`</div>`;
+ return h;
+}
+function bindCommuteCard(uid,via){
+ const prefix=via==="nippo_self"?"cms":"cmh";
+ if(!$(prefix+"-save"))return;
+ bindCommuteForm(prefix);
+ $(prefix+"-save").onclick=async()=>{
+  const v=commuteFormValues(prefix);
+  if(v.error){toast(v.error,true);return}
+  if(v.empty){toast("通勤のしかた・経路・交通費のどれかを入れてください",true);return}
+  const b=$(prefix+"-save");b.disabled=true;
+  const {error}=await sb.rpc("onboarding_save_commute",{p_user:uid,p_method:v.method||null,p_route_text:v.route||null,p_claimed_fare:v.fare,p_uses_bus:v.bus,p_note:v.note||null,p_via:via});
+  b.disabled=false;
+  if(error){toast("保存エラー: "+error.message,true);return}
+  toast(via==="nippo_self"?"通勤情報を保存しました（本部が確認します）":"申請内容を保存しました。経路の判定はやり直しになります（Slack で 🔁 再検索）");
+  render();
+ };
+}
+
 async function adminEditView(){
  const u=adminUsers.find(x=>x.id===adminDetail);
  if(!u)return `<span class="back" id="adback">← 従業員一覧</span><div class="alert">ユーザーが見つかりません</div>`;
@@ -6856,6 +7084,7 @@ async function adminEditView(){
  const wageRows=(smInfo!==undefined&&smInfo&&u.id!==undefined)?await loadWageRows(adminDetail):undefined; // 2026-10-17追加: 賃金設定（テーブルが無い間はnull→非表示）
  let hrDocs=[];
  if(me.is_master||["HQ","CEO"].includes(me.role)){try{const {data:dd}=await sb.from("hr_documents").select("id,kind,year,path,uploaded_at,line_notified_at").eq("user_id",adminDetail).order("year",{ascending:false});hrDocs=dd||[]}catch(e){}}
+ const cmInfo=(me.is_master||["HQ","CEO"].includes(me.role))?await loadCommuteInfo(adminDetail):null; // 2026-11-10 Phase 2: 通勤・交通費（RLS と同じ条件の人だけ読む）
  let h=`<span class="back" id="adback">← 従業員一覧</span><h2>${esc(u.name)} ${u.is_active?"":'<span class="badge">無効</span>'}</h2>
  <p class="muted" style="margin-top:-8px">${esc(u.email)}</p>`;
  // 2026-09-05追加: 「LINE連携はどこでやるの？身分証明書の追加は？口座情報は？」というユーザー要望に
@@ -6931,6 +7160,7 @@ async function adminEditView(){
   h+=fareCardHtml(u,prof); // v2.6.66 交通費の自動計算（表示専用）
   h+=profileEditCard(prof,"ep"); // v2.6.45 入社情報を直せるようにする
  }
+ if(cmInfo)h+=commuteCardHtml(cmInfo,{uid:u.id,self:false}); // 2026-11-10 Phase 2
  h+=`<div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
  <div class="card"><h3>所属チーム</h3><span class="chip euteam ${!euTeam?"on":""}" data-t="">なし</span>${teams.map(t=>`<span class="chip euteam ${euTeam===t.id?"on":""}" data-t="${t.id}">${esc(t.name)}</span>`).join("")}
   <p class="muted" style="margin:6px 0 0">チームを設定すると、日報のLark通知をチーム単位で振り分けられます</p></div>
@@ -10023,6 +10253,7 @@ async function settingsView(){
  if(setMode==="apply")return await settingsApplyView(); // v2.5.8
  if(setMode==="lark")return await settingsLarkView(); // v2.6.2
  if(myProf===null){const {data:p}=await sb.rpc("get_my_profile");myProf=p||{}} // v2.6.0
+ const cmSelfInfo=await loadCommuteInfo(me.id,{self:true}); // 2026-11-10 Phase 2: 自分の通勤情報（未承認なら直せる）
  let h=`<h2>設定</h2>
   <div class="card"><h3>👤 プロフィール</h3>
    <p class="muted" style="margin:0">${esc(me.email)}／${ROLE_NAME[me.role]||""}${isKennin()?"・店長兼任":""}／所属: ${me.stores.map(s=>esc(s.name)).join("・")||"なし"}<br>
@@ -10042,6 +10273,7 @@ async function settingsView(){
    <p style="margin:8px 0 0"><button class="btn sm sub" id="pf-station" style="margin:0">🚉 住所から最寄り駅を調べる</button></p>
    <div id="pf-stationbox" style="margin-top:6px"></div>
    <button class="btn sm" id="pf-save">プロフィールを保存</button></div>
+  ${commuteCardHtml(cmSelfInfo,{uid:me.id,self:true})}
   <div class="card"><h3>🔑 パスワードの変更</h3>
    <input type="password" id="pf-pw" placeholder="新しいパスワード（8文字以上）" autocomplete="new-password">
    <input type="password" id="pf-pw2" placeholder="確認のためもう一度" autocomplete="new-password">
@@ -10649,7 +10881,7 @@ async function resetFmt(){
 
 // ===== イベント =====
 // トップレベルのページ切替（nav・統合ポータルシェルからのpostMessageで共用）。各種モーダル的な状態をリセットしてから移動する
-function goToPage(p,sub){page=p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;smBulkSel=new Set();smBulkPanel=false;smBulkResults=null;smStoreFilter="";smLinkFilter="";tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";chatReply=null;chatInvite=false;chatInviteSel=[];rcDetail=null;rcJobs=false;rcMsgs=null;rcDup=false;rcSimilar=[];rcPast=[];rcCal=false;rcCalDay=null;unlockedScoreKeys={};cashDetail=null;cashList=null;cashRecords=null;cashStoreFilter="";
+function goToPage(p,sub){page=p;detail=null;editId=null;adminMode="list";adminDetail=null;lastIssued=null;lastInvite=null;setMode="main";smSel=null;smResult=null;smStaffsCache=null;smBulkSel=new Set();smBulkPanel=false;smBulkResults=null;smStoreFilter="";smLinkFilter="";tskEdit=null;chatRoom=null;chatNew=null;chatDraft="";chatFiles=[];chatQ="";tskQ="";chatReply=null;chatInvite=false;chatInviteSel=[];rcDetail=null;rcJobs=false;rcMsgs=null;rcDup=false;rcSimilar=[];rcPast=[];rcCal=false;rcCalDay=null;rcFunnel=false;rcExitFocus=false;unlockedScoreKeys={};cashDetail=null;cashList=null;cashRecords=null;cashStoreFilter="";
  if(p==="actual")sfMgStep="actual";
  // 2026-09-08追加: 勤怠メニュー(portal.html)からのタブ高速切替は、4項目とも page=shift で
  //   同じtabValueになるためsub指定で区別する（無ければ何もしない=既存タブを維持）
@@ -10683,6 +10915,8 @@ function bindPage(){
  if(page==="admin"&&adminMode==="contractreg")bindAdminContractReg(); // 2026-10-17追加
  if(page==="admin"&&adminMode==="storemis")bindAdminStoreMis();
  if(page==="admin"&&adminMode==="edit"&&smReady){bindSmCard(adminDetail);bindWageCard(adminDetail)}
+ if(page==="admin"&&adminMode==="edit")bindCommuteCard(adminDetail,"nippo_hq"); // 2026-11-10 Phase 2
+ if(page==="settings")bindCommuteCard(me.id,"nippo_self"); // 2026-11-10 Phase 2
  if($("gowrite"))$("gowrite").onclick=()=>{page="write";render()};
  if($("goweekly"))$("goweekly").onclick=()=>{page="weekly";render()};
  if($("editdaily"))$("editdaily").onclick=()=>{editId=todayDaily.id;page="write";render()};
@@ -11142,7 +11376,7 @@ function bindPage(){
   toast("保存しました");render();
  });
  // v2.5 応募者管理
- if($("rcback"))$("rcback").onclick=()=>{rcDetail=null;rcMsgs=null;rcSimilar=[];rcPast=[];render()};
+ if($("rcback"))$("rcback").onclick=()=>{rcDetail=null;rcMsgs=null;rcSimilar=[];rcPast=[];rcExitFocus=false;render()};
  // v2.6.64 応募者詳細のページへ直接飛べるリンク（社内の採用担当同士で共有する用。開くにはログインが必要）
  document.querySelectorAll("[data-rccopylink]").forEach(b=>b.onclick=async()=>{
   const url=location.origin+location.pathname+"?a="+b.dataset.rccopylink;
@@ -11397,6 +11631,7 @@ function bindPage(){
   el.disabled=false;
   if(error){toast("変更エラー: "+error.message,true);return}
   toast(a.name+"さんを「"+APPLICANT_STATUS[st]+"」にしました");
+  if(RC_EXIT_STATUSES.includes(st)&&!a.exit_reason){a.status=st;a.status_changed_at=now;rcDetail=id;rcExitFocus=true;rcHiredInfo=null;render();return} // 2026-11-10 Phase 4: 離脱の段階・理由を記録してもらう（カードを開いて促す）
   rcSeg=rcSegOf(st); // その応募者がいるタブへ自動で移動（採用にしたら「採用」タブで招待リンクが出る）
   rcHiredInfo=null;render();
  });
@@ -11614,6 +11849,30 @@ function bindPage(){
  });
  document.querySelectorAll(".chip[data-rchst]").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
  if($("rc-save"))$("rc-save").onclick=saveApplicant;
+ // 2026-11-10 Phase 4: 離脱の記録（applicants.exit_*）・離脱集計タブ
+ if($("rc-exsave"))$("rc-exsave").onclick=async()=>{
+  const a=(rcList||[]).find(x=>x.id===rcDetail);if(!a)return;
+  const stage=$("rc-exstage").value,reason=$("rc-exreason").value,note=$("rc-exnote").value.trim();
+  if(!stage||!reason){toast("離脱した段階と理由を選んでください",true);return}
+  if(a.exit_source==="onboarding"&&!confirm("入社中止（Slack）で記録された内容を上書きします。よろしいですか？"))return;
+  const now=new Date().toISOString();
+  $("rc-exsave").disabled=true;
+  const {error}=await sb.from("applicants").update({exit_stage:stage,exit_reason:reason,exit_note:note||null,exit_source:"manual",exited_at:a.exited_at||now,updated_at:now,last_actor_id:me.id,last_actor_at:now}).eq("id",a.id);
+  $("rc-exsave").disabled=false;
+  if(error){toast("保存エラー: "+error.message,true);return}
+  rcExitFocus=false;rcList=null;toast("離脱を記録しました");render();
+ };
+ if($("rc-exclear"))$("rc-exclear").onclick=async()=>{
+  if(!confirm("離脱の記録（段階・理由・メモ）を消します。よろしいですか？"))return;
+  const now=new Date().toISOString();
+  const {error}=await sb.from("applicants").update({exit_stage:null,exit_reason:null,exit_note:null,exit_source:null,exited_at:null,updated_at:now,last_actor_id:me.id,last_actor_at:now}).eq("id",rcDetail);
+  if(error){toast("エラー: "+error.message,true);return}
+  rcList=null;toast("離脱の記録を消しました");render();
+ };
+ if(rcExitFocus&&$("rc-exitcard"))setTimeout(()=>{const el=$("rc-exitcard");if(el)el.scrollIntoView({behavior:"smooth",block:"center"})},50);
+ if($("rc-funnel-open"))$("rc-funnel-open").onclick=()=>{rcFunnel=true;render()};
+ if($("rc-funnel-back"))$("rc-funnel-back").onclick=()=>{rcFunnel=false;render()};
+ if($("rc-funnel-all"))$("rc-funnel-all").onclick=()=>{rcFunnelAll=!rcFunnelAll;render()};
  if($("rc-urlsave"))$("rc-urlsave").onclick=async()=>{ // v2.6.6 Indeedリンク
   const u=$("rc-url").value.trim();
   if(u&&!/^https?:\/\//.test(u)){toast("http から始まるURLを貼り付けてください",true);return}

@@ -1600,9 +1600,9 @@ async function hqNotifyOnboarding(uid,name,email){
  try{
   const {data:us}=await sb.from("user_stores").select("stores(name)").eq("user_id",uid).limit(1);
   const storeName=us&&us[0]&&us[0].stores?us[0].stores.name:null;
-  const {error}=await sb.rpc("hq_create_onboarding_task",{
-   p_name:name,p_email:email,p_business:storeName
-  });
+  // 2026-11-09: 重複防止と入社ワークフロー連携のため本人のidを渡す（RPC新版）。SQL未適用で旧版（p_user_idなし）のときは従来の呼び方に戻す
+  let {error}=await sb.rpc("hq_create_onboarding_task",{p_name:name,p_email:email,p_business:storeName,p_user_id:uid});
+  if(error&&/p_user_id|does not exist|PGRST202/i.test(error.message||""))({error}=await sb.rpc("hq_create_onboarding_task",{p_name:name,p_email:email,p_business:storeName}));
   if(error)console.warn("入社タスク自動作成:",error.message);
  }catch(e){console.warn("入社タスク自動作成:",e)}
  // 2026-10-17追加: 賃金の入力待ちを本部のLINEへ通知（返信「時給 1200」等で登録→スマレジへ反映）。失敗しても入社登録は継続
@@ -7586,7 +7586,7 @@ function bindSmCard(uid){
 }
 // --- 2026-10-17追加: 賃金設定（時給・月給）→スマレジ・タイムカードへ自動反映（employee_wage_settings＝正本・smaregi-sync wage_push/wage_pull） ---
 // 時給: 全事業所共通 ＋ 店舗別（ヘルプ先など高めの時給）・休日賃金。月給: 月初日から。スマレジのAPIで書けるのは賃金のみ（メール・交通費・源泉所得税・個別Web給与明細は手作業）。
-const WAGE_DIV={0:"時給",2:"月給"};
+const WAGE_DIV={0:"時給",1:"日給",2:"月給"}; // 2026-11-09: 日給(1)を追加（スマレジAPI対応・全事業所共通・休日賃金なし）
 let wageEditId=null; // 賃金設定の行を編集中のid
 const yen=n=>n==null?"":"¥"+Number(n).toLocaleString("ja-JP");
 async function loadWageRows(uid){
@@ -7618,7 +7618,7 @@ function wageCardHtml(info,rows){
    h+=`<div class="row" style="cursor:default;align-items:flex-start"><span><b>${WAGE_DIV[r.division]} ${yen(r.wage)}</b>${r.holiday_wage!=null?`（休日 ${yen(r.holiday_wage)}）`:""} ／ ${target}<br><span class="muted" style="font-size:12px">${esc(r.effective_date)}から ${st}${r.sync_status==="error"&&r.sync_error?` <span style="color:#b3261e">${esc(r.sync_error)}</span>`:""}</span></span><span style="display:flex;gap:6px"><button class="btn sm sub" data-wageedit="${r.id}">修正</button><button class="btn sm sub" data-wagedel="${r.id}|${esc(c)}|${r.smaregi_wage_apply_id?"1":"0"}">削除</button></span></div>`;
   });
   h+=`<div style="margin-top:8px;display:grid;gap:6px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
-   <select class="inp" data-wdiv="${esc(c)}" style="margin:0"><option value="0">時給</option><option value="2">月給</option></select>
+   <select class="inp" data-wdiv="${esc(c)}" style="margin:0"><option value="0">時給</option><option value="1">日給</option><option value="2">月給</option></select>
    <select class="inp" data-wstore="${esc(c)}" style="margin:0"><option value="">全事業所共通</option>${stores.map(x=>`<option value="${x.id}">${esc(x.name)}だけ</option>`).join("")}</select>
    <input class="inp" type="number" min="0" inputmode="numeric" data-wamt="${esc(c)}" placeholder="金額（円）" style="margin:0">
    <input class="inp" type="number" min="0" inputmode="numeric" data-whol="${esc(c)}" placeholder="休日賃金（任意）" style="margin:0">

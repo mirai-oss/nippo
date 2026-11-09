@@ -8747,7 +8747,7 @@ function bindMyDocsPage(){
 // 2026-11-03追加: 現金手渡しは「支払う会社（法人＝スマレジの契約）」ごとに分ける（兼務の人は法人が違えば別の行・別のサイン）。
 //   DB(cash_handoff_targets/sf_cash_handoff_signatures)が契約対応になっている場合だけ(cashHasContract)契約で絞る＝SQL適用前の旧DBでも従来どおり動く
 const CASH_DEF_CONTRACT="sez093z1"; // 既定の契約（トーホー）。DB側の既定値と同じ
-const CASH_CANCEL_RESET_PAID=false; // U-25の回答待ち: trueにすると取消時に給与仕訳の「振込完了」印(paid_at)もその人×月×法人だけ戻す
+const CASH_CANCEL_RESET_PAID=true; // U-25回答済み(推奨=戻す): 取消時に給与仕訳の「振込完了」印(paid_at)もその人×月×法人だけ戻す。MF登録済み仕訳は消さず注意を出す
 const cashK=(uid,cid)=>uid+"|"+(cid||CASH_DEF_CONTRACT);
 const cashOC=()=>cashHasContract?"user_id,year_month,contract_id":"user_id,year_month";
 const cashCF=()=>cashHasContract?{contract_id:cashCid||CASH_DEF_CONTRACT}:{};
@@ -9074,10 +9074,11 @@ function bindCashHandoffPage(){
    await keep("payer_signature",rec.payer_signature_path);
    await keep("receiver_signature",rec.receiver_signature_path);
    await keep("handoff_photo",rec.handoff_photo_path);
-   const {error}=await sb.rpc("cash_handoff_cancel",{p_user_id:cashDetail,p_year_month:cashMonth,p_contract_id:cashCid||CASH_DEF_CONTRACT,p_reason:reason,p_archived:arch,p_reset_paid:CASH_CANCEL_RESET_PAID});
+   const {data:cres,error}=await sb.rpc("cash_handoff_cancel",{p_user_id:cashDetail,p_year_month:cashMonth,p_contract_id:cashCid||CASH_DEF_CONTRACT,p_reason:reason,p_archived:arch,p_reset_paid:CASH_CANCEL_RESET_PAID});
    if(error)throw error;
    await refreshCashRecord(cashDetail,cashMonth);
-   toast("手渡しを取り消しました。もう一度サインできます");
+   if(cres&&cres.mf_registered>0)alert("手渡しを取り消しました。\n\n⚠️ この給料は会計ソフト(MF)に登録済みの仕訳が"+cres.mf_registered+"件あります。自動では消していません。必要なら会計側で確認してください（本部にも通知しました）。");
+   else toast("手渡しを取り消しました。もう一度サインできます");
   }catch(e){toast("取り消しエラー: "+(e&&e.message?e.message:e),true)}
   cashCancelSaving=false;render();
  };

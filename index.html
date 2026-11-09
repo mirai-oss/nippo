@@ -1191,6 +1191,14 @@ async function renderJoin(){
      <button type="button" class="btn sm sub" id="j-station" style="margin:0">🚉 住所から最寄り駅を調べる</button>
      <div id="j-stationbox" style="margin-top:6px"></div>
      <input type="text" id="j-stnote" placeholder="備考（例: 自転車で10分、バス利用）" style="margin-top:6px;font-size:14px">`:""}</div>`;
+  // 2026-11-10 Phase 2: 通勤情報（交通費の自動照合に使う。任意。register_via_invite は変えず、登録直後に RPC onboarding_save_commute で保存）
+  if(F.addr.on)h+=`<div class="card" data-joinsec><h3>通勤について <span class="muted" style="font-size:12px;font-weight:normal">（任意・交通費の確認に使います）</span></h3>
+    <p class="muted" style="margin:0 0 4px">通勤手段</p>
+    <select id="j-cm-method"><option value="">選んでください</option><option value="train">電車</option><option value="train_bus">電車＋バス</option><option value="bus">バス</option><option value="bike">自転車</option><option value="walk">徒歩</option><option value="car">車・バイク</option><option value="other">その他</option></select>
+    <input type="text" id="j-cm-route" placeholder="経路（例: 田町→新橋 JR山手線）" style="margin-top:6px">
+    <input type="number" inputmode="numeric" min="0" id="j-cm-fare" placeholder="片道の交通費（円。例: 160）" style="margin-top:6px">
+    <label style="display:flex;gap:6px;align-items:center;margin-top:6px;font-size:14px"><input type="checkbox" id="j-cm-bus" style="width:auto;margin:0">バスを使う</label>
+    <input type="text" id="j-cm-note" placeholder="特記（例: 雨の日はバス、定期あり）" style="margin-top:6px"></div>`;
   if(F.ename.on||F.erel.on||F.ephone.on)h+=`<div class="card" data-joinsec><h3>緊急連絡先${(F.ename.req||F.erel.req||F.ephone.req)?' <span class="req">必須</span>':""}</h3>
     ${F.ename.on?`<input type="text" id="j-ename" placeholder="氏名" value="${esc(pf.ename)}">`:""}
     ${F.erel.on?`<input type="text" id="j-erel" placeholder="続柄（例: 父）" value="${esc(pf.erel)}">`:""}
@@ -1580,8 +1588,10 @@ async function doJoin(){
  const smSelRadio=document.querySelector('input[name="jsm"]:checked'); // v2.6.1
  const smWanted=!(joinInfoCur&&joinInfoCur.skip_smaregi)&&!(smSelRadio&&smSelRadio.value==="no");
  // v2.6.13 スマレジ登録の完了を待ってから通知（リンクを含めるため）
- if(!linked&&smWanted)try{await smaregiSync(data.user.id)}catch(e){}
+ if(!linked&&smWanted)try{let sr=await smaregiSync(data.user.id);if(!sr||!sr.ok){await new Promise(r=>setTimeout(r,3000));sr=await smaregiSync(data.user.id)}}catch(e){} // 2026-11-10: 起動直後の 503 対策で 1 回だけ再試行
  else if(!linked)try{await sb.rpc("set_my_smaregi_skip")}catch(e){}
+ // 2026-11-10 Phase 2: 通勤情報（任意）。register_via_invite は変えず別 RPC。SQL 未適用（RPC 無し）なら黙ってスキップ
+ if(!acctOnly)try{const cmM=val("j-cm-method"),cmF=val("j-cm-fare");if(cmM||cmF||val("j-cm-route")){await sb.rpc("onboarding_save_commute",{p_user:data.user.id,p_method:cmM||null,p_route_text:val("j-cm-route")||null,p_claimed_fare:cmF===""?null:Number(cmF),p_uses_bus:!!($("j-cm-bus")&&$("j-cm-bus").checked),p_note:val("j-cm-note")||null,p_via:"nippo_join"})}}catch(e){}
  try{await sb.rpc("notify_join_complete")}catch(e){}
  hqNotifyOnboarding(data.user.id,name,email); // 2026-09-01追加(B-18): 本部タスク自動作成フック（await不要・失敗しても登録自体は継続）
  await loadMe(data.user.id,{afterJoin:true}); // 2026-09-01追加: LINE未連携ならその場で連携画面を出す

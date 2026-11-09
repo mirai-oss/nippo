@@ -1543,6 +1543,10 @@ async function doJoin(){
  const st=pickedStation("j-stationbox"),stNote=val("j-stnote");
  if(st)extra["最寄り駅"]=st+(stNote?`／${stNote}`:"");
  else if(stNote)extra["最寄り駅"]=stNote;
+ // 2026-11-10 Phase 2: 通勤情報は extra にも控える（SQL 未適用で RPC が無くても失われない。スマレジの管理者メモにも載る）
+ if(!acctOnly){const cmSel=$("j-cm-method");const cmLabel=cmSel&&cmSel.value?cmSel.options[cmSel.selectedIndex].text:"";
+  if(cmLabel)extra["通勤手段"]=cmLabel;if(val("j-cm-route"))extra["通勤経路"]=val("j-cm-route");if(val("j-cm-fare")!=="")extra["片道交通費"]=val("j-cm-fare")+"円";
+  if($("j-cm-bus")&&$("j-cm-bus").checked)extra["バス利用"]="あり";if(val("j-cm-note"))extra["通勤特記"]=val("j-cm-note")}
  const ph=val("j-phone");
  if(ph&&!phoneOk(ph)){toast("電話番号の桁数をご確認ください（10桁または11桁）",true);return} // v2.6.48
  const smId=joinSmSel||null; // v2.5.2 照合で本人確認したスマレジスタッフ

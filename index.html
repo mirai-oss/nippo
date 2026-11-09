@@ -604,6 +604,7 @@ let ekispertKey=null,fareCache={}; // v2.6.66 交通費の自動計算（駅す�
 let lineToken=null,lineSecret=null,lineOa=null; // v2.6.20 求人用LINE
 let lineHealthChecked=false,lineHealthOk=null,lineHealthErr=""; // 2026-08-28 LINE接続の生存確認（応募者管理を開くたびに1回・ユーザー報告への対応）
 let lineLinkInfo=null; // v2.6.81 従業員本人のLINE連携（発行した合言葉・OA。応募者側のline_intakeとは独立）
+let joinPjChoice="later",showPostJoinNow=false; // 2026-11-09 Phase 6 v2: 入社フォームでの「今入力する／後から入力する」
 let showLineJoinPrompt=false; // 2026-09-01追加: 入社登録直後、LINE未連携ならその場で連携を促す画面を出すフラグ
 let meSlackLinked=null,joinSlackInvite=null; // 2026-11-08追加: 入社登録直後の Slack 登録案内（方針: 入社後の連絡は Slack。登録メール＝管理システムのメールで自動紐づけ）
 let dashId=null,dashPw=null,dashLog; // v2.6.57 売上ダッシュボード連携
@@ -1200,7 +1201,12 @@ async function renderJoin(){
     ${commuteEditFormHtml(null,"j-cm",{saveBtn:false})}
     <p id="j-cm-summary" class="muted" style="margin:8px 0 0;font-size:12px"></p></div>`;
   // 2026-11-09 Phase 6: 扶養家族・年末調整は入社後の別フォーム（入社登録を早く終えるため、ここでは預からない）
-  h+=`<div class="card" data-joinsec style="background:#f7f9fc"><p class="muted" style="margin:0;font-size:12px">📝 扶養家族・年末調整の情報は、入社後に「設定」ページの「📝 扶養・年末調整の登録」から送ってください（ここでの入力は不要です。入社登録はこのフォームで完了します）。</p></div>`;
+  // 2026-11-09 v2（ユーザー最終方針）: 社員・アルバイトとも案内を出し、本人が「今入力する／後から入力する」を選ぶ。どちらでも入社登録は完了する
+  h+=`<div class="card" data-joinsec style="background:#f7f9fc"><h3>📝 税務・扶養情報の案内</h3>
+    <p class="muted" style="margin:0;font-size:12px">扶養家族と年末調整の情報は、入社後に「設定」ページの「📝 扶養・年末調整の登録」からいつでも送れます。今ここで続けて入力することもできます（入社登録はどちらでも完了します）。</p>
+    <label class="radio-row"><input type="radio" name="j-pj" value="later" checked>後から入力する（入社後に「設定」ページから）</label>
+    <label class="radio-row"><input type="radio" name="j-pj" value="now">今入力する（登録のあと、続けて入力画面が出ます）</label>
+    <p class="muted" style="margin:6px 0 0;font-size:11px">※ 社内で「任意」とされている場合も社内運用上の扱いです。税法上の手続き（扶養控除等申告書など）が不要になるものではありません。</p></div>`;
   if(F.ename.on||F.erel.on||F.ephone.on)h+=`<div class="card" data-joinsec><h3>緊急連絡先${(F.ename.req||F.erel.req||F.ephone.req)?' <span class="req">必須</span>':""}</h3>
     ${F.ename.on?`<input type="text" id="j-ename" placeholder="氏名" value="${esc(pf.ename)}">`:""}
     ${F.erel.on?`<input type="text" id="j-erel" placeholder="続柄（例: 父）" value="${esc(pf.erel)}">`:""}
@@ -1604,7 +1610,12 @@ async function doJoin(){
  if(cmV&&!cmV.empty)try{await sb.rpc("onboarding_save_commute",{p_user:data.user.id,p_method:cmV.method||null,p_route_text:cmV.route||null,p_claimed_fare:cmV.fare,p_uses_bus:cmV.bus,p_note:cmV.note||null,p_via:"nippo_join"})}catch(e){}
  try{await sb.rpc("notify_join_complete")}catch(e){}
  hqNotifyOnboarding(data.user.id,name,email); // 2026-09-01追加(B-18): 本部タスク自動作成フック（await不要・失敗しても登録自体は継続）
+ // 2026-11-09 Phase 6 v2: 税務・扶養情報の案内の選択（今入力する／後から）。RPC が無くても登録は継続
+ joinPjChoice=(document.querySelector('input[name="j-pj"]:checked')||{}).value||"later";
+ if(!acctOnly)try{for(const t of ["dependents","year_end"]){const {error}=await sb.rpc("onboarding_post_join_choice",{p_user:data.user.id,p_track:t,p_choice:joinPjChoice});if(error)break}}catch(e){}
+ showPostJoinNow=!acctOnly&&joinPjChoice==="now";
  await loadMe(data.user.id,{afterJoin:true}); // 2026-09-01追加: LINE未連携ならその場で連携画面を出す
+ if(showPostJoinNow&&!showLineJoinPrompt){showLineJoinPrompt=true;render()} // 今入力する: Slack/LINE 案内の画面の先頭に本人フォームを出す（連携済みでも同じ画面で続ける）
 }
 // ===== B-18（2026-09-01）入社登録完了→本部タスク自動作成フック =====
 // 実装指示書_ラウンド5_2026-08-31.md §6.1「E-6＋B-18」。E-6（担当E）が
@@ -5167,6 +5178,7 @@ async function adminView(){
  if(adminMode==="retire")return await adminRetireView(); // 2026-10-03追加: 退職申請一覧（本部・社長・マスター）
  if(adminMode==="contractreg")return await adminContractRegView(); // 2026-10-17追加
  if(adminMode==="storemis")return await adminStoreMisView();
+ if(adminMode==="pjrules")return await adminPjRulesView(); // 2026-11-09 Phase 6 v2: 扶養・年末調整の標準ルール（マスター／社長）
  const bankAllowed=me.is_master||me.role==="HQ"; // payroll_bank_accountsのRLSと同じ条件
  const [{data:us,error},{data:uss},{data:ntfs},{data:profs},bankRes,slackRes,slackInvRes]=await Promise.all([
   sb.from("users").select("*"),
@@ -5214,6 +5226,7 @@ async function adminView(){
  if(can("store_admin"))h+=`<button class="btn sub" id="adstores">🏪 店舗管理（追加・並び替え・スマレジ紐付け）</button>`;
  // 2026-08-29続き: 給与・インセンティブ配分（ユーザー要望「マスターの人が振り分けられるように権限設定して」）
  if(me.is_master)h+=`<button class="btn sub" id="adpayroll">💴 給与・インセンティブ配分</button>`;
+ if(me.is_master||me.role==="CEO")h+=`<button class="btn sub" id="adpjrules">📋 扶養・年末調整の標準ルール（雇用区分ごと）</button>`; // 2026-11-09 Phase 6 v2
  if(canApproveRetirement()){ // 2026-10-03追加: 退職申請一覧（承認待ち件数つき）
   const {count:retPending}=await sb.from("hr_change_requests").select("id",{count:"exact",head:true}).eq("status","pending");
   h+=`<button class="btn sub" id="adretire">🚪 退職・移籍・兼務の申請一覧${retPending>0?`（承認待ち ${retPending}件）`:""}</button>`;
@@ -7096,17 +7109,43 @@ const optLabel=(opts,v)=>{const o=opts.find(x=>String(x[0])===String(v??""));ret
 const selOpts=(opts,v)=>opts.map(([k,t])=>`<option value="${esc(k)}"${String(v??"")===String(k)?" selected":""}>${esc(t)}</option>`).join("");
 const pjMissingRpc=e=>/function|does not exist|not find|404|schema cache/i.test(String((e&&e.message)||e||""));
 let pjState=null; // {deps:[...], nodep:boolean} 本人フォームの編集中の扶養親族（送信するまで DB には書かない）
-// 読む: 年末調整（employee_year_end）・扶養親族（employee_dependents の有効行）・項目の状態（本部だけ onboarding_workflow_v）
-async function loadPostJoinInfo(uid,{self=false}={}){
+// ---- v2（2026-11-09 ユーザー最終方針）: 社員・アルバイト全員が対象。必須/任意・リマインド・期限・年度・対象判定は「雇用区分の標準ルール＋従業員個別の上書き」をハブの RPC onboarding_post_join_overview で合成して表示する ----
+const PJ_TRACKS=[["dependents","扶養家族"],["year_end","年末調整"]];
+const pjThisYear=()=>Number(new Date().toLocaleString("en-US",{timeZone:"Asia/Tokyo",year:"numeric"}));
+let pjYear=null; // 本人/本部の画面で選んでいる年末調整の対象年度（既定 当年）
+const pjYearOpts=()=>{const y=pjThisYear();return [y-1,y,y+1]};
+// RPC の形の揺れを吸収: 配列 [{track,target_year,...}] でも {dependents:{...},year_end:{...}} でも受ける。effective の項目は top でも .effective 下でも可
+function pjNormalizeOverview(raw){
+ const out={dependents:null,year_end:null};
+ if(!raw)return out;
+ const put=(t,o)=>{if(!o||!t)return;const e=o.effective||o.policy||o;const s=o.status&&typeof o.status==="object"?o.status:o;out[t]={track:t,target_year:o.target_year??e.target_year??null,
+  form_enabled:e.form_enabled??true,invite_on_join:e.invite_on_join??true,required:!!e.required,remind_enabled:!!e.remind_enabled,deadline:e.deadline||null,target:e.target??null,source_of_required:e.source_of_required||null,class:e.class||o.class||null,
+  status:(typeof s.status==="string"?s.status:(o.status_text||o.state||"pending")),submitted_at:s.submitted_at||o.submitted_at||null,approved_at:s.approved_at||o.approved_at||null,has_snapshot:!!(o.has_snapshot||o.snapshot),summary:o.summary||null}};
+ if(Array.isArray(raw))raw.forEach(o=>put(o.track,o));
+ else if(raw.tracks)return pjNormalizeOverview(raw.tracks);
+ else Object.keys(raw).forEach(k=>{if(k==="dependents"||k==="year_end")put(k,raw[k])});
+ return out;
+}
+// 読む: 方針（RPC）・年末調整（年度別）・扶養親族（本人/本部の行）・スマレジから取り込んだ控え（snapshot）・提出状況
+async function loadPostJoinInfo(uid,{self=false,year=null}={}){
+ year=year||pjYear||pjThisYear();
  try{
-  const [a,b,c]=await Promise.all([
-   sb.from("employee_year_end").select("*").eq("user_id",uid).maybeSingle(),
-   sb.from("employee_dependents").select("*").eq("user_id",uid).eq("is_active",true).order("created_at"),
-   sb.from("employee_post_join_status").select("*").eq("user_id",uid).maybeSingle() // 提出状況（ハブ Phase 6: year_end_status / dependents_status。入社登録の項目とは別トラック）
-  ]);
+  const ov=await sb.rpc("onboarding_post_join_overview",{p_user:uid}).catch(e=>({error:e}));
+  const overview=ov&&!ov.error?pjNormalizeOverview(ov.data):null;
+  // 年末調整: v2 は (user_id, target_year)。列が無い（v1）なら年度なしで読む
+  let a=await sb.from("employee_year_end").select("*").eq("user_id",uid).eq("target_year",year).maybeSingle();
+  if(a.error&&/target_year/i.test(a.error.message||""))a=await sb.from("employee_year_end").select("*").eq("user_id",uid).maybeSingle();
   if(a.error)return {unsupported:true,error:a.error.message};
-  const pjs=(c&&c.data)||null;
-  return {yearEnd:a.data||null,deps:(b&&b.data)||[],status:pjs,itemYe:pjs?{state:pjs.year_end_status,at:pjs.year_end_submitted_at}:null,itemDep:pjs?{state:pjs.dependents_status,at:pjs.dependents_submitted_at}:null};
+  const b=await sb.from("employee_dependents").select("*").eq("user_id",uid).order("created_at");
+  const allDeps=(b&&b.data)||[];
+  const deps=allDeps.filter(d=>d.is_active&&d.source!=="smaregi_snapshot");
+  const snapDeps=allDeps.filter(d=>d.source==="smaregi_snapshot");
+  let snapYe=null;try{const r=await sb.from("employee_year_end_snapshot").select("*").eq("user_id",uid).eq("target_year",year).maybeSingle();snapYe=(r&&r.data)||null}catch(e){}
+  const c=await sb.from("employee_post_join_status").select("*").eq("user_id",uid);
+  const rows=(c&&c.data)||[];
+  // v2: 1 行＝(track, target_year)。v1: 1 行に year_end_status / dependents_status
+  const stFor=t=>{const r=rows.find(x=>x.track===t&&(t!=="year_end"||!x.target_year||Number(x.target_year)===Number(year)));if(r)return {state:r.status,at:r.submitted_at,approved_at:r.approved_at,reminded:r.last_reminded_at,count:r.remind_count};const v1=rows[0];if(v1&&v1[t+"_status"])return {state:v1[t+"_status"],at:v1[t+"_submitted_at"]};return null};
+  return {yearEnd:a.data||null,deps,snapDeps,snapYe,overview,statuses:rows,year,itemYe:stFor("year_end"),itemDep:stFor("dependents")};
  }catch(e){return {unsupported:true,error:String((e&&e.message)||e)}}
 }
 const pjDateJp=d=>d?new Date(d).toLocaleDateString("ja-JP"):"";
@@ -7181,29 +7220,50 @@ function depFormValues(prefix){
  return {name,kana,relationship:Number(rel),birthday:birth,living_together_division:Number(living),post_code:val(prefix+"-dzip")||null,address:val(prefix+"-daddr")||null,estimate_income:income,retirement_income:retire,handicapped_division:Number(val(prefix+"-dhandicap")||1)};
 }
 // 本人のカード（設定ページ）。提出済みなら内容を出して再編集できる
-function postJoinCardHtml(info,{uid,self}){
+// 本人のカード（設定ページ／入社登録直後「今入力する」）。方針（必須・任意・期限・年度）を先に出し、スマレジの控え（snapshot）があれば初期値に使う
+function pjPolicyLine(info,t){
+ const o=info.overview&&info.overview[t];const st=t==="year_end"?info.itemYe:info.itemDep;
+ const state=(st&&st.state)||(o&&o.status)||"pending";
+ const stLabel=PJ_STATE_LABEL[state]||state;
+ if(!o)return `<span class="muted">提出状況: ${esc(stLabel)}</span>`;
+ const req=o.target===false?"対象外（本部の判定）":o.required?`<b style="color:var(--red)">提出必須</b>${o.deadline?`（期限 ${esc(pjDateJp(o.deadline))}）`:""}`:"任意";
+ const src=o.source_of_required==="override"?"（本部の個別設定）":"";
+ return `${req}${src}　提出状況: <b>${esc(stLabel)}</b>${o.remind_enabled&&o.required&&state==="pending"?"　<span class=\"muted\">※未提出のあいだ、お知らせが届きます</span>":""}`;
+}
+function postJoinCardHtml(info,{uid,self,afterJoin=false}){
  if(!info||info.unsupported)return self?"":`<div class="card"><h3>📝 扶養・年末調整</h3><p class="muted" style="margin:0">この機能はまだ使えません（${esc((info&&info.error)||"準備中")}）</p></div>`;
- const y=info.yearEnd,deps=info.deps||[];
- if(!pjState||pjState.uid!==uid){pjState={uid,deps:deps.map(d=>({...d})),nodep:!!(y&&y.submitted_at&&!deps.length)}}
+ const y=info.yearEnd,deps=info.deps||[],ov=info.overview||{};
+ const useSnapYe=!y&&info.snapYe&&info.snapYe.data;
+ const yInit=useSnapYe?info.snapYe.data:y;
+ const useSnapDeps=!deps.length&&!(y&&y.submitted_at)&&(info.snapDeps||[]).length>0;
+ if(!pjState||pjState.uid!==uid||pjState.year!==info.year){const base=useSnapDeps?info.snapDeps:deps;pjState={uid,year:info.year,deps:base.map(d=>({...d})),nodep:!!(y&&y.submitted_at&&!deps.length)}}
  const prefix="pj";
+ const yeOn=!(ov.year_end&&ov.year_end.form_enabled===false),depOn=!(ov.dependents&&ov.dependents.form_enabled===false);
  const status=y&&y.submitted_at?`✅ 提出済み（${pjDateJp(y.submitted_at)}）・${esc(PJ_SYNC_LABEL[y.sync_status]||y.sync_status||"")}`:"⬜ まだ提出されていません";
- return `<div class="card" id="postjoin"><h3>📝 扶養・年末調整の登録${self?"":"（本人フォームの代理入力）"}</h3>
-  <p class="muted" style="margin:0;font-size:12px">${self?"入社の手続きの続きです。スマレジ・タイムカードの「年末調整」「扶養設定」と同じ内容を、ここで送ってください（本部が確認してスマレジに入れます）。":"本人の代わりに本部が入力できます。"}</p>
+ return `<div class="card" id="postjoin"><h3>📝 ${afterJoin?"入社登録の続き：税務・扶養情報":"扶養・年末調整の登録"}${self?"":"（本人フォームの代理入力）"}</h3>
+  <p class="muted" style="margin:0;font-size:12px">${self?"スマレジ・タイムカードの「年末調整」「扶養設定」と同じ内容を、ここで送ってください（本部が確認してスマレジに入れます）。":"本人の代わりに本部が入力できます。"}</p>
+  <p style="margin:6px 0 0;font-size:13px">扶養家族: ${pjPolicyLine(info,"dependents")}</p>
+  <p style="margin:4px 0 0;font-size:13px">年末調整 <select id="${prefix}-year" style="width:auto;display:inline-block;margin:0 4px;padding:2px 6px">${pjYearOpts().map(v=>`<option value="${v}"${v===info.year?" selected":""}>${v} 年度</option>`).join("")}</select>: ${pjPolicyLine(info,"year_end")}</p>
+  <p class="muted" style="margin:6px 0 0;font-size:11px">※ 社内の「任意」は社内運用上の扱いです。税法上の手続き（扶養控除等申告書など）が不要になるものではありません。</p>
+  ${useSnapYe||useSnapDeps?`<p style="margin:8px 0 0;font-size:13px;background:#fff8e1;border-radius:6px;padding:6px 8px">📥 スマレジに登録されている内容です（${esc(pjDateJp((info.snapYe&&info.snapYe.fetched_at)||(info.snapDeps[0]&&info.snapDeps[0].created_at)))}取り込み）。違っていれば直して送ってください。</p>`:""}
   <p style="margin:6px 0 0;font-size:13px">${status}</p>
-  <h4 style="margin:12px 0 0;font-size:14px">年末調整</h4>
-  ${yearEndFormHtml(y,prefix)}
-  <h4 style="margin:14px 0 0;font-size:14px">扶養設定（扶養親族）</h4>
+  ${yeOn?`<h4 style="margin:12px 0 0;font-size:14px">年末調整（${info.year} 年度）</h4>${yearEndFormHtml(yInit,prefix)}`:`<p class="muted" style="margin:10px 0 0;font-size:12px">年末調整のフォームは本部の設定で今は使えません。</p>`}
+  ${depOn?`<h4 style="margin:14px 0 0;font-size:14px">扶養設定（扶養親族）</h4>
   <label style="display:flex;gap:6px;align-items:center;margin:6px 0 0;font-size:14px"><input type="checkbox" id="${prefix}-nodep" style="width:auto;margin:0"${pjState.nodep?" checked":""}>扶養親族はいません</label>
   <div id="${prefix}-deplist" style="${pjState.nodep?"display:none":""}">${depListHtml(prefix)}
    <button class="btn sm sub" id="${prefix}-depadd" style="margin-top:6px">＋ 扶養親族を追加</button>
    ${depAddFormHtml(prefix)}
-  </div>
-  <button class="btn" id="${prefix}-submit" style="margin-top:12px">${y&&y.submitted_at?"この内容で更新して送る":"この内容で送る"}</button>
-  <p class="muted" style="margin:6px 0 0;font-size:11px">送ると本部に届き、スマレジ・タイムカードに反映されます。マイナンバーはスマレジの本人画面で登録してください。</p>
+  </div>`:`<p class="muted" style="margin:10px 0 0;font-size:12px">扶養家族のフォームは本部の設定で今は使えません。</p>`}
+  ${yeOn||depOn?`<button class="btn" id="${prefix}-submit" style="margin-top:12px">${y&&y.submitted_at?"この内容で更新して送る":"この内容で送る"}</button>`:""}
+  ${afterJoin?`<button class="btn sm sub" id="${prefix}-later" style="margin-top:8px;width:100%">あとで入力する（「設定」ページからいつでも送れます）</button>`:""}
+  <p class="muted" style="margin:6px 0 0;font-size:11px">送ると本部に届き、本部が確認・承認したあとスマレジ・タイムカードに反映されます。マイナンバーはスマレジの本人画面で登録してください。</p>
  </div>`;
 }
 function bindPostJoinForm(uid,via){
- const prefix="pj"; if(!$(prefix+"-submit"))return;
+ const prefix="pj";
+ if($(prefix+"-year"))$(prefix+"-year").onchange=e=>{pjYear=Number(e.target.value);pjState=null;render()};
+ if($(prefix+"-later"))$(prefix+"-later").onclick=()=>{showPostJoinNow=false;pjState=null;render()};
+ if(!$(prefix+"-submit"))return;
  const refreshList=()=>{const box=$(prefix+"-deplist");if(!box)return;const form=$(prefix+"-depform");const formHtml=form?form.outerHTML:depAddFormHtml(prefix);box.innerHTML=depListHtml(prefix)+`<button class="btn sm sub" id="${prefix}-depadd" style="margin-top:6px">＋ 扶養親族を追加</button>`+formHtml;wire()};
  const wire=()=>{
   if($(prefix+"-depadd"))$(prefix+"-depadd").onclick=()=>{$(prefix+"-depform").style.display="";$(prefix+"-dname").focus()};
@@ -7214,52 +7274,158 @@ function bindPostJoinForm(uid,via){
  wire();
  if($(prefix+"-nodep"))$(prefix+"-nodep").onchange=e=>{pjState.nodep=e.target.checked;$(prefix+"-deplist").style.display=pjState.nodep?"none":""};
  $(prefix+"-submit").onclick=async()=>{
-  const ye=yearEndFormValues(prefix); if(ye.error){toast(ye.error,true);return}
-  const rows=pjState.nodep?[]:pjState.deps.map(d=>({name:d.name,kana:d.kana,relationship:d.relationship,birthday:d.birthday,living_together_division:d.living_together_division,post_code:d.post_code||null,address:d.address||null,estimate_income:d.estimate_income||0,retirement_income:d.retirement_income||0,handicapped_division:d.handicapped_division||1}));
-  if(!pjState.nodep&&!rows.length){toast("扶養親族を追加するか、「扶養親族はいません」にチェックしてください",true);return}
+  const hasYe=!!$(prefix+"-ye"),hasDep=!!$(prefix+"-deplist");
+  const year=Number(val(prefix+"-year")||pjState.year||pjThisYear());
+  const ye=hasYe?yearEndFormValues(prefix):null; if(ye&&ye.error){toast(ye.error,true);return}
+  const rows=!hasDep?null:pjState.nodep?[]:pjState.deps.map(d=>({name:d.name,kana:d.kana,relationship:d.relationship,birthday:d.birthday,living_together_division:d.living_together_division,post_code:d.post_code||null,address:d.address||null,estimate_income:d.estimate_income||0,retirement_income:d.retirement_income||0,handicapped_division:d.handicapped_division||1}));
+  if(hasDep&&!pjState.nodep&&!rows.length){toast("扶養親族を追加するか、「扶養親族はいません」にチェックしてください",true);return}
   const b=$(prefix+"-submit");b.disabled=true;
   try{
-   const r1=await sb.rpc("onboarding_save_year_end",{p_user:uid,p_data:ye,p_via:via});
-   if(r1.error)throw r1.error;
-   const r2=await sb.rpc("onboarding_save_dependents",{p_user:uid,p_rows:rows,p_via:via});
-   if(r2.error)throw r2.error;
-   toast(via==="nippo_self"?"送りました。本部が確認してスマレジ・タイムカードに反映します":"保存しました（本部の代理入力）");
-   pjState=null;render();
+   if(ye){ // v2: 対象年度つき。RPC が年度の引数を持たない版なら p_data.target_year だけで呼び直す
+    let r1=await sb.rpc("onboarding_save_year_end",{p_user:uid,p_data:{...ye,target_year:year},p_via:via,p_target_year:year});
+    if(r1.error&&/p_target_year|PGRST202|does not exist/i.test(r1.error.message||""))r1=await sb.rpc("onboarding_save_year_end",{p_user:uid,p_data:{...ye,target_year:year},p_via:via});
+    if(r1.error)throw r1.error;
+   }
+   if(rows){const r2=await sb.rpc("onboarding_save_dependents",{p_user:uid,p_rows:rows,p_via:via});if(r2.error)throw r2.error}
+   toast(via==="nippo_self"?"送りました。本部が確認・承認してスマレジ・タイムカードに反映します":"保存しました（本部の代理入力）");
+   pjState=null;showPostJoinNow=false;render();
   }catch(e){b.disabled=false;toast(pjMissingRpc(e)?"この機能はまだ使えません（本部にお知らせください）":"保存エラー: "+String((e&&e.message)||e),true)}
  };
 }
 // 本部のカード（従業員編集）: 提出状況・内容の要約・「不要にする」・再送依頼の案内。本文の代理入力もできる（同じフォーム）
-const PJ_STATE_LABEL={pending:"未提出",submitted:"提出済み（本部が確認してスマレジへ）",none:"扶養なし（提出済み）",synced:"スマレジに反映済み",skipped:"不要（本部が確認済み）",running:"処理中",completed:"完了",retry_wait:"再試行待ち",manual_required:"本部の確認待ち",manual_running:"手動対応中",cancelled:"中止",failed:"失敗"};
-function postJoinHqCardHtml(info,u){
+// 本部のカード（従業員編集）: 方針（標準ルール＋個別上書き）・提出状況・内容の要約・個別設定の変更（理由必須・履歴）・「不要にする」・代理入力。承認は Slack 側。一括操作は作らない
+const PJ_STATE_LABEL={pending:"未提出",submitted:"提出済み（本部の確認・承認待ち）",approved:"承認済み（スマレジへ反映待ち）",queued:"スマレジへ反映の順番待ち",none:"扶養なし（提出済み）",synced:"スマレジに反映済み",error:"反映エラー",skipped:"不要（本部が確認済み）",not_target:"対象外",running:"処理中",completed:"完了",retry_wait:"再試行待ち",manual_required:"本部の確認待ち",manual_running:"手動対応中",cancelled:"中止",failed:"失敗"};
+const PJ_HIST_KIND={rule_changed:"標準ルールを変更",override_set:"個別設定を変更",override_cleared:"個別設定を解除（標準に戻す）",class_changed:"雇用区分が変わった",status_changed:"状態が変わった",approved:"承認",skipped:"不要にした"};
+const triSel=(id,v,labels)=>`<select class="inp" id="${id}" style="width:auto;display:inline-block;margin:0 4px 0 0;padding:3px 6px"><option value=""${v==null?" selected":""}>標準ルール</option><option value="true"${v===true?" selected":""}>${labels[0]}</option><option value="false"${v===false?" selected":""}>${labels[1]}</option></select>`;
+async function loadPjHistory(uid){try{const {data,error}=await sb.from("post_join_policy_history").select("*").eq("user_id",uid).order("created_at",{ascending:false}).limit(20);if(error)throw error;return data||[]}catch(e){return null}}
+function pjHistHtml(rows){
+ if(rows===null)return `<p class="muted" style="margin:4px 0 0;font-size:12px">（履歴はまだ使えません）</p>`;
+ if(!rows.length)return `<p class="muted" style="margin:4px 0 0;font-size:12px">（変更の履歴はありません）</p>`;
+ const t=k=>PJ_TRACKS.find(x=>x[0]===k)?PJ_TRACKS.find(x=>x[0]===k)[1]:(k||"");
+ return `<ul style="margin:4px 0 0;padding-left:18px;font-size:12px">${rows.map(r=>`<li>${esc(new Date(r.created_at).toLocaleString("ja-JP"))}　${esc(PJ_HIST_KIND[r.kind]||r.kind)}${r.track?`（${esc(t(r.track))}${r.target_year?" "+esc(r.target_year)+"年度":""}）`:""}${r.reason?`：${esc(r.reason)}`:""}${r.actor_name?` <span class="muted">${esc(r.actor_name)}</span>`:""}${r.after&&r.kind==="override_set"?` <span class="muted">${esc(JSON.stringify(r.after).slice(0,80))}</span>`:""}</li>`).join("")}</ul>`;
+}
+function pjOverrideFormHtml(info,t){
+ const o=(info.overview&&info.overview[t])||{};const p="pjov-"+t;
+ const isYe=t==="year_end";
+ return `<div style="border:1px dashed var(--line);border-radius:8px;padding:8px;margin-top:6px;font-size:13px" id="${p}-box">
+  <b>${isYe?`年末調整（${info.year} 年度）`:"扶養家族"}の個別設定</b> <span class="muted">今の適用: ${o.required?"必須":"任意"}${o.source_of_required==="override"?"（個別設定）":"（標準ルール"+(o.class?"・"+(o.class==="AL"?"アルバイト":"社員")+"）":"）")}</span><br>
+  <label style="font-size:12px">提出 ${triSel(p+"-req",null,["必須","任意"])}</label>
+  <label style="font-size:12px">リマインド ${triSel(p+"-rem",null,["有効","無効"])}</label>
+  <label style="font-size:12px">フォーム ${triSel(p+"-form",null,["使える","使えない"])}</label>
+  ${isYe?`<label style="font-size:12px">年末調整の対象 ${triSel(p+"-target",null,["対象","対象外"])}</label>`:""}
+  <label style="font-size:12px;display:inline-block">期限 <input type="date" id="${p}-deadline" style="width:auto;display:inline-block;margin:0 4px 0 0;padding:3px 6px"></label>
+  <input type="text" id="${p}-reason" maxlength="200" placeholder="変更の理由（必須。履歴に残ります）" style="margin-top:6px">
+  <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><button class="btn sm" data-pjov-save="${t}" style="margin:0">個別設定を保存</button><button class="btn sm sub" data-pjov-clear="${t}" style="margin:0">標準ルールに戻す</button></div>
+  <p class="muted" style="margin:6px 0 0;font-size:11px">「標準ルール」のままの項目は雇用区分の標準ルールが使われます。変更者・日時・理由は履歴に残ります。</p>
+ </div>`;
+}
+function postJoinHqCardHtml(info,u,hist){
  if(!info||info.unsupported)return `<div class="card"><h3>📝 扶養・年末調整</h3><p class="muted" style="margin:0">この機能はまだ使えません（${esc((info&&info.error)||"準備中")}）</p></div>`;
  const y=info.yearEnd,deps=info.deps||[];
- const st=k=>{const it=k==="year_end"?info.itemYe:info.itemDep;return it?`${PJ_STATE_LABEL[it.state]||it.state}`:"未提出"};
  const yeSum=y&&y.submitted_at?`世帯主 ${esc(y.household_header_name||"—")}（${esc(optLabel(YE_REL_OPTS,y.household_header_relationship))}）／配偶者 ${y.spouse_flag?"あり":"なし"}／合計所得見積 ${yenFmt(y.estimate_income)}／退職所得 ${yenFmt(y.retirement_income)}／障害者 ${esc(optLabel(YE_HANDICAP_OPTS,y.handicapped_division))}／寡婦・ひとり親 ${esc(optLabel(YE_WIDOW2_OPTS,y.widow_division2))}／(旧) ${esc(optLabel(YE_WIDOW_OPTS,y.widow_division))}／勤労学生 ${y.student_flag?"該当する":"該当しない"}／報告人員区分 ${String(y.salary_payment_report_collection_division)==="2"?"普通徴収対象者":"特別徴収対象者"}<br><span class="muted">提出 ${pjDateJp(y.submitted_at)}・${esc(PJ_SYNC_LABEL[y.sync_status]||y.sync_status||"")}</span>`:"（未提出）";
  const depSum=deps.length?`<ol style="margin:4px 0 0;padding-left:20px">${deps.map(d=>`<li>${depRowText(d)}${d.smaregi_synced_at?` <span class="muted">スマレジ反映 ${pjDateJp(d.smaregi_synced_at)}</span>`:""}</li>`).join("")}</ol>`:(y&&y.submitted_at?"（扶養親族なし、と提出）":"（未提出）");
+ const snap=(info.snapDeps||[]).length||(info.snapYe&&info.snapYe.data)?`<p class="muted" style="margin:6px 0 0;font-size:12px">📥 スマレジから取り込んだ控え: 扶養 ${(info.snapDeps||[]).length} 人${info.snapYe&&info.snapYe.data?"・年末調整あり":""}（本人フォームの初期値に使われます。本人の提出を上書きしません）</p>`:"";
  return `<div class="card"><h3>📝 扶養・年末調整（入社後フォーム）</h3>
-  <p style="margin:0;font-size:13px">年末調整: <b>${st("year_end")}</b>　扶養家族: <b>${st("dependents")}</b></p>
-  <p style="margin:8px 0 0;font-size:13px"><b>年末調整</b><br>${yeSum}</p>
+  <p style="margin:0;font-size:13px">扶養家族: ${pjPolicyLine(info,"dependents")}</p>
+  <p style="margin:4px 0 0;font-size:13px">年末調整 <select id="pjhq-year" style="width:auto;display:inline-block;margin:0 4px;padding:2px 6px">${pjYearOpts().map(v=>`<option value="${v}"${v===info.year?" selected":""}>${v} 年度</option>`).join("")}</select>: ${pjPolicyLine(info,"year_end")}</p>
+  ${snap}
+  <p style="margin:8px 0 0;font-size:13px"><b>年末調整（${info.year} 年度）</b><br>${yeSum}</p>
   <p style="margin:8px 0 0;font-size:13px"><b>扶養親族</b>${depSum}</p>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
    <button class="btn sm sub" id="pjhq-skip-ye">年末調整は不要にする</button>
    <button class="btn sm sub" id="pjhq-skip-dep">扶養家族は不要にする</button>
    <button class="btn sm sub" id="pjhq-toggle">${y&&y.submitted_at?"内容を直す（代理入力）":"代理で入力する"}</button>
+   <button class="btn sm sub" id="pjhq-snapshot">📥 スマレジの内容を取り込む（この人だけ）</button>
+   <button class="btn sm sub" id="pjhq-ovtoggle">⚙️ 個別設定（必須・リマインド・期限・対象）</button>
   </div>
-  <p class="muted" style="margin:8px 0 0;font-size:12px">スマレジへの反映は Slack #本部-人事 のスレッド（「🧾 スマレジに反映」）から。未提出の人への再送依頼は Slack の親メッセージ「📨 本人へ連絡」で文面を作れます。</p>
+  <p class="muted" style="margin:8px 0 0;font-size:12px">承認とスマレジへの反映は Slack #本部-人事 のスレッド（「✅ 承認してスマレジへ」）から。未提出の人への再送依頼は Slack の親メッセージ「📨 本人へ連絡」で文面を作れます。取り込みは 1 人ずつ（一括はしません）。</p>
+  <div id="pjhq-ov" style="display:none">${pjOverrideFormHtml(info,"dependents")}${pjOverrideFormHtml(info,"year_end")}
+   <p style="margin:8px 0 0;font-size:13px"><b>変更の履歴</b></p>${pjHistHtml(hist)}</div>
   <div id="pjhq-form" style="display:none;margin-top:8px">${postJoinCardHtml(info,{uid:u.id,self:false})}</div>
  </div>`;
 }
 function bindPostJoinHqCard(uid){
  if(!$("pjhq-toggle"))return;
+ if($("pjhq-year"))$("pjhq-year").onchange=e=>{pjYear=Number(e.target.value);pjState=null;render()};
  $("pjhq-toggle").onclick=()=>{const f=$("pjhq-form");f.style.display=f.style.display==="none"?"":"none";bindPostJoinForm(uid,"nippo_hq")};
+ $("pjhq-ovtoggle").onclick=()=>{const f=$("pjhq-ov");f.style.display=f.style.display==="none"?"":"none"};
  const skip=async(kind,label)=>{
-  if(!confirm(`${label}を「不要」として完了にします。よろしいですか？（本人からの提出は不要になります）`))return;
-  const {error}=await sb.rpc("onboarding_skip_post_join",{p_user:uid,p_kind:kind});
+  if(!confirm(`${label}を「不要」として完了にします。よろしいですか？（本人からの提出は不要になります。理由は履歴に残ります）`))return;
+  const reason=prompt("理由（必須）");if(!reason)return;
+  let {error}=await sb.rpc("onboarding_skip_post_join",{p_user:uid,p_kind:kind,p_reason:reason,p_year:kind==="year_end"?(pjYear||pjThisYear()):null});
+  if(error&&/p_reason|p_year|PGRST202/i.test(error.message||""))({error}=await sb.rpc("onboarding_skip_post_join",{p_user:uid,p_kind:kind}));
   if(error){toast(pjMissingRpc(error)?"この機能はまだ使えません":"エラー: "+error.message,true);return}
   toast(`${label}を不要にしました`);pjState=null;render();
  };
  $("pjhq-skip-ye").onclick=()=>skip("year_end","年末調整");
  $("pjhq-skip-dep").onclick=()=>skip("dependents","扶養家族");
+ // スマレジの内容を取り込む: 依頼だけ記録（実際の取得は EF/Mac。一括禁止＝この 1 人だけ）
+ $("pjhq-snapshot").onclick=async()=>{
+  if(!confirm("この従業員 1 人分だけ、スマレジ・タイムカードに登録されている年末調整・扶養の内容を控えとして取り込む依頼を出します（本人の提出内容は上書きしません）。よろしいですか？"))return;
+  const {error}=await sb.rpc("post_join_request_snapshot",{p_user:uid,p_year:pjYear||pjThisYear()});
+  if(error){toast(pjMissingRpc(error)?"取り込み依頼の機能はまだ使えません。Slack の親メッセージの「🔎 スマレジ照合」か、スレッドの「🔎 スマレジと比較」を押してください":"エラー: "+error.message,true);return}
+  toast("取り込みを依頼しました。結果は Slack のスレッドと、このカードの「控え」に出ます");
+ };
+ const tri=id=>{const v=val(id);return v===""?null:v==="true"};
+ document.querySelectorAll("[data-pjov-save]").forEach(b=>b.onclick=async()=>{
+  const t=b.dataset.pjovSave,p="pjov-"+t;const reason=val(p+"-reason");if(!reason){toast("変更の理由を入れてください（履歴に残ります）",true);return}
+  const patch={};const req=tri(p+"-req"),rem=tri(p+"-rem"),form=tri(p+"-form");
+  if(req!==null)patch.required=req;if(rem!==null)patch.remind_enabled=rem;if(form!==null)patch.form_enabled=form;
+  if(t==="year_end"){const tg=tri(p+"-target");if(tg!==null)patch.target=tg}
+  if(val(p+"-deadline"))patch.deadline=val(p+"-deadline");
+  if(!Object.keys(patch).length){toast("変える項目を 1 つ以上選んでください（「標準ルール」のままは変更なし）",true);return}
+  const {error}=await sb.rpc("post_join_set_override",{p_user:uid,p_track:t,p_year:t==="year_end"?(pjYear||pjThisYear()):null,p_patch:patch,p_reason:reason});
+  if(error){toast(pjMissingRpc(error)?"この機能はまだ使えません":"エラー: "+error.message,true);return}
+  toast("個別設定を保存しました（履歴に記録）");pjState=null;render();
+ });
+ document.querySelectorAll("[data-pjov-clear]").forEach(b=>b.onclick=async()=>{
+  const t=b.dataset.pjovClear,p="pjov-"+t;const reason=val(p+"-reason");if(!reason){toast("理由を入れてください（履歴に残ります）",true);return}
+  if(!confirm("個別設定を解除して、雇用区分の標準ルールに戻します。よろしいですか？"))return;
+  const {error}=await sb.rpc("post_join_clear_override",{p_user:uid,p_track:t,p_year:t==="year_end"?(pjYear||pjThisYear()):null,p_reason:reason});
+  if(error){toast(pjMissingRpc(error)?"この機能はまだ使えません":"エラー: "+error.message,true);return}
+  toast("標準ルールに戻しました（履歴に記録）");pjState=null;render();
+ });
+}
+// ---- 標準ルール（雇用区分 × トラック）の編集画面。マスター／社長だけ。理由必須・履歴に残る。一括の通知・変更はしない ----
+const PJ_CLASS_LABEL={SHAIN:"社員（店長・チーム長・本部・社長を含む）",AL:"アルバイト"};
+async function adminPjRulesView(){
+ if(!(me.is_master||me.role==="CEO"))return `<p class="muted">このページを表示する権限がありません。</p>`;
+ let rules=null,hist=null,err=null;
+ try{const {data,error}=await sb.from("post_join_rules").select("*");if(error)throw error;rules=data||[]}catch(e){err=String((e&&e.message)||e)}
+ try{const {data}=await sb.from("post_join_policy_history").select("*").is("user_id",null).order("created_at",{ascending:false}).limit(20);hist=data||[]}catch(e){hist=null}
+ let h=`<span class="back" id="adback">← 従業員一覧</span><h2>📋 扶養・年末調整の標準ルール</h2>
+  <p class="muted" style="margin:0 0 8px;font-size:12px">雇用区分ごとの標準ルールです。従業員ごとの例外は、従業員編集の「⚙️ 個別設定」で。変更には理由が必要で、履歴に残ります。<br>※ 社内で「任意」にしても、税法上の手続きが不要になるものではありません（法令上の提出は別途管理してください）。</p>`;
+ if(err||!rules)return h+`<div class="card"><p class="muted" style="margin:0">この機能はまだ使えません（${esc(err||"準備中")}）</p></div>`;
+ for(const cls of ["SHAIN","AL"])for(const [t,tl] of PJ_TRACKS){
+  const r=rules.find(x=>x.class===cls&&x.track===t)||{class:cls,track:t};const p=`pjr-${cls}-${t}`;
+  const chk=(id,v,label)=>`<label style="display:inline-block;margin:4px 10px 0 0;font-size:13px"><input type="checkbox" id="${id}" style="width:auto;margin:0 4px 0 0"${v?" checked":""}>${label}</label>`;
+  h+=`<div class="card"><h3>${esc(PJ_CLASS_LABEL[cls])} × ${esc(tl)}</h3>
+   ${chk(p+"-form",r.form_enabled!==false,"フォームを使える")}${chk(p+"-invite",r.invite_on_join!==false,"入社時に案内する")}${chk(p+"-req",!!r.required,"提出必須")}${chk(p+"-rem",!!r.remind_enabled,"未提出ならリマインド")}
+   <p style="margin:6px 0 0;font-size:13px">提出期限（日数） <input type="number" id="${p}-deadline" min="0" step="1" value="${r.deadline_days!=null?r.deadline_days:""}" placeholder="${t==="year_end"?"対象年度の 11/30 まで＝空欄":"入社日から ○ 日"}" style="width:110px;display:inline-block;margin:0 10px 0 4px">
+    リマインド間隔（期限前・日） <input type="number" id="${p}-int" min="1" step="1" value="${r.remind_interval_days!=null?r.remind_interval_days:3}" style="width:80px;display:inline-block;margin:0 10px 0 4px">
+    （期限後・日） <input type="number" id="${p}-intafter" min="1" step="1" value="${r.remind_interval_after_deadline_days!=null?r.remind_interval_after_deadline_days:1}" style="width:80px;display:inline-block;margin:0 0 0 4px"></p>
+   ${t==="year_end"?`<p style="margin:6px 0 0;font-size:13px">年末調整の対象判定 <select class="inp" id="${p}-target" style="width:auto;display:inline-block;margin:0 0 0 4px;padding:3px 6px"><option value="all"${(r.year_end_target_rule||"all")==="all"?" selected":""}>全員を対象（個別に対象外にできる）</option><option value="none"${r.year_end_target_rule==="none"?" selected":""}>標準では対象外（個別に対象にできる）</option></select></p>`:""}
+   <input type="text" id="${p}-note" maxlength="200" value="${esc(r.note||"")}" placeholder="メモ（任意）" style="margin-top:6px">
+   <input type="text" id="${p}-reason" maxlength="200" placeholder="変更の理由（必須。履歴に残ります）" style="margin-top:6px">
+   <button class="btn sm" data-pjr-save="${cls}|${t}" style="margin-top:6px">この標準ルールを保存</button>
+   <p class="muted" style="margin:6px 0 0;font-size:11px">最終更新: ${r.updated_at?esc(new Date(r.updated_at).toLocaleString("ja-JP")):"—"}</p>
+  </div>`;
+ }
+ h+=`<div class="card"><h3>変更の履歴（標準ルール）</h3>${pjHistHtml(hist)}</div>`;
+ return h;
+}
+function bindAdminPjRules(){
+ document.querySelectorAll("[data-pjr-save]").forEach(b=>b.onclick=async()=>{
+  const [cls,t]=b.dataset.pjrSave.split("|");const p=`pjr-${cls}-${t}`;
+  const reason=val(p+"-reason");if(!reason){toast("変更の理由を入れてください（履歴に残ります）",true);return}
+  const num=id=>{const v=val(id);return v===""?null:Number(v)};
+  const patch={form_enabled:$(p+"-form").checked,invite_on_join:$(p+"-invite").checked,required:$(p+"-req").checked,remind_enabled:$(p+"-rem").checked,deadline_days:num(p+"-deadline"),remind_interval_days:num(p+"-int")||3,remind_interval_after_deadline_days:num(p+"-intafter")||1,note:val(p+"-note")||null};
+  if(t==="year_end")patch.year_end_target_rule=val(p+"-target")||"all";
+  if(!confirm(`${PJ_CLASS_LABEL[cls]} × ${t==="year_end"?"年末調整":"扶養家族"} の標準ルールを保存します。対象者全員に一度に通知が送られることはありません。よろしいですか？`))return;
+  const {error}=await sb.rpc("post_join_set_rule",{p_class:cls,p_track:t,p_patch:patch,p_reason:reason});
+  if(error){toast(pjMissingRpc(error)?"この機能はまだ使えません":"エラー: "+error.message,true);return}
+  toast("標準ルールを保存しました（履歴に記録）");render();
+ });
 }
 // 店舗 → スマレジ・タイムカードの事業所を作る（API に登録が無いため Mac の自動操作ジョブに依頼。RPC smaregi_store_create_request）
 let stSmMaps=null; // store_external_mappings（smaregi_timecard・有効）
@@ -7302,6 +7468,7 @@ async function adminEditView(){
  if(me.is_master||["HQ","CEO"].includes(me.role)){try{const {data:dd}=await sb.from("hr_documents").select("id,kind,year,path,uploaded_at,line_notified_at").eq("user_id",adminDetail).order("year",{ascending:false});hrDocs=dd||[]}catch(e){}}
  const cmInfo=(me.is_master||["HQ","CEO"].includes(me.role))?await loadCommuteInfo(adminDetail):null; // 2026-11-10 Phase 2: 通勤・交通費（RLS と同じ条件の人だけ読む）
  const pjInfo=(me.is_master||["HQ","CEO"].includes(me.role))?await loadPostJoinInfo(adminDetail):null; // 2026-11-09 Phase 6: 扶養・年末調整の後追いフォーム
+ const pjHist=pjInfo&&!pjInfo.unsupported?await loadPjHistory(adminDetail):null; // v2: 個別設定の履歴
  let h=`<span class="back" id="adback">← 従業員一覧</span><h2>${esc(u.name)} ${u.is_active?"":'<span class="badge">無効</span>'}</h2>
  <p class="muted" style="margin-top:-8px">${esc(u.email)}</p>`;
  // 2026-09-05追加: 「LINE連携はどこでやるの？身分証明書の追加は？口座情報は？」というユーザー要望に
@@ -7378,7 +7545,7 @@ async function adminEditView(){
   h+=profileEditCard(prof,"ep"); // v2.6.45 入社情報を直せるようにする
  }
  if(cmInfo)h+=commuteCardHtml(cmInfo,{uid:u.id,self:false}); // 2026-11-10 Phase 2
- if(pjInfo)h+=postJoinHqCardHtml(pjInfo,u); // 2026-11-09 Phase 6
+ if(pjInfo)h+=postJoinHqCardHtml(pjInfo,u,pjHist); // 2026-11-09 Phase 6（v2: 方針・個別設定・履歴つき）
  h+=`<div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
  <div class="card"><h3>所属チーム</h3><span class="chip euteam ${!euTeam?"on":""}" data-t="">なし</span>${teams.map(t=>`<span class="chip euteam ${euTeam===t.id?"on":""}" data-t="${t.id}">${esc(t.name)}</span>`).join("")}
   <p class="muted" style="margin:6px 0 0">チームを設定すると、日報のLark通知をチーム単位で振り分けられます</p></div>
@@ -10417,6 +10584,9 @@ let gasSaved=null,gasCalNow=""; // v2.6.38 面接Meetの接続先が登録済み
 // 2026-09-01追加: 入社登録直後、LINE未連携ならその場で連携してもらう画面。
 // 「LINEと連携する」の実体は settings画面と同じ user_issue_line_code（bindPage()側のハンドラを共用）
 async function lineJoinPromptView(){
+ // 2026-11-09 Phase 6 v2: 入社フォームで「今入力する」を選んだ人には、この画面の先頭に税務・扶養のフォームを出す（送るか「あとで」で消える）
+ let pjTop="";
+ if(showPostJoinNow){const info=await loadPostJoinInfo(me.id,{self:true});pjTop=postJoinCardHtml(info,{uid:me.id,self:true,afterJoin:true})||"";if(!pjTop)showPostJoinNow=false}
  // 2026-11-08追加: Slack の登録案内を先頭に（入社後の連絡は Slack）。登録メールを管理システムと同じにすれば自動で紐づく
  const slackBox=meSlackLinked?`<div class="card" style="background:#f3eef5;border:2px solid #4a154b"><h3 style="margin:0">💬 Slack は登録済みです</h3><p class="muted" style="margin:6px 0 0">勤怠の確認やお知らせは Slack に届きます。</p></div>`
   :`<div class="card" style="background:#f3eef5;border:3px solid #4a154b;padding:18px 16px">
@@ -10428,8 +10598,8 @@ async function lineJoinPromptView(){
    <p style="margin:10px 0 0;font-size:13px;text-align:center"><a href="${esc((joinSlackInvite&&joinSlackInvite.guide_url)||"https://mirai-oss.github.io/ns-portal/docs/guide_slack_setup.pdf")}" target="_blank" rel="noopener">📄 登録のしかた・顔写真の登録方法（PDF）</a></p>
    <button class="btn sm" id="slack-join-check" style="margin-top:14px;width:100%">🔄 Slack に登録した／紐づいたか確認する</button>
   </div>`;
- if(me.line_user_id||meSlackLinked)return slackBox+`<p style="margin-top:14px"><button class="btn sm sub" id="line-join-skip" style="width:100%">あとで登録する（スキップ）</button></p>`;
- return slackBox+`<div class="card"><h3>💚 LINE連携もお願いします</h3>
+ if(me.line_user_id||meSlackLinked)return pjTop+slackBox+`<p style="margin-top:14px"><button class="btn sm sub" id="line-join-skip" style="width:100%">あとで登録する（スキップ）</button></p>`;
+ return pjTop+slackBox+`<div class="card"><h3>💚 LINE連携もお願いします</h3>
   <p class="muted" style="margin:0">Slack への切り替えが終わるまでは、シフト提出の締切などのお知らせは LINE にも届きます。</p>
   ${lineLinkInfo&&lineLinkInfo.oa?`
    <div style="background:#f0fff4;border:2px solid #06c755;border-radius:8px;padding:14px;margin-top:14px">
@@ -11134,6 +11304,7 @@ function bindPage(){
  if(page==="admin"&&adminMode==="retire")bindAdminRetirePage(); // 2026-10-03追加
  if(page==="admin"&&adminMode==="contractreg")bindAdminContractReg(); // 2026-10-17追加
  if(page==="admin"&&adminMode==="storemis")bindAdminStoreMis();
+ if(page==="admin"&&adminMode==="pjrules")bindAdminPjRules(); // 2026-11-09 Phase 6 v2
  if(page==="admin"&&adminMode==="edit"&&smReady){bindSmCard(adminDetail);bindWageCard(adminDetail)}
  if(page==="admin"&&adminMode==="edit")bindCommuteCard(adminDetail,"nippo_hq"); // 2026-11-10 Phase 2
  if(page==="settings")bindCommuteCard(me.id,"nippo_self"); // 2026-11-10 Phase 2
@@ -11468,6 +11639,7 @@ function bindPage(){
  if($("adstores"))$("adstores").onclick=()=>{adminMode="stores";stList=null;stSmaregi=undefined;lastIssued=null;lastInvite=null;render()};
  // 2026-08-30続き: 給与・インセンティブ配分（月単位・人ごとに店舗を並べる方式に改訂）
  if($("adpayroll"))$("adpayroll").onclick=()=>{adminMode="payroll";payExtraStores={};render()};
+ if($("adpjrules"))$("adpjrules").onclick=()=>{adminMode="pjrules";render()}; // 2026-11-09 Phase 6 v2
  if($("adretire"))$("adretire").onclick=()=>{adminMode="retire";render()}; // 2026-10-03追加
  if($("adcontractreg"))$("adcontractreg").onclick=()=>{adminMode="contractreg";render()}; // 2026-10-17追加
  if($("adstoremis"))$("adstoremis").onclick=()=>{adminMode="storemis";render()};
@@ -12841,7 +13013,8 @@ function bindPage(){
   me.line_user_id=null;me.line_linked_at=null;lineLinkInfo=null;toast("LINE連携を解除しました");render();
  };
  // 2026-09-01追加: 入社登録直後のLINE連携案内画面
- if($("line-join-skip"))$("line-join-skip").onclick=()=>{showLineJoinPrompt=false;lineLinkInfo=null;render()};
+ if($("line-join-skip"))$("line-join-skip").onclick=()=>{showLineJoinPrompt=false;showPostJoinNow=false;lineLinkInfo=null;render()};
+ if(showLineJoinPrompt&&showPostJoinNow)bindPostJoinForm(me.id,"nippo_self"); // 2026-11-09 Phase 6 v2
  if($("slack-join-check"))$("slack-join-check").onclick=async()=>{ // 2026-11-08追加
   $("slack-join-check").disabled=true;$("slack-join-check").textContent="確認中...";
   const {data:sl}=await sb.from("user_slack").select("slack_user_id").eq("user_id",me.id).maybeSingle();

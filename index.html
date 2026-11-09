@@ -7102,11 +7102,11 @@ async function loadPostJoinInfo(uid,{self=false}={}){
   const [a,b,c]=await Promise.all([
    sb.from("employee_year_end").select("*").eq("user_id",uid).maybeSingle(),
    sb.from("employee_dependents").select("*").eq("user_id",uid).eq("is_active",true).order("created_at"),
-   self?Promise.resolve({data:null}):sb.from("onboarding_workflow_v").select("id,status,items").eq("user_id",uid).maybeSingle()
+   sb.from("employee_post_join_status").select("*").eq("user_id",uid).maybeSingle() // 提出状況（ハブ Phase 6: year_end_status / dependents_status。入社登録の項目とは別トラック）
   ]);
   if(a.error)return {unsupported:true,error:a.error.message};
-  const items=(c&&c.data&&c.data.items)||{};
-  return {yearEnd:a.data||null,deps:(b&&b.data)||[],workflow:(c&&c.data)||null,itemYe:items.year_end||null,itemDep:items.dependents||null};
+  const pjs=(c&&c.data)||null;
+  return {yearEnd:a.data||null,deps:(b&&b.data)||[],status:pjs,itemYe:pjs?{state:pjs.year_end_status,at:pjs.year_end_submitted_at}:null,itemDep:pjs?{state:pjs.dependents_status,at:pjs.dependents_submitted_at}:null};
  }catch(e){return {unsupported:true,error:String((e&&e.message)||e)}}
 }
 const pjDateJp=d=>d?new Date(d).toLocaleDateString("ja-JP"):"";
@@ -7229,11 +7229,11 @@ function bindPostJoinForm(uid,via){
  };
 }
 // 本部のカード（従業員編集）: 提出状況・内容の要約・「不要にする」・再送依頼の案内。本文の代理入力もできる（同じフォーム）
-const PJ_STATE_LABEL={pending:"未提出",running:"処理中",completed:"完了",retry_wait:"再試行待ち",manual_required:"本部の確認待ち",manual_running:"手動対応中",cancelled:"中止",failed:"失敗"};
+const PJ_STATE_LABEL={pending:"未提出",submitted:"提出済み（本部が確認してスマレジへ）",none:"扶養なし（提出済み）",synced:"スマレジに反映済み",skipped:"不要（本部が確認済み）",running:"処理中",completed:"完了",retry_wait:"再試行待ち",manual_required:"本部の確認待ち",manual_running:"手動対応中",cancelled:"中止",failed:"失敗"};
 function postJoinHqCardHtml(info,u){
  if(!info||info.unsupported)return `<div class="card"><h3>📝 扶養・年末調整</h3><p class="muted" style="margin:0">この機能はまだ使えません（${esc((info&&info.error)||"準備中")}）</p></div>`;
  const y=info.yearEnd,deps=info.deps||[];
- const st=k=>{const it=k==="year_end"?info.itemYe:info.itemDep;return it?`${PJ_STATE_LABEL[it.state]||it.state}${it.completion_source==="manual_check"?"（不要として確認済み）":""}`:"（ワークフロー未作成）"};
+ const st=k=>{const it=k==="year_end"?info.itemYe:info.itemDep;return it?`${PJ_STATE_LABEL[it.state]||it.state}`:"未提出"};
  const yeSum=y&&y.submitted_at?`世帯主 ${esc(y.household_header_name||"—")}（${esc(optLabel(YE_REL_OPTS,y.household_header_relationship))}）／配偶者 ${y.spouse_flag?"あり":"なし"}／合計所得見積 ${yenFmt(y.estimate_income)}／退職所得 ${yenFmt(y.retirement_income)}／障害者 ${esc(optLabel(YE_HANDICAP_OPTS,y.handicapped_division))}／寡婦・ひとり親 ${esc(optLabel(YE_WIDOW2_OPTS,y.widow_division2))}／(旧) ${esc(optLabel(YE_WIDOW_OPTS,y.widow_division))}／勤労学生 ${y.student_flag?"該当する":"該当しない"}／報告人員区分 ${String(y.salary_payment_report_collection_division)==="2"?"普通徴収対象者":"特別徴収対象者"}<br><span class="muted">提出 ${pjDateJp(y.submitted_at)}・${esc(PJ_SYNC_LABEL[y.sync_status]||y.sync_status||"")}</span>`:"（未提出）";
  const depSum=deps.length?`<ol style="margin:4px 0 0;padding-left:20px">${deps.map(d=>`<li>${depRowText(d)}${d.smaregi_synced_at?` <span class="muted">スマレジ反映 ${pjDateJp(d.smaregi_synced_at)}</span>`:""}</li>`).join("")}</ol>`:(y&&y.submitted_at?"（扶養親族なし、と提出）":"（未提出）");
  return `<div class="card"><h3>📝 扶養・年末調整（入社後フォーム）</h3>

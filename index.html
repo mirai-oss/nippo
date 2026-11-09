@@ -7645,7 +7645,7 @@ function bindWageCard(uid){
   let date=q("wdate").value;
   if(!amt||amt<=0){toast("金額を入れてください",true);return}
   if(!date){toast("適用開始日を選んでください",true);return}
-  if(div===2){if(date.slice(8)!=="01"){date=date.slice(0,8)+"01";toast(`月給の適用開始日は月初日です（${date}にします）`)}}
+  if(div===2||div===1){if(date.slice(8)!=="01"){date=date.slice(0,8)+"01";toast(`${WAGE_DIV[div]}の適用開始日は月初日です（${date}にします）`)}} // 2026-11-09: 日給も月初日（スマレジ公式仕様）
   const u=(adminUsers||[]).find(x=>x.id===uid)||{name:""};
   if(!confirm(`${u.name}さんの賃金をスマレジ（${smLabel(c)}）に反映します。\n${WAGE_DIV[div]} ${yen(amt)}${hol!=null?`（休日 ${yen(hol)}）`:""} ／ ${store?((stores.find(x=>x.id===store)||{}).name+"だけ"):"全事業所共通"}\n${date}から\n\nよろしいですか？`))return;
   b.disabled=true;
@@ -7674,7 +7674,7 @@ function bindWageCard(uid){
   if(!amt||amt<=0){toast("金額を入れてください",true);return}
   if(!date){toast("適用開始日を選んでください",true);return}
   const row=(window.__wageRows||[]).find(x=>x.id===id);
-  if(row&&row.division===2&&date.slice(8)!=="01"){date=date.slice(0,8)+"01";toast(`月給の適用開始日は月初日です（${date}にします）`)}
+  if(row&&(row.division===2||row.division===1)&&date.slice(8)!=="01"){date=date.slice(0,8)+"01";toast(`${WAGE_DIV[row.division]}の適用開始日は月初日です（${date}にします）`)} // 2026-11-09: 日給も月初日
   if(!confirm(`賃金を修正して、スマレジにも反映します。\n金額 ${yen(amt)}${hol!=null?`（休日 ${yen(hol)}）`:""} ／ ${date}から\nよろしいですか？`))return;
   b.disabled=true;
   const r=await smFn("wage_update",{user_id:uid,contract_id:c,id,wage:amt,holiday_wage:hol,effective_date:date});

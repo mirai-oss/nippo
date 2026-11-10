@@ -8803,7 +8803,7 @@ async function cashHandoffView(){
  if(e1)return h+`<div class="alert">読み込みエラー: ${esc(e1.message)}</div>`;
  // 2026-11-09: 給料確定（月×法人）済みの分だけ表示する版のSQLが入っているか（無ければ従来どおり）
  cashCancelReady=!e3;cashFinCorps=e3?[]:(fin||[]);
- if(cashCancelReady&&!cashFinCorps.length)return h+`<div class="alert" style="margin-top:16px">この月は、まだ「給料確定」が押されていません。給与仕訳で給料確定をすると、その会社の現金手渡しの対象者がここに表示されます。</div>`;
+ if(cashCancelReady&&!cashFinCorps.length)return h+`<div class="alert" style="margin-top:16px">${esc(String(Number(cashMonth.slice(5))))}月分は、まだ給料確定が押されていません。給与仕訳画面で「給料確定」を押すと、ここに現金手渡しの対象者が表示されます。</div>`;
  if(cashCancelReady)h+=`<p class="muted" style="font-size:11px;margin:4px 0">給料確定済み: ${cashFinCorps.map(c=>esc(c.corp_name)).join("・")}</p>`;
  // 2026-10-07修正（ユーザー報告「給料確定タスクの人数は直ったが現金手渡し・サインが更新されていない」）:
  // 従来は在籍中(is_active)のみ表示していたため、退職済みでも給与が出ている人が漏れ、逆に「この月は対象外（非表示）」
@@ -8813,7 +8813,7 @@ async function cashHandoffView(){
  cashHasContract=(targets||[]).some(t=>t.contract_id!==undefined);
  cashList=(targets||[]).filter(t=>Number(t.amount)>0&&!hiddenIds.has(t.user_id));
  cashRecords={};(recs||[]).forEach(r=>cashRecords[cashK(r.user_id,r.contract_id)]=r);
- if(!cashList.length)return h+`<p class="muted" style="margin-top:16px">この月・現金手渡しの対象者はいません。</p>`;
+ if(!cashList.length)return h+(cashCancelReady?`<p class="muted" style="margin-top:16px">${esc(String(Number(cashMonth.slice(5))))}月分は給料確定済み（${cashFinCorps.map(c=>esc(c.corp_name)).join("・")}）です。現金手渡しの対象者はいません。</p>`:`<p class="muted" style="margin-top:16px">この月・現金手渡しの対象者はいません。</p>`);
  const sname=id=>{const s=[...stores,...storesHidden].find(x=>x.id===id);return s?s.name:"所属不明"};
  // 2026-09-08追加: 店舗ごとの絞り込み＋合計件数・合計金額・引き出し済み件数のサマリー
  const storeIds=[...new Set(cashList.map(t=>t.store_id||"?"))];

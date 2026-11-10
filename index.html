@@ -7025,6 +7025,10 @@ function commuteCardHtml(info,{uid,self}){
  const approved=!!c&&c.judgement==="approved";
  const prefix=self?"cms":"cmh";
  let h=`<div class="card">${title}`;
+ // 2026-11-10 情報変更の連動（ステップ 2）: 住所・最寄り駅・所属店舗・雇用形態が変わると「再確認」が付く。今の交通費は本部が再承認するまで変わらない
+ if(c&&c.recheck_required_at)h+=self
+  ?`<div style="background:#fff7e6;border:1px solid #f0c36d;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px"><b>🔔 通勤経路の確認をお願いします</b><br>${esc(c.recheck_reason||"登録情報")}が変わったため、通勤経路の再確認が必要です。<br>下の内容を見直して<b>「保存」</b>を押してください（経路が変わらない場合も、そのまま保存してください）。本部が確認するまで、交通費は今のままです。</div>`
+  :`<div style="background:#fff7e6;border:1px solid #f0c36d;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px"><b>🔔 再確認待ち</b>（${esc(c.recheck_reason||"登録情報")}の変更）。本人が経路を申請し直すと「承認待ち」に戻ります。今の承認額・設定は、再承認するまで変わりません。</div>`;
  if(!c){
   h+=`<p class="muted" style="margin:0">${self?"通勤情報はまだ登録されていません。電車やバスで通う方は、下から登録してください（交通費の確認に使います）。":"本人からの通勤情報はまだありません（入社フォームで未記入）。必要なら下から本部が代わりに登録できます。"}</p>`;
   h+=commuteEditFormHtml(null,prefix);
@@ -7100,6 +7104,78 @@ function bindCommuteCard(uid,via){
   toast(via==="nippo_self"?"通勤情報を保存しました（本部が確認します）":"申請内容を保存しました。経路の判定はやり直しになります（Slack で 🔁 再検索）");
   render();
  };
+}
+
+// ===== 2026-11-10 従業員情報の変更: 履歴と連動（ステップ 1・2）。本部の従業員ページに出す =====
+//   読むのは RPC employee_change_list（機微な項目の値はマスター・本部以外には伏せて返る）。SQL 未適用の環境ではカードごと出ない（画面は壊れない）。
+//   ここで交通費そのものは変えない（「変わらない／対象外」を理由つきで記録するだけ。見直す場合は通勤カード・Slack の既存の流れ）。
+const CHG_SRC={self_direct:"本人が直接変更",hq_direct:"本部が直接変更",request:"申請 → 承認",system:"システム処理"};
+const CHG_ST={pending:"未対応",in_progress:"対応中",done:"完了",not_needed:"対象外",cancelled:"取り下げ（変更なし）",error:"エラー"};
+const CHG_TARGET={smaregi_api:"スマレジ（API）",smaregi_ui:"スマレジ（画面）",payroll_csv:"振込データ"};
+async function loadChangeInfo(uid){
+ try{const {data,error}=await sb.rpc("employee_change_list",{p_user:uid,p_limit:30});if(error)return null;return data||null}catch(e){return null}
+}
+function chgVal(v){
+ if(v===null||v===undefined)return "—";
+ if(Array.isArray(v))return v.map(x=>{const s=(stores||[]).concat(storesHidden||[]).find(t=>t.id===x);return s?s.name:String(x).slice(0,8)}).join("・")||"（なし）";
+ if(typeof v==="object")return Object.entries(v).map(([k,x])=>`${k}: ${chgVal(x)}`).join("／");
+ const s=(stores||[]).concat(storesHidden||[]).find(t=>t.id===v);return s?s.name:String(v);
+}
+function changeCardHtml(info){
+ if(!info)return "";
+ const fd=t=>t?new Date(t).toLocaleString("ja-JP",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}):"";
+ const evs=info.events||[],efs=info.effects||[];
+ let h=`<div class="card"><h3>🔁 情報変更の履歴と連動</h3>`;
+ const open=efs.filter(f=>["pending","in_progress"].includes(f.status));
+ open.forEach(f=>{
+  const sn=f.snapshot||{},st=sn.latest_setting;
+  h+=`<div style="background:#fff7e6;border:1px solid #f0c36d;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px">
+   <b>🔔 交通費の再確認（${esc(CHG_ST[f.status]||f.status)}）</b><br>変わった項目: ${esc((f.reasons||[]).join("・"))}
+   <br>今の交通費（変更していません）: ${sn.has_commute_record===false?"管理システムに未登録（スマレジの設定を確認）":`承認済みの片道 ${sn.approved_fare!=null?"¥"+Number(sn.approved_fare).toLocaleString():"なし"}${st&&st.amount!=null?`／設定 ¥${Number(st.amount).toLocaleString()}${st.cap_amount!=null?`・月額上限 ¥${Number(st.cap_amount).toLocaleString()}`:""}`:""}`}
+   <br>変更日: ${f.change_date?esc(f.change_date)+(f.retroactive?"（<b>過去にさかのぼる変更</b>）":""):"未入力（下の履歴の「変更日を入れる」から）"}${f.suggested_effective_date?`／適用開始の目安: ${esc(f.suggested_effective_date)}`:""}
+   ${f.date_note&&f.change_date?`<br><span style="color:#b45309">⚠️ ${esc(f.date_note)}</span>`:""}
+   <div class="muted" style="font-size:11.5px;margin-top:4px">進め方: 本人が通勤カードから経路を申請し直す → 本部が承認（金額が変わるときだけ交通費の設定）。経路も金額も変わらないと確認できたら、下のボタンで理由を残して完了にします。</div>
+   <button class="btn sm ghost" data-chg-resolve="${esc(f.id)}" data-st="done" style="margin-top:6px">確認済み（交通費は変わらない）</button>
+   <button class="btn sm ghost" data-chg-resolve="${esc(f.id)}" data-st="not_needed" style="margin-top:6px">対象外にする</button></div>`;
+ });
+ if(!evs.length&&!efs.length)h+=`<p class="muted" style="margin:0">まだ変更の記録はありません（氏名・住所・最寄り駅・所属・役職・雇用形態・賃金・銀行口座などを変えると、誰がいつ変えたかがここに残ります）。</p>`;
+ if(evs.length){
+  h+=`<div style="font-size:12.5px">`;
+  evs.slice(0,15).forEach(e=>{
+   const who=e.source==="request"?`申請 ${esc(e.requested_by_name||"—")} → 承認 ${esc(e.approved_by_name||"—")}`:`${esc(CHG_SRC[e.source]||e.source)}${e.changed_by_name?`（${esc(e.changed_by_name)}）`:""}`;
+   const hidden=e.sensitive&&!info.can_see_values;
+   const keys=Array.from(new Set([...Object.keys(e.before||{}),...Object.keys(e.after||{})]));
+   const diff=hidden?`<span class="muted">（値はマスター・本部だけが見られます）</span>`:e.field_group==="stores"?`${esc(chgVal((e.before||{}).stores))} → ${esc(chgVal((e.after||{}).stores))}`:keys.map(k=>`${e.field_group==="wage"?"":esc(k)+": "}${esc(chgVal((e.before||{})[k]))} → ${esc(chgVal((e.after||{})[k]))}`).join("<br>");
+   h+=`<div style="padding:6px 0;border-top:1px solid var(--line)"><b>${esc(e.label)}</b>${e.status==="no_change"?` <span class="muted">（結果として変更なし）</span>`:""} <span class="muted">${fd(e.created_at)}・${who}</span>
+    <div style="margin:2px 0">${diff}</div>
+    <span class="muted" style="font-size:11.5px">正本: ${e.source_of_truth==="hub"?"管理システム":e.source_of_truth==="smaregi"?"スマレジ":"書面"}${(e.external_targets||[]).length?`／写し: ${(e.external_targets||[]).map(t=>esc(CHG_TARGET[t]||t)).join("・")}`:""}${e.effective_date?`／適用開始日: ${esc(e.effective_date)}`:""}／変更日: ${e.change_date?esc(e.change_date):"未入力"}</span>
+    ${e.status==="recorded"?` <a href="#" data-chg-date="${esc(e.id)}" style="font-size:11.5px">変更日を入れる</a>`:""}</div>`;
+  });
+  h+=`</div>`;
+ }
+ const closed=efs.filter(f=>!["pending","in_progress"].includes(f.status)).slice(0,5);
+ if(closed.length){h+=`<div class="muted" style="font-size:11.5px;margin-top:8px">交通費の再確認の記録:<br>`+closed.map(f=>`・${fd(f.created_at)} ${esc((f.reasons||[]).join("・"))} → ${esc(CHG_ST[f.status]||f.status)}${f.result&&f.result.new_fare!=null?`（片道 ¥${Number(f.result.old_fare||0).toLocaleString()} → ¥${Number(f.result.new_fare).toLocaleString()}）`:""}${f.resolve_note?`：${esc(f.resolve_note)}`:""}`).join("<br>")+`</div>`}
+ return h+`</div>`;
+}
+function bindChangeCard(){
+ document.querySelectorAll("[data-chg-resolve]").forEach(b=>b.onclick=async()=>{
+  const note=prompt(b.dataset.st==="done"?"確認した内容を入れてください（例: 最寄り駅・経路とも変わらないことを本人に確認）":"対象外にする理由を入れてください（例: 徒歩通勤のため交通費なし）");
+  if(!note||!note.trim())return;
+  b.disabled=true;
+  const {error}=await sb.rpc("employee_change_effect_resolve",{p_effect:b.dataset.chgResolve,p_status:b.dataset.st,p_note:note.trim()});
+  b.disabled=false;
+  if(error){toast("記録できませんでした: "+error.message,true);return}
+  toast("記録しました（交通費は変更していません）");render();
+ });
+ document.querySelectorAll("[data-chg-date]").forEach(a=>a.onclick=async ev=>{
+  ev.preventDefault();
+  const d=prompt("実際に変わった日（引っ越した日など）を入れてください。例: 2026-11-01");
+  if(!d)return;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(d.trim())){toast("日付は 2026-11-01 の形で入れてください",true);return}
+  const {error}=await sb.rpc("employee_change_set_dates",{p_event:a.dataset.chgDate,p_change_date:d.trim()});
+  if(error){toast("保存できませんでした: "+error.message,true);return}
+  toast("変更日を保存しました");render();
+ });
 }
 
 // ===== 2026-11-09 Phase 6（入社登録ワークフロー）: 扶養家族・年末調整の後追いフォーム（本人）／本部カード／店舗→スマレジ事業所の作成依頼 =====
@@ -7690,6 +7766,7 @@ async function adminEditView(){
  let hrDocs=[];
  if(me.is_master||["HQ","CEO"].includes(me.role)){try{const {data:dd}=await sb.from("hr_documents").select("id,kind,year,path,uploaded_at,line_notified_at").eq("user_id",adminDetail).order("year",{ascending:false});hrDocs=dd||[]}catch(e){}}
  const cmInfo=(me.is_master||["HQ","CEO"].includes(me.role))?await loadCommuteInfo(adminDetail):null; // 2026-11-10 Phase 2: 通勤・交通費（RLS と同じ条件の人だけ読む）
+ const chgInfo=(me.is_master||["HQ","CEO"].includes(me.role))?await loadChangeInfo(adminDetail):null; // 2026-11-10 情報変更の履歴と連動（RPC 未作成なら null＝カードなし）
  const pjInfo=(me.is_master||["HQ","CEO"].includes(me.role))?await loadPostJoinInfo(adminDetail):null; // 2026-11-09 Phase 6: 扶養・年末調整の後追いフォーム
  const pjHist=pjInfo&&!pjInfo.unsupported?await loadPjHistory(adminDetail):null; // v2: 個別設定の履歴
  let h=`<span class="back" id="adback">← 従業員一覧</span><h2>${esc(u.name)} ${u.is_active?"":'<span class="badge">無効</span>'}</h2>
@@ -7768,6 +7845,7 @@ async function adminEditView(){
   h+=profileEditCard(prof,"ep"); // v2.6.45 入社情報を直せるようにする
  }
  if(cmInfo)h+=commuteCardHtml(cmInfo,{uid:u.id,self:false}); // 2026-11-10 Phase 2
+ if(chgInfo)h+=changeCardHtml(chgInfo); // 2026-11-10 情報変更の履歴と連動
  if(pjInfo)h+=postJoinHqCardHtml(pjInfo,u,pjHist); // 2026-11-09 Phase 6（v2: 方針・個別設定・履歴つき）
  h+=`<div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
  <div class="card"><h3>所属チーム</h3><span class="chip euteam ${!euTeam?"on":""}" data-t="">なし</span>${teams.map(t=>`<span class="chip euteam ${euTeam===t.id?"on":""}" data-t="${t.id}">${esc(t.name)}</span>`).join("")}
@@ -11531,6 +11609,7 @@ function bindPage(){
  if(page==="admin"&&adminMode==="pjremind")bindAdminPjRemind(); // 2026-11-10 Phase 6 v3
  if(page==="admin"&&adminMode==="edit"&&smReady){bindSmCard(adminDetail);bindWageCard(adminDetail)}
  if(page==="admin"&&adminMode==="edit")bindCommuteCard(adminDetail,"nippo_hq"); // 2026-11-10 Phase 2
+ if(page==="admin"&&adminMode==="edit")bindChangeCard(); // 2026-11-10 情報変更の履歴と連動
  if(page==="settings")bindCommuteCard(me.id,"nippo_self"); // 2026-11-10 Phase 2
  if(page==="settings")bindPostJoinForm(me.id,"nippo_self"); // 2026-11-09 Phase 6
  if(page==="admin"&&adminMode==="edit")bindPostJoinHqCard(adminDetail); // 2026-11-09 Phase 6

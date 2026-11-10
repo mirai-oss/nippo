@@ -6973,12 +6973,15 @@ function commuteEditFormHtml(c,prefix,{saveBtn=true}={}){
   <div id="${prefix}-transit" style="${noFare?"display:none":""}">
    <p class="muted" style="margin:8px 0 2px">経路（駅名や路線。例: 田町→新橋 JR山手線）</p>
    <input type="text" id="${prefix}-route" value="${esc((c&&c.route_text)||"")}" placeholder="例: 田町→新橋 JR山手線">
-   <p class="muted" style="margin:8px 0 2px">片道の交通費（円・数字だけ。例: 160）</p>
+   <p class="muted" style="margin:8px 0 2px">（参考）ご自身が把握している片道の運賃（円・数字だけ。例: 160。分からなければ空欄で OK）</p>
    <input type="number" inputmode="numeric" min="0" step="1" id="${prefix}-fare" value="${c&&c.claimed_oneway_fare!=null?c.claimed_oneway_fare:""}" placeholder="例: 160" style="width:100%;border:1px solid #bbb;border-radius:8px;padding:10px;font-size:16px;box-sizing:border-box">
-   <label style="display:flex;gap:6px;align-items:center;margin-top:6px;font-size:14px"><input type="checkbox" id="${prefix}-bus" style="width:auto;margin:0"${c&&c.uses_bus?" checked":""}>バスを使う</label>
+   <label style="display:flex;gap:6px;align-items:center;margin-top:6px;font-size:14px"><input type="checkbox" id="${prefix}-bus" style="width:auto;margin:0"${c&&c.uses_bus?" checked":""}>バスを使う（バスは原則対象外です。必要な事情があるときだけチェック）</label>
+   <div id="${prefix}-busreason-wrap" style="${c&&c.uses_bus?"":"display:none"}"><p class="muted" style="margin:6px 0 2px">バスが必要な理由（必須。本部が確認して認めるか決めます）</p>
+   <input type="text" id="${prefix}-busreason" maxlength="150" value="${esc(((c&&c.special_note)||"").replace(/^【バス利用の理由】([^／]*)(?:／.*)?$/,"$1").replace(/^(?!.*【バス利用の理由】).*$/,""))}" placeholder="例: 最寄り駅まで徒歩 30 分以上かかるため"></div>
+   <p class="muted" style="margin:8px 0 0;font-size:12px">※ 交通費の支給方法（1 日あたり・定期代など）と金額は、会社の規定にもとづいて本部が決めます。ここでは通勤経路だけを申請してください。</p>
   </div>
-  <p class="muted" style="margin:8px 0 2px">特記（例: 雨の日はバス、定期あり）</p>
-  <input type="text" id="${prefix}-note" value="${esc((c&&c.special_note)||"")}" placeholder="例: 雨の日はバス、定期あり">
+  <p class="muted" style="margin:8px 0 2px">特記（任意）</p>
+  <input type="text" id="${prefix}-note" value="${esc(((c&&c.special_note)||"").replace(/^【バス利用の理由】[^／]*(?:／|$)/,""))}" placeholder="例: 自転車と併用、乗換駅の指定など">
   ${saveBtn?`<button class="btn sm" id="${prefix}-save" style="margin-top:8px">${c?"申請内容を直して保存":"通勤情報を登録"}</button>`:""}
  </div>`;
 }
@@ -6994,8 +6997,12 @@ function commuteFormValues(prefix){
   if(fare>100000)return {error:"片道の交通費が大きすぎます（10万円以下）"};
  }
  const route=(!noFare&&g("route"))?g("route").value.trim():"";
- const note=g("note")?g("note").value.trim():"";
- return {method,route,fare,bus:!noFare&&!!(g("bus")&&g("bus").checked),note,noFare,empty:!method&&fare===null&&!route&&!note};
+ let note=g("note")?g("note").value.trim():"";
+ const bus=!noFare&&!!(g("bus")&&g("bus").checked);
+ // 2026-11-10 運用方針: バスは原則対象外。使うときは理由が必須（本部が確認して認めるか決める）。理由は特記の先頭に【バス利用の理由】として保存
+ note=note.replace(/^【バス利用の理由】[^／]*(?:／|$)/,"").trim();
+ if(bus){const br=g("busreason")?g("busreason").value.trim():"";if(!br)return {error:"バスを使う場合は理由を入れてください（バスは原則対象外のため、本部が確認します）"};note="【バス利用の理由】"+br+(note?"／"+note:"")}
+ return {method,route,fare,bus,note,noFare,empty:!method&&fare===null&&!route&&!note};
 }
 function commuteSummaryText(v){
  if(v.error)return "⚠️ "+v.error;
@@ -7007,7 +7014,7 @@ function commuteSummaryText(v){
  return "送信される内容: "+parts.join("・");
 }
 function bindCommuteForm(prefix,onChange){
- ["method","route","fare","bus","note"].forEach(id=>{const el=$(prefix+"-"+id);if(!el)return;el.oninput=el.onchange=()=>{const v=commuteFormValues(prefix);const t=$(prefix+"-transit");if(t)t.style.display=v.noFare?"none":"";if(onChange)onChange(v)}});
+ ["method","route","fare","bus","busreason","note"].forEach(id=>{const el=$(prefix+"-"+id);if(!el)return;el.oninput=el.onchange=()=>{const bw=$(prefix+"-busreason-wrap"),bc=$(prefix+"-bus");if(bw&&bc)bw.style.display=bc.checked?"":"none";const v=commuteFormValues(prefix);const t=$(prefix+"-transit");if(t)t.style.display=v.noFare?"none":"";if(onChange)onChange(v)}});
 }
 function commuteActorName(id){const u=(adminUsers||[]).find(x=>x.id===id)||(tskUsers||[]).find(x=>x.id===id);return u?u.name:"本部"}
 function commuteCardHtml(info,{uid,self}){

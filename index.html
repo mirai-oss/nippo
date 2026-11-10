@@ -7972,7 +7972,7 @@ async function adminEditView(){
   </div>
   <button class="btn sm sub" id="eu-docupload" style="margin-top:8px">📎 追加でアップロードする</button>
  </div>
- ${bankAllowed?`<div class="card"><h3>🏦 振込口座</h3>
+ ${bankAllowed?`<div class="card"><h3>🏦 振込口座</h3>${(payChgRowsCache||[]).some(q=>q.field==="bank_account"&&q.status==="pending"&&q.user_id===adminDetail)?`<div class="alert" style="font-size:12.5px">口座変更の申請が<b>承認待ち</b>です。申請が承認・却下されるまで、登録口座はここには表示されず、直接の変更もできません（登録が消えたわけではありません）。下の「💴 賃金・口座の変更申請（承認）」で、いまの口座と申請内容を確認して、承認（支給回を選ぶ）または却下してください。</div>`:""}
   <label class="radio-row"><input type="radio" name="eu-pm" value="bank_transfer" ${(!bank||bank.payment_method!=="cash")?"checked":""}>銀行振込</label>
   <label class="radio-row"><input type="radio" name="eu-pm" value="cash" ${(bank&&bank.payment_method==="cash")?"checked":""}>現金手渡し</label>
   <div id="eu-bankfields" style="${(bank&&bank.payment_method==="cash")?"display:none":""}">

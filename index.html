@@ -5179,6 +5179,7 @@ async function adminView(){
  if(adminMode==="contractreg")return await adminContractRegView(); // 2026-10-17追加
  if(adminMode==="storemis")return await adminStoreMisView();
  if(adminMode==="pjrules")return await adminPjRulesView(); // 2026-11-09 Phase 6 v2: 扶養・年末調整の標準ルール（マスター／社長）
+ if(adminMode==="pjremind")return await adminPjRemindView(); // 2026-11-10 Phase 6 v3: リマインド対象の確認（本部。確認専用）
  const bankAllowed=me.is_master||me.role==="HQ"; // payroll_bank_accountsのRLSと同じ条件
  const [{data:us,error},{data:uss},{data:ntfs},{data:profs},bankRes,slackRes,slackInvRes]=await Promise.all([
   sb.from("users").select("*"),
@@ -5227,6 +5228,7 @@ async function adminView(){
  // 2026-08-29続き: 給与・インセンティブ配分（ユーザー要望「マスターの人が振り分けられるように権限設定して」）
  if(me.is_master)h+=`<button class="btn sub" id="adpayroll">💴 給与・インセンティブ配分</button>`;
  if(me.is_master||me.role==="CEO")h+=`<button class="btn sub" id="adpjrules">📋 扶養・年末調整の標準ルール（雇用区分ごと）</button>`; // 2026-11-09 Phase 6 v2
+ if(me.is_master||me.role==="CEO"||me.role==="HQ")h+=`<button class="btn sub" id="adpjremind">📨 リマインド対象の確認（扶養・年末調整）</button>`; // 2026-11-10 Phase 6 v3（確認専用・送信はできない）
  if(canApproveRetirement()){ // 2026-10-03追加: 退職申請一覧（承認待ち件数つき）
   const {count:retPending}=await sb.from("hr_change_requests").select("id",{count:"exact",head:true}).eq("status","pending");
   h+=`<button class="btn sub" id="adretire">🚪 退職・移籍・兼務の申請一覧${retPending>0?`（承認待ち ${retPending}件）`:""}</button>`;
@@ -7119,7 +7121,9 @@ function pjNormalizeOverview(raw){
  const out={dependents:null,year_end:null};
  if(!raw)return out;
  const put=(t,o)=>{if(!o||!t)return;const e=o.effective||o.policy||o;const s=o.status&&typeof o.status==="object"?o.status:o;out[t]={track:t,target_year:o.target_year??e.target_year??null,
-  form_enabled:e.form_enabled??true,invite_on_join:e.invite_on_join??true,required:!!e.required,remind_enabled:!!e.remind_enabled,deadline:e.deadline||null,target:e.target??null,source_of_required:e.source_of_required||null,class:e.class||o.class||null,
+  form_enabled:e.form_enabled??true,invite_on_join:e.invite_on_join??true,required:!!e.required,remind_enabled:!!e.remind_enabled,deadline:e.internal_deadline||e.deadline||null,target:e.target??null,source_of_required:e.source_of_required||null,class:e.class||o.class||null,
+  // 2026-11-10 v3: 社内期限（給与処理に必要・リマインドの基準）と 法定の目安（参考表示のみ）を分けて持つ。無ければ従来の deadline だけ
+  internal_deadline:e.internal_deadline||e.deadline||null,legal_deadline:e.legal_deadline||null,legal_deadline_basis:e.legal_deadline_basis||null,legal_note:e.legal_deadline_note||null,policy_note:e.legal_note||null,deadline_reason:e.deadline_reason||null,
   status:(typeof s.status==="string"?s.status:(o.status_text||o.state||"pending")),submitted_at:s.submitted_at||o.submitted_at||null,approved_at:s.approved_at||o.approved_at||null,has_snapshot:!!(o.has_snapshot||o.snapshot),summary:o.summary||null}};
  if(Array.isArray(raw))raw.forEach(o=>put(o.track,o));
  else if(raw.tracks)return pjNormalizeOverview(raw.tracks);
@@ -7221,12 +7225,28 @@ function depFormValues(prefix){
 }
 // 本人のカード（設定ページ）。提出済みなら内容を出して再編集できる
 // 本人のカード（設定ページ／入社登録直後「今入力する」）。方針（必須・任意・期限・年度）を先に出し、スマレジの控え（snapshot）があれば初期値に使う
+// 期限の表示（2026-11-10 v3）: 社内期限＝給与処理に必要（リマインドの基準）／法定の目安＝参考（システムは法的な判断をしない）
+const PJ_DEADLINE_REASON={payroll:"給与処理に必要",days:"入社日から",year_end:"年末調整",override:"本部の個別設定"};
+function pjDeadlineText(o){
+ if(!o)return "";
+ const a=[];
+ if(o.internal_deadline||o.deadline)a.push(`社内期限 ${pjDateJp(o.internal_deadline||o.deadline)}${o.deadline_reason&&PJ_DEADLINE_REASON[o.deadline_reason]?`（${PJ_DEADLINE_REASON[o.deadline_reason]}）`:"（給与処理に必要）"}`);
+ if(o.legal_deadline)a.push(`法定の目安 ${pjDateJp(o.legal_deadline)}`);
+ return a.join("／");
+}
+// 法定期限の注記（標準ルールの legal_note）。どちらかのトラックにあれば出す
+function pjLegalNoteHtml(info){
+ const ov=(info&&info.overview)||{};const notes=PJ_TRACKS.map(([t,l])=>ov[t]&&ov[t].legal_note?`${l}: ${ov[t].legal_note}`:null).filter(Boolean);
+ if(!notes.length&&!PJ_TRACKS.some(([t])=>ov[t]&&ov[t].legal_deadline))return "";
+ return `<p class="muted" style="margin:6px 0 0;font-size:11px">📅 「社内期限」は給与処理に間に合わせるための社内の締め切りです。「法定の目安」は参考表示で、システムは法的な判断をしません（祝日による支払日の前倒しは計算していません）。正確な期限は税理士・税務署に確認してください。${notes.length?"<br>"+notes.map(n=>esc(n)).join("<br>"):""}</p>`;
+}
 function pjPolicyLine(info,t){
  const o=info.overview&&info.overview[t];const st=t==="year_end"?info.itemYe:info.itemDep;
  const state=(st&&st.state)||(o&&o.status)||"pending";
  const stLabel=PJ_STATE_LABEL[state]||state;
  if(!o)return `<span class="muted">提出状況: ${esc(stLabel)}</span>`;
- const req=o.target===false?"対象外（本部の判定）":o.required?`<b style="color:var(--red)">提出必須</b>${o.deadline?`（期限 ${esc(pjDateJp(o.deadline))}）`:""}`:"任意";
+ const dl=pjDeadlineText(o);
+ const req=o.target===false?"対象外（本部の判定）":o.required?`<b style="color:var(--red)">提出必須</b>${dl?`（${esc(dl)}）`:""}`:`任意${dl?`<span class="muted">（${esc(dl)}）</span>`:""}`;
  const src=o.source_of_required==="override"?"（本部の個別設定）":"";
  return `${req}${src}　提出状況: <b>${esc(stLabel)}</b>${o.remind_enabled&&o.required&&state==="pending"?"　<span class=\"muted\">※未提出のあいだ、お知らせが届きます</span>":""}`;
 }
@@ -7245,6 +7265,7 @@ function postJoinCardHtml(info,{uid,self,afterJoin=false}){
   <p style="margin:6px 0 0;font-size:13px">扶養家族: ${pjPolicyLine(info,"dependents")}</p>
   <p style="margin:4px 0 0;font-size:13px">年末調整 <select id="${prefix}-year" style="width:auto;display:inline-block;margin:0 4px;padding:2px 6px">${pjYearOpts().map(v=>`<option value="${v}"${v===info.year?" selected":""}>${v} 年度</option>`).join("")}</select>: ${pjPolicyLine(info,"year_end")}</p>
   <p class="muted" style="margin:6px 0 0;font-size:11px">※ 社内の「任意」は社内運用上の扱いです。税法上の手続き（扶養控除等申告書など）が不要になるものではありません。</p>
+  ${pjLegalNoteHtml(info)}
   ${useSnapYe||useSnapDeps?`<p style="margin:8px 0 0;font-size:13px;background:#fff8e1;border-radius:6px;padding:6px 8px">📥 スマレジに登録されている内容です（${esc(pjDateJp((info.snapYe&&info.snapYe.fetched_at)||(info.snapDeps[0]&&info.snapDeps[0].created_at)))}取り込み）。違っていれば直して送ってください。</p>`:""}
   <p style="margin:6px 0 0;font-size:13px">${status}</p>
   ${yeOn?`<h4 style="margin:12px 0 0;font-size:14px">年末調整（${info.year} 年度）</h4>${yearEndFormHtml(yInit,prefix)}`:`<p class="muted" style="margin:10px 0 0;font-size:12px">年末調整のフォームは本部の設定で今は使えません。</p>`}
@@ -7295,7 +7316,7 @@ function bindPostJoinForm(uid,via){
 // 本部のカード（従業員編集）: 提出状況・内容の要約・「不要にする」・再送依頼の案内。本文の代理入力もできる（同じフォーム）
 // 本部のカード（従業員編集）: 方針（標準ルール＋個別上書き）・提出状況・内容の要約・個別設定の変更（理由必須・履歴）・「不要にする」・代理入力。承認は Slack 側。一括操作は作らない
 const PJ_STATE_LABEL={pending:"未提出",submitted:"提出済み（本部の確認・承認待ち）",approved:"承認済み（スマレジへ反映待ち）",queued:"スマレジへ反映の順番待ち",none:"扶養なし（提出済み）",synced:"スマレジに反映済み",error:"反映エラー",skipped:"不要（本部が確認済み）",not_target:"対象外",running:"処理中",completed:"完了",retry_wait:"再試行待ち",manual_required:"本部の確認待ち",manual_running:"手動対応中",cancelled:"中止",failed:"失敗"};
-const PJ_HIST_KIND={rule_changed:"標準ルールを変更",override_set:"個別設定を変更",override_cleared:"個別設定を解除（標準に戻す）",class_changed:"雇用区分が変わった",status_changed:"状態が変わった",approved:"承認",skipped:"不要にした"};
+const PJ_HIST_KIND={rule_changed:"標準ルールを変更",override_set:"個別設定を変更",override_cleared:"個別設定を解除（標準に戻す）",class_changed:"雇用区分が変わった",status_changed:"状態が変わった",approved:"承認",rejected:"差し戻し",skipped:"不要にした",choice:"入社時の選択",snapshot_imported:"スマレジの内容を取り込み",snapshot_requested:"取り込みを依頼",remind_batch_created:"リマインド対象リストを登録",remind_batch_approved:"リマインド対象リストを承認",remind_batch_cancelled:"リマインド対象リストを取り消し",remind_member_removed:"リマインド対象から外した",remind_settings_changed:"リマインドの設定を変更"};
 const triSel=(id,v,labels)=>`<select class="inp" id="${id}" style="width:auto;display:inline-block;margin:0 4px 0 0;padding:3px 6px"><option value=""${v==null?" selected":""}>標準ルール</option><option value="true"${v===true?" selected":""}>${labels[0]}</option><option value="false"${v===false?" selected":""}>${labels[1]}</option></select>`;
 async function loadPjHistory(uid){try{const {data,error}=await sb.from("post_join_policy_history").select("*").eq("user_id",uid).order("created_at",{ascending:false}).limit(20);if(error)throw error;return data||[]}catch(e){return null}}
 function pjHistHtml(rows){
@@ -7328,6 +7349,7 @@ function postJoinHqCardHtml(info,u,hist){
  return `<div class="card"><h3>📝 扶養・年末調整（入社後フォーム）</h3>
   <p style="margin:0;font-size:13px">扶養家族: ${pjPolicyLine(info,"dependents")}</p>
   <p style="margin:4px 0 0;font-size:13px">年末調整 <select id="pjhq-year" style="width:auto;display:inline-block;margin:0 4px;padding:2px 6px">${pjYearOpts().map(v=>`<option value="${v}"${v===info.year?" selected":""}>${v} 年度</option>`).join("")}</select>: ${pjPolicyLine(info,"year_end")}</p>
+  ${pjLegalNoteHtml(info)}
   ${snap}
   <p style="margin:8px 0 0;font-size:13px"><b>年末調整（${info.year} 年度）</b><br>${yeSum}</p>
   <p style="margin:8px 0 0;font-size:13px"><b>扶養親族</b>${depSum}</p>
@@ -7404,6 +7426,15 @@ async function adminPjRulesView(){
    <p style="margin:6px 0 0;font-size:13px">提出期限（日数） <input type="number" id="${p}-deadline" min="0" step="1" value="${r.deadline_days!=null?r.deadline_days:""}" placeholder="${t==="year_end"?"対象年度の 11/30 まで＝空欄":"入社日から ○ 日"}" style="width:110px;display:inline-block;margin:0 10px 0 4px">
     リマインド間隔（期限前・日） <input type="number" id="${p}-int" min="1" step="1" value="${r.remind_interval_days!=null?r.remind_interval_days:3}" style="width:80px;display:inline-block;margin:0 10px 0 4px">
     （期限後・日） <input type="number" id="${p}-intafter" min="1" step="1" value="${r.remind_interval_after_deadline_days!=null?r.remind_interval_after_deadline_days:1}" style="width:80px;display:inline-block;margin:0 0 0 4px"></p>
+   ${t==="dependents"?`<p style="margin:6px 0 0;font-size:13px"><b>社内期限（給与処理に必要）</b>: 給与の締め日 <input type="number" id="${p}-close" min="1" max="31" step="1" value="${r.payroll_closing_day!=null?r.payroll_closing_day:""}" placeholder="31=月末" style="width:90px;display:inline-block;margin:0 10px 0 4px">
+    その何日前まで <input type="number" id="${p}-lead" min="0" step="1" value="${r.payroll_lead_days!=null?r.payroll_lead_days:0}" style="width:70px;display:inline-block;margin:0 0 0 4px">
+    <span class="muted" style="font-size:11px">（入社後最初の締め日 − 日数。「提出期限（日数）」も入れた場合は早い方。月末を基本にするなら日数は空欄）</span></p>`:""}
+   ${("legal_deadline_basis" in r)||("legal_note" in r)||("pay_day" in r)?`<p style="margin:6px 0 0;font-size:13px"><b>法定の目安（参考表示のみ）</b>:
+     <select class="inp" id="${p}-lbasis" style="width:auto;display:inline-block;margin:0 6px 0 4px;padding:3px 6px"><option value=""${!r.legal_deadline_basis?" selected":""}>表示しない</option><option value="first_pay_day_prev"${r.legal_deadline_basis==="first_pay_day_prev"?" selected":""}>最初の給与支払日の前日</option><option value="year_last_pay_prev"${r.legal_deadline_basis==="year_last_pay_prev"?" selected":""}>その年最後の給与支払日の前日</option></select>
+     給与の支払日 <input type="number" id="${p}-payday" min="1" max="31" step="1" value="${r.pay_day!=null?r.pay_day:15}" style="width:70px;display:inline-block;margin:0 6px 0 4px">日・締めの
+     <input type="number" id="${p}-payoff" min="0" max="3" step="1" value="${r.pay_month_offset!=null?r.pay_month_offset:1}" style="width:60px;display:inline-block;margin:0 4px">か月後</p>
+    <input type="text" id="${p}-lnote" maxlength="400" value="${esc(r.legal_note||"")}" placeholder="法定期限の注記（本人・本部の画面に表示されます）" style="margin-top:6px">
+    <p class="muted" style="margin:4px 0 0;font-size:11px">※ システムは法的な判断をしません。正確な期限は税理士・税務署に確認してください（祝日による支払日の前倒しは計算しません）。法定の目安はリマインドの基準には使いません。</p>`:`<p class="muted" style="margin:6px 0 0;font-size:11px">（「法定の目安」の欄は、ハブの更新が入ると表示されます）</p>`}
    ${t==="year_end"?`<p style="margin:6px 0 0;font-size:13px">年末調整の対象判定 <select class="inp" id="${p}-target" style="width:auto;display:inline-block;margin:0 0 0 4px;padding:3px 6px"><option value="all"${(r.year_end_target_rule||"all")==="all"?" selected":""}>全員を対象（個別に対象外にできる）</option><option value="none"${r.year_end_target_rule==="none"?" selected":""}>標準では対象外（個別に対象にできる）</option></select></p>`:""}
    <input type="text" id="${p}-note" maxlength="200" value="${esc(r.note||"")}" placeholder="メモ（任意）" style="margin-top:6px">
    <input type="text" id="${p}-reason" maxlength="200" placeholder="変更の理由（必須。履歴に残ります）" style="margin-top:6px">
@@ -7421,10 +7452,195 @@ function bindAdminPjRules(){
   const num=id=>{const v=val(id);return v===""?null:Number(v)};
   const patch={form_enabled:$(p+"-form").checked,invite_on_join:$(p+"-invite").checked,required:$(p+"-req").checked,remind_enabled:$(p+"-rem").checked,deadline_days:num(p+"-deadline"),remind_interval_days:num(p+"-int")||3,remind_interval_after_deadline_days:num(p+"-intafter")||1,note:val(p+"-note")||null};
   if(t==="year_end")patch.year_end_target_rule=val(p+"-target")||"all";
+  // 2026-11-10 v3: 社内期限（給与締め）と法定の目安。欄がある（＝ハブが対応している）ときだけ送る
+  if($(p+"-close")){const c=num(p+"-close");if(c!==null&&(c<1||c>31)){toast("給与の締め日は 1〜31（31=月末）で入れてください",true);return}patch.payroll_closing_day=c;patch.payroll_lead_days=num(p+"-lead")||0}
+  if($(p+"-lbasis")){patch.legal_deadline_basis=val(p+"-lbasis")||null;patch.pay_day=num(p+"-payday")||15;patch.pay_month_offset=num(p+"-payoff")??1;patch.legal_note=val(p+"-lnote")||null}
   if(!confirm(`${PJ_CLASS_LABEL[cls]} × ${t==="year_end"?"年末調整":"扶養家族"} の標準ルールを保存します。対象者全員に一度に通知が送られることはありません。よろしいですか？`))return;
   const {error}=await sb.rpc("post_join_set_rule",{p_class:cls,p_track:t,p_patch:patch,p_reason:reason});
   if(error){toast(pjMissingRpc(error)?"この機能はまだ使えません":"エラー: "+error.message,true);return}
   toast("標準ルールを保存しました（履歴に記録）");render();
+ });
+}
+// ---- 📨 リマインド対象の確認（扶養・年末調整）2026-11-10 v3 ----
+//   ユーザー指示: 既存従業員は「未提出」という理由だけでは自動通知しない。本部が対象者／対象グループを明示的に登録し、マスター・社長が承認した場合だけ対象に入る。
+//   この画面は確認専用（送信はできない）。元データはハブの RPC onboarding_post_join_preview_summary（送る人＋文面／送らない人＋理由／設定／上限超過）。
+//   対象リストは post_join_remind_batch_create / _approve（マスター・社長）/ _cancel / post_join_remind_member_remove / _batch_list / _batch_members。
+const pjHq=()=>!!me&&(me.is_master||me.role==="CEO"||me.role==="HQ");
+const pjApprover=()=>!!me&&(me.is_master||me.role==="CEO");
+const PJ_SCOPE_LABEL={new_hire:"新規入社",batch:"対象リスト",existing_unlisted:"既存従業員（対象リスト未登録）"};
+const PJ_EXC_LABEL={existing_unlisted:"既存従業員（対象リスト未登録）",batch_draft:"対象リストが未承認（下書き）",remind_disabled:"リマインド無効の設定",before_start:"入社から日が浅い",interval:"間隔待ち"};
+const PJ_BATCH_STATUS={draft:"下書き（未承認）",approved:"承認済み",cancelled:"取り消し",closed:"終了"};
+const PJ_BATCH_TRACK={both:"扶養家族＋年末調整",dependents:"扶養家族",year_end:"年末調整"};
+const pjTrackLabel=t=>(PJ_TRACKS.find(x=>x[0]===t)||[t,t])[1];
+const pjStoreText=v=>Array.isArray(v)?v.join("・"):(v||"");
+// 明細版（onboarding_post_join_preview＝1 行 1 トラック）しか無い環境用: summary と同じ形に組み直す
+function pjSummaryFromRows(rows,st){
+ const send=new Map(),exc=[];
+ (rows||[]).forEach(r=>{if(r.included===true){let q=send.get(r.user_id);if(!q){q={user_id:r.user_id,name:r.name,class:r.class,role:r.role,store_names:r.store_names,hire_date:r.hire_date,scope:r.scope,batch_title:r.batch_title,channel:r.channel||(r.has_slack?"Slack":r.has_line?"LINE":"送信先なし"),tracks:[],text:null};send.set(r.user_id,q)}q.tracks.push({track:r.track,target_year:r.target_year,deadline:r.internal_deadline||r.deadline,legal_deadline:r.legal_deadline})}else exc.push(r)});
+ const max=st&&st.post_join_max_per_run!=null?Number(st.post_join_max_per_run):null;
+ return {ok:true,enabled:!!(st&&st.post_join_remind_enabled===true),new_hire_from:st&&st.post_join_new_hire_from,start_days:st&&st.post_join_remind_days,max_per_run:max,over_limit:max!=null&&send.size>max,will_send_count:send.size,will_send:[...send.values()],excluded:exc,excluded_summary:null,note:null,_settingsUnknown:!st};
+}
+let pjRemind=null; // 直近に読んだデータ（bind 側で使う）
+async function loadPjRemind(){
+ const out={sum:null,err:null,batches:null,members:{},pending:null,text:null};
+ try{const {data,error}=await sb.rpc("onboarding_post_join_preview_summary",{});if(error)throw error;if(data&&data.ok!==false)out.sum=data;else out.err=(data&&data.error)||"読めません"}catch(e){out.err=String((e&&e.message)||e)}
+ if(!out.sum){ // 明細版だけある場合
+  try{const {data,error}=await sb.rpc("onboarding_post_join_preview",{});if(error)throw error;let st=null;try{const r=await sb.from("app_settings").select("value").eq("key","onboarding_alerts").maybeSingle();st=(r.data&&r.data.value)||null}catch(e){}
+   out.sum=pjSummaryFromRows(Array.isArray(data)?data:[],st);out.err=null}catch(e){if(!out.err)out.err=String((e&&e.message)||e)}
+ }
+ try{const {data,error}=await sb.rpc("post_join_remind_batch_list",{});if(error)throw error;out.batches=Array.isArray(data)?data:((data&&(data.batches||data.rows))||[])}catch(e){out.batches=null}
+ if(out.batches)await Promise.all(out.batches.filter(x=>x.status==="draft"||x.status==="approved").map(async x=>{try{const {data,error}=await sb.rpc("post_join_remind_batch_members",{p_batch:x.id});if(!error)out.members[x.id]=Array.isArray(data)?data:[]}catch(e){}}));
+ if(!out.sum){try{const {data,error}=await sb.from("post_join_required_pending_v").select("*");if(!error)out.pending=data||[]}catch(e){}}
+ if(out.sum&&!(out.sum.will_send||[]).some(w=>w.text)){try{const {data,error}=await sb.rpc("post_join_remind_text",{p_name:"（氏名）",p_tracks:[{track:"dependents",target_year:0,deadline:null},{track:"year_end",target_year:pjThisYear(),deadline:null}]});if(!error&&data)out.text=typeof data==="string"?data:(data.text||null)}catch(e){}}
+ return out;
+}
+const PJ_REMIND_TEXT_FALLBACK="（氏名）さん、お疲れさまです。N-Style 本部です。\n扶養家族・年末調整の情報がまだ提出されていません。日報システムの「設定」→「📝 扶養・年末調整の登録」から入力して送ってください。\n分からないことがあれば、このまま返信してください。\n※ 実際の文面はハブの設定で決まります（この表示は説明用の例です）。";
+// 「送らない」明細（1 行 1 トラック）を人ごとにまとめる
+function pjExcludedPeople(sum){
+ const sendIds=new Set((sum.will_send||[]).map(w=>w.user_id));const m=new Map();
+ (sum.excluded||[]).forEach(r=>{if(sendIds.has(r.user_id))return;let q=m.get(r.user_id);if(!q){q={user_id:r.user_id,name:r.name||"（氏名不明）",class:r.class,store_names:pjStoreText(r.store_names),hire_date:r.hire_date,scope:r.scope,rows:[]};m.set(r.user_id,q)}q.rows.push(r);if(r.scope==="existing_unlisted")q.scope="existing_unlisted"});
+ return [...m.values()];
+}
+async function adminPjRemindView(){
+ if(!pjHq())return `<p class="muted">このページを表示する権限がありません。</p>`;
+ const d=await loadPjRemind();pjRemind=d;const sum=d.sum;
+ let h=`<span class="back" id="adback">← 従業員一覧</span><h2>📨 リマインド対象の確認（扶養・年末調整）</h2>
+  <p style="margin:0 0 8px;font-size:13px;background:#fff8e1;border-radius:6px;padding:8px 10px">🔒 <b>確認専用の画面です。ここから送信はできません。</b><br>「いま自動送信を有効にしたら、誰に・何が送られるか」を先に確かめるための画面です。既存の従業員は、未提出というだけでは送られません（下の「対象リスト」に登録され、承認された人だけ）。</p>`;
+ if(!sum){
+  h+=`<div class="card"><h3>送信対象の確認</h3><p class="muted" style="margin:0">この機能はまだ使えません（${esc(pjMissingRpc(d.err)?"ハブの更新待ち":(d.err||"準備中"))}）</p>
+   ${d.pending?`<p style="margin:8px 0 0;font-size:13px">参考: いま「提出必須なのに未提出」の人は <b>${[...new Set(d.pending.map(x=>x.user_id))].length}</b> 人です。この一覧だけでは誰にも送られません。</p>`:""}</div>`;
+ }else{
+  const on=sum.enabled===true;const maxRun=sum.max_per_run!=null?Number(sum.max_per_run):null;const send=sum.will_send||[];const skip=pjExcludedPeople(sum);
+  h+=`<div class="card"><h3>いまの設定</h3>
+   <p style="margin:0;font-size:13px">自動送信: <b style="color:${on?"var(--red)":"inherit"}">${sum._settingsUnknown?"（設定を読めません）":on?"ON（有効）":"OFF（送られません）"}</b>${sum.person_notify_enabled===false?`　<span class="muted" style="font-size:11px">本人への送信機能（person_notify_enabled）も OFF</span>`:""}</p>
+   <p style="margin:4px 0 0;font-size:13px">1 回の上限: <b>${maxRun!=null?esc(maxRun)+" 人":"（未設定）"}</b> <span class="muted" style="font-size:11px">これを超えると安全のため 1 人にも送らず止まります</span></p>
+   <p style="margin:4px 0 0;font-size:13px">新規入社とみなす基準日: <b>${sum.new_hire_from?esc(pjDateJp(sum.new_hire_from))+" 以降の入社登録":"（未設定）"}</b>／入社から <b>${sum.start_days!=null?esc(sum.start_days):"—"}</b> 日たってから送り始める</p>
+   <p class="muted" style="margin:6px 0 0;font-size:11px">自動送信の有効化はこの画面ではできません（承認のうえシステム担当が行います）。</p>
+   ${pjApprover()?`<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px">上限・基準日・開始日数を変える（マスター／社長）</summary>
+     <p style="margin:6px 0 0;font-size:13px">基準日 <input type="date" id="pjrs-from" value="${esc(String(sum.new_hire_from||"").slice(0,10))}" style="width:auto;display:inline-block;margin:0 10px 0 4px">
+      1 回の上限 <input type="number" id="pjrs-max" min="1" max="200" step="1" value="${maxRun!=null?maxRun:10}" style="width:80px;display:inline-block;margin:0 10px 0 4px">人
+      開始日数 <input type="number" id="pjrs-days" min="0" max="60" step="1" value="${sum.start_days!=null?sum.start_days:3}" style="width:70px;display:inline-block;margin:0 0 0 4px">日</p>
+     <input type="text" id="pjrs-reason" maxlength="200" placeholder="変更の理由（必須。履歴に残ります）" style="margin-top:6px">
+     <button class="btn sub sm" id="pjrs-save" style="margin-top:6px">設定を保存</button></details>`:""}</div>`;
+  const es=sum.excluded_summary||(()=>{const o={};skip.forEach(q=>{const k=q.scope==="existing_unlisted"?"existing_unlisted":"interval";o[k]=(o[k]||0)+1});return o})();
+  const esText=Object.entries(es).filter(([,n])=>Number(n)>0).map(([k,n])=>`${esc(PJ_EXC_LABEL[k]||k)} <b>${esc(n)}</b> 人`).join("／");
+  h+=`<div class="card"><h3>いま有効にしたら</h3>
+   <p style="margin:0;font-size:15px">送る人: <b style="font-size:20px">${send.length}</b> 人　／　送らない人: <b>${skip.length}</b> 人</p>
+   ${esText?`<p style="margin:6px 0 0;font-size:13px">送らない理由: ${esText}</p>`:""}
+   ${sum.over_limit?`<p style="margin:8px 0 0;font-size:13px;color:var(--red)">⚠️ 送る人（${send.length} 人）が 1 回の上限（${maxRun} 人）を超えています。このままでは安全装置がはたらき、<b>1 人にも送らずに止まります</b>。対象リストを分けるか、上限の見直しが必要です。</p>`:""}
+   ${!on?`<p class="muted" style="margin:6px 0 0;font-size:12px">※ いまは自動送信 OFF なので、実際には誰にも送られていません（これは確認用の表示です）。</p>`:""}</div>`;
+  const trk=t=>`${esc(pjTrackLabel(t.track))}${t.track==="year_end"&&t.target_year?" "+esc(t.target_year)+"年度":""}${t.deadline?`（社内期限 ${esc(pjDateJp(t.deadline))}${t.legal_deadline?`／法定の目安 ${esc(pjDateJp(t.legal_deadline))}`:""}）`:""}`;
+  const why=q=>q.scope==="batch"?`対象リスト「${esc(q.batch_title||"")}」`:esc(PJ_SCOPE_LABEL[q.scope]||q.scope||"—");
+  h+=`<div class="card"><h3>送る人（${send.length} 人）</h3>${send.length?`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><tr style="text-align:left;border-bottom:1px solid var(--line)"><th>氏名</th><th>区分</th><th>店舗</th><th>送る内容・社内期限</th><th>対象の理由</th><th>送信経路</th></tr>
+    ${send.map(q=>`<tr style="border-bottom:1px solid var(--line);vertical-align:top"><td style="padding:4px 6px 4px 0"><b>${esc(q.name||"（氏名不明）")}</b>${q.hire_date?`<br><span class="muted">入社 ${esc(pjDateJp(q.hire_date))}</span>`:""}</td><td>${q.class==="AL"?"アルバイト":"社員"}</td><td>${esc(pjStoreText(q.store_names)||"—")}</td><td>${(q.tracks||[]).map(trk).join("<br>")}${q.text?`<details style="margin-top:2px"><summary style="cursor:pointer" class="muted">この人への文面</summary><pre style="white-space:pre-wrap;font-size:11px;margin:4px 0 0;background:var(--bg);border-radius:6px;padding:6px">${esc(q.text)}</pre></details>`:""}</td><td>${why(q)}</td><td>${!q.channel||/なし/.test(q.channel)?`<span style="color:var(--red)">送信先なし</span>`:esc(q.channel)}</td></tr>`).join("")}</table></div>`:`<p class="muted" style="margin:0">いま送る対象の人はいません。</p>`}</div>`;
+  h+=`<div class="card"><h3>送らない人（${skip.length} 人）</h3>${skip.length?`<details><summary style="cursor:pointer;font-size:13px">一覧を開く（理由つき）</summary><ul style="margin:6px 0 0;padding-left:18px;font-size:12px">${skip.map(q=>`<li><b>${esc(q.name)}</b>（${q.class==="AL"?"アルバイト":"社員"}${q.store_names?"・"+esc(q.store_names):""}）: ${[...new Set(q.rows.map(t=>`${pjTrackLabel(t.track)}＝${t.exclude_reason||PJ_SCOPE_LABEL[t.scope]||"—"}${t.next_at?`（次回 ${pjDateJp(t.next_at)}）`:""}`))].map(esc).join("／")}</li>`).join("")}</ul></details>`:`<p class="muted" style="margin:0">該当なし</p>`}</div>`;
+  const sample=(send.find(w=>w.text)||{}).text||d.text||PJ_REMIND_TEXT_FALLBACK;
+  h+=`<div class="card"><h3>送られる文面（例）</h3><pre style="white-space:pre-wrap;font-size:12px;margin:0;background:var(--bg);border-radius:6px;padding:8px">${esc(sample)}</pre>
+   <p class="muted" style="margin:6px 0 0;font-size:11px">氏名・未提出の項目・期限は、その人の内容に置き換わります（送る人ごとの文面は上の表の「この人への文面」）。送信経路は Slack → LINE の順です。</p></div>`;
+ }
+ // ---- 対象リスト ----
+ h+=`<div class="card"><h3>対象リスト（既存の従業員を通知対象に加える）</h3>
+  <p style="margin:0;font-size:13px">既存の従業員に送りたいときだけ、ここで <b>対象者を登録</b> します。<b>登録しただけでは送られません。</b>マスターまたは社長が承認し、かつ自動送信が有効なときだけ送られます。</p>`;
+ if(d.batches===null){h+=`<p class="muted" style="margin:8px 0 0">この機能はまだ使えません（ハブの更新待ち）</p></div>`;return h}
+ if(!d.batches.length)h+=`<p class="muted" style="margin:8px 0 0;font-size:12px">登録された対象リストはありません。</p>`;
+ d.batches.forEach(x=>{
+  const ms=d.members[x.id]||[];const cnt=Number(x.members??ms.filter(m=>!m.removed_at).length??0);const canEdit=x.status==="draft"||x.status==="approved";
+  const ts=v=>v?esc(new Date(v).toLocaleString("ja-JP")):"";
+  h+=`<div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:8px">
+   <p style="margin:0;font-size:13px"><b>${esc(x.title||"（無題）")}</b>　<span class="badge${x.status==="approved"?" g":""}">${esc(PJ_BATCH_STATUS[x.status]||x.status)}</span>　${esc(PJ_BATCH_TRACK[x.track]||x.track||"")}${x.target_year?" "+esc(x.target_year)+"年度":""}　<b>${cnt}</b> 人${Number(x.removed)>0?`<span class="muted">（外した人 ${esc(x.removed)}）</span>`:""}</p>
+   <p class="muted" style="margin:2px 0 0;font-size:11px">登録: ${esc(x.created_by_name||"—")} ${ts(x.created_at)}${x.approved_at?`　承認: ${esc(x.approved_by_name||"—")} ${ts(x.approved_at)}`:""}${x.cancelled_at?`　取り消し: ${ts(x.cancelled_at)}${x.cancel_reason?`（${esc(x.cancel_reason)}）`:""}`:""}${x.note?`<br>メモ: ${esc(x.note)}`:""}</p>
+   ${ms.length?`<p style="margin:6px 0 0;font-size:12px;line-height:2">${ms.map(m=>m.removed_at?`<span class="muted" style="text-decoration:line-through;margin-right:8px">${esc(m.name||"（不明）")}</span>`:`<span style="display:inline-block;border:1px solid var(--line);border-radius:12px;padding:0 8px;margin-right:6px">${esc(m.name||"（不明）")}${canEdit?` <a href="#" data-pjrm-rm="${esc(x.id)}|${esc(m.user_id)}" data-name="${esc(m.name||"")}" title="この人を対象から外す" style="text-decoration:none">✕</a>`:""}</span>`).join("")}</p>`:""}
+   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+    ${x.status==="draft"&&pjApprover()?`<button class="btn sm" data-pjrm-approve="${esc(x.id)}" data-n="${cnt}" data-title="${esc(x.title||"")}">✅ この対象リストを承認</button>`:""}
+    ${x.status==="draft"&&!pjApprover()?`<span class="muted" style="font-size:12px">承認はマスターまたは社長が行います</span>`:""}
+    ${canEdit?`<button class="btn sub sm" data-pjrm-cancel="${esc(x.id)}" data-title="${esc(x.title||"")}">取り消す</button>`:""}
+   </div></div>`;
+ });
+ // 登録フォーム: 個別もグループも「提出必須・未提出・対象リスト未登録の既存従業員」の中から選ぶ（グループは雇用区分・店舗で絞り、その時点の名簿を登録）
+ const unlisted=sum?pjExcludedPeople(sum).filter(q=>q.scope==="existing_unlisted"&&!q.rows.some(r=>/下書き/.test(r.exclude_reason||""))):[];
+ const draftListed=sum?pjExcludedPeople(sum).filter(q=>q.rows.some(r=>/下書き/.test(r.exclude_reason||""))).length:0;
+ pjRemind.unlisted=unlisted;
+ const allSt=[...stores,...storesHidden];
+ h+=`<h4 style="margin:14px 0 0;font-size:14px">＋ 対象リストを登録する</h4>
+  <p class="muted" style="margin:4px 0 0;font-size:12px">選べるのは「提出必須なのに未提出で、まだ対象リストに入っていない既存の従業員」（いま ${unlisted.length} 人）です。${draftListed?`ほかに、未承認（下書き）の対象リストに入っている人が ${draftListed} 人います。`:""}</p>
+  <input type="text" id="pjrm-title" maxlength="60" placeholder="名前（例: 2026 年 年末調整・既存社員）" style="margin-top:6px">
+  <p style="margin:6px 0 0;font-size:13px">送る内容 <select id="pjrm-track" style="width:auto;display:inline-block;margin:0 8px 0 4px;padding:3px 6px"><option value="both">扶養家族＋年末調整</option><option value="dependents">扶養家族だけ</option><option value="year_end">年末調整だけ</option></select>
+   年末調整の年度 <select id="pjrm-year" style="width:auto;display:inline-block;margin:0 0 0 4px;padding:3px 6px">${pjYearOpts().map(v=>`<option value="${v}"${v===pjThisYear()?" selected":""}>${v} 年度</option>`).join("")}</select></p>
+  <p style="margin:8px 0 0;font-size:13px"><label style="margin-right:14px"><input type="radio" name="pjrm-mode" value="pick" checked style="width:auto;margin:0 4px 0 0">個別に選ぶ</label><label><input type="radio" name="pjrm-mode" value="group" style="width:auto;margin:0 4px 0 0">グループで選ぶ（雇用区分・店舗）</label></p>
+  <div id="pjrm-pick" style="margin-top:6px">${unlisted.length?`<div style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:6px 8px">${unlisted.map(q=>`<label style="display:block;font-size:13px;margin:2px 0"><input type="checkbox" data-pjrm-pick="${esc(q.user_id)}" data-name="${esc(q.name)}" style="width:auto;margin:0 6px 0 0">${esc(q.name)} <span class="muted" style="font-size:11px">${q.class==="AL"?"アルバイト":"社員"}${q.store_names?"・"+esc(q.store_names):""}・未提出: ${[...new Set(q.rows.map(r=>pjTrackLabel(r.track)))].map(esc).join("、")}</span></label>`).join("")}</div>`
+    :`<p class="muted" style="margin:0;font-size:12px">${sum?"いま選べる人はいません。":"（対象の一覧はハブの更新後に表示されます）"}</p>`}</div>
+  <div id="pjrm-group" style="margin-top:6px;display:none">
+   <p style="margin:0;font-size:13px">雇用区分 <select id="pjrm-cls" style="width:auto;display:inline-block;margin:0 10px 0 4px;padding:3px 6px"><option value="">すべて</option><option value="SHAIN">社員</option><option value="AL">アルバイト</option></select>
+    店舗 <select id="pjrm-store" style="width:auto;display:inline-block;margin:0 0 0 4px;padding:3px 6px"><option value="">全店舗</option>${allSt.map(x=>`<option value="${esc(x.id)}" data-name="${esc(x.name)}">${esc(x.name)}</option>`).join("")}</select></p>
+   <p class="muted" style="margin:4px 0 0;font-size:11px">いまこの条件に当てはまる人（提出必須・未提出・対象リスト未登録）を、その時点の名簿として登録します。あとから条件に当てはまるようになった人は自動では増えません。</p>
+   <div id="pjrm-est" style="margin-top:6px;font-size:12px"></div></div>
+  <input type="text" id="pjrm-note" maxlength="200" placeholder="メモ（任意。なぜこの人たちに送るのか）" style="margin-top:6px">
+  <button class="btn sm" id="pjrm-create" style="margin-top:8px">内容を確認して登録する（下書き）</button>
+  <p class="muted" style="margin:6px 0 0;font-size:11px">登録・承認・取り消し・対象から外した記録は履歴に残ります。一度に全員へ送る操作はありません。</p></div>`;
+ return h;
+}
+// グループ条件（雇用区分・店舗）→ 「提出必須・未提出・対象リスト未登録の既存従業員」のうち該当する人
+function pjRemindGroupMembers(cls,storeName){
+ const list=(pjRemind&&pjRemind.unlisted)||[];
+ return list.filter(q=>(!cls||(q.class||"SHAIN")===cls)&&(!storeName||String(q.store_names||"").split("・").includes(storeName)));
+}
+function bindAdminPjRemind(){
+ const fail=error=>toast(pjMissingRpc(error)?"この機能はまだ使えません":"エラー: "+error.message,true);
+ if($("pjrs-save"))$("pjrs-save").onclick=async()=>{
+  if(!pjApprover()){toast("設定の変更はマスターまたは社長だけができます",true);return}
+  const reason=val("pjrs-reason");if(!reason){toast("変更の理由を入れてください（履歴に残ります）",true);return}
+  const sum=(pjRemind&&pjRemind.sum)||{};const patch={};
+  const from=val("pjrs-from"),max=val("pjrs-max"),days=val("pjrs-days");
+  if(from&&from!==String(sum.new_hire_from||"").slice(0,10))patch.post_join_new_hire_from=from;
+  if(max!==""&&Number(max)!==Number(sum.max_per_run))patch.post_join_max_per_run=Number(max);
+  if(days!==""&&Number(days)!==Number(sum.start_days))patch.post_join_remind_days=Number(days);
+  if(!Object.keys(patch).length){toast("変更がありません",true);return}
+  if(!confirm("リマインドの設定を変更します（自動送信の ON/OFF は変わりません）。よろしいですか？"))return;
+  const {data,error}=await sb.rpc("post_join_remind_settings_set",{p_patch:patch,p_reason:reason});
+  if(error){fail(error);return}if(data&&data.ok===false){toast(data.error||"保存できませんでした",true);return}
+  toast("設定を保存しました（履歴に記録）");render();
+ };
+ if(!$("pjrm-create"))return;
+ const mode=()=>(document.querySelector('input[name="pjrm-mode"]:checked')||{}).value||"pick";
+ const storeNm=()=>{const el=$("pjrm-store");const o=el&&el.selectedOptions&&el.selectedOptions[0];return o&&o.value?o.dataset.name:""};
+ const est=()=>{const el=$("pjrm-est");if(!el)return;const ms=pjRemindGroupMembers(val("pjrm-cls"),storeNm());el.innerHTML=`この条件で登録される人: <b>${ms.length}</b> 人${ms.length?`<br><span class="muted">${ms.slice(0,80).map(u=>esc(u.name)).join("、")}${ms.length>80?" ほか":""}</span>`:""}`};
+ document.querySelectorAll('input[name="pjrm-mode"]').forEach(r=>r.onchange=()=>{$("pjrm-pick").style.display=mode()==="pick"?"":"none";$("pjrm-group").style.display=mode()==="group"?"":"none";if(mode()==="group")est()});
+ if($("pjrm-cls"))$("pjrm-cls").onchange=est;if($("pjrm-store"))$("pjrm-store").onchange=est;
+ $("pjrm-create").onclick=async()=>{
+  const title=val("pjrm-title");if(!title){toast("対象リストの名前を入れてください",true);return}
+  const track=val("pjrm-track")||"both";const year=track==="dependents"?null:Number(val("pjrm-year")||pjThisYear());
+  let ids=[],names=[],filter=null;
+  if(mode()==="pick"){document.querySelectorAll("[data-pjrm-pick]").forEach(c=>{if(c.checked){ids.push(c.dataset.pjrmPick);names.push(c.dataset.name)}})}
+  else{const cls=val("pjrm-cls"),store=val("pjrm-store");const ms=pjRemindGroupMembers(cls,storeNm());ids=ms.map(u=>u.user_id);names=ms.map(u=>u.name);
+   // 条件は「登録時のメモ」として残す（class / store_ids のキーで渡すとハブ側が条件に合う全員へ広げるため、確認した名簿だけを p_user_ids で渡す）
+   filter={memo:{class:cls||null,store_id:store||null,store_name:storeNm()||null},source:"nippo_group",expanded_at:new Date().toISOString(),expanded_count:ids.length}}
+  if(!ids.length){toast("対象の人が 0 人です。人を選ぶか、条件を変えてください",true);return}
+  const maxRun=pjRemind&&pjRemind.sum&&pjRemind.sum.max_per_run!=null?Number(pjRemind.sum.max_per_run):null;
+  if(!confirm(`対象リスト「${title}」に ${ids.length} 人を登録します。\n\n${names.slice(0,40).join("、")}${names.length>40?" ほか":""}\n\n・これは下書きです。マスターまたは社長が承認するまで、誰にも送られません。\n・承認後も、自動送信が有効なときだけ送られます。${maxRun!=null&&ids.length>maxRun?`\n・⚠️ 1 回の上限（${maxRun} 人）を超えています。このままだと安全装置で 1 人にも送られません。リストを分けることをおすすめします。`:""}\n\nよろしいですか？`))return;
+  const {data,error}=await sb.rpc("post_join_remind_batch_create",{p_title:title,p_track:track,p_year:year,p_user_ids:ids,p_filter:filter,p_note:val("pjrm-note")||null});
+  if(error){fail(error);return}
+  if(data&&data.ok===false){toast(data.error||"登録できませんでした",true);return}
+  toast(`対象リストを登録しました（下書き・${(data&&(data.members??data.member_count))??ids.length} 人）。承認されるまで送られません`);render();
+ };
+ document.querySelectorAll("[data-pjrm-approve]").forEach(b=>b.onclick=async()=>{
+  if(!pjApprover()){toast("承認はマスターまたは社長だけができます",true);return}
+  if(!confirm(`対象リスト「${b.dataset.title}」（${b.dataset.n} 人）を承認します。\n\n承認すると、自動送信が有効なあいだ、この人たちのうち「提出必須で未提出」の人にリマインドが送られるようになります（いま自動送信が OFF なら送られません）。\n\nよろしいですか？`))return;
+  const {data,error}=await sb.rpc("post_join_remind_batch_approve",{p_batch:b.dataset.pjrmApprove});
+  if(error){fail(error);return}if(data&&data.ok===false){toast(data.error||"承認できませんでした",true);return}
+  toast("承認しました（履歴に記録）");render();
+ });
+ document.querySelectorAll("[data-pjrm-cancel]").forEach(b=>b.onclick=async()=>{
+  const reason=prompt(`対象リスト「${b.dataset.title}」を取り消します。理由を入れてください（履歴に残ります）`);if(reason===null)return;if(!reason.trim()){toast("理由を入れてください",true);return}
+  const {data,error}=await sb.rpc("post_join_remind_batch_cancel",{p_batch:b.dataset.pjrmCancel,p_reason:reason.trim()});
+  if(error){fail(error);return}if(data&&data.ok===false){toast(data.error||"取り消せませんでした",true);return}
+  toast("取り消しました（この対象リストの人には送られなくなります）");render();
+ });
+ document.querySelectorAll("[data-pjrm-rm]").forEach(a=>a.onclick=async ev=>{
+  ev.preventDefault();const [batch,user]=a.dataset.pjrmRm.split("|");
+  if(!confirm(`${a.dataset.name||"この人"} さんをこの対象リストから外します（この人には送られなくなります）。よろしいですか？`))return;
+  const {data,error}=await sb.rpc("post_join_remind_member_remove",{p_batch:batch,p_user:user});
+  if(error){fail(error);return}if(data&&data.ok===false){toast(data.error||"外せませんでした",true);return}
+  toast("対象から外しました");render();
  });
 }
 // 店舗 → スマレジ・タイムカードの事業所を作る（API に登録が無いため Mac の自動操作ジョブに依頼。RPC smaregi_store_create_request）
@@ -11305,6 +11521,7 @@ function bindPage(){
  if(page==="admin"&&adminMode==="contractreg")bindAdminContractReg(); // 2026-10-17追加
  if(page==="admin"&&adminMode==="storemis")bindAdminStoreMis();
  if(page==="admin"&&adminMode==="pjrules")bindAdminPjRules(); // 2026-11-09 Phase 6 v2
+ if(page==="admin"&&adminMode==="pjremind")bindAdminPjRemind(); // 2026-11-10 Phase 6 v3
  if(page==="admin"&&adminMode==="edit"&&smReady){bindSmCard(adminDetail);bindWageCard(adminDetail)}
  if(page==="admin"&&adminMode==="edit")bindCommuteCard(adminDetail,"nippo_hq"); // 2026-11-10 Phase 2
  if(page==="settings")bindCommuteCard(me.id,"nippo_self"); // 2026-11-10 Phase 2
@@ -11640,6 +11857,7 @@ function bindPage(){
  // 2026-08-30続き: 給与・インセンティブ配分（月単位・人ごとに店舗を並べる方式に改訂）
  if($("adpayroll"))$("adpayroll").onclick=()=>{adminMode="payroll";payExtraStores={};render()};
  if($("adpjrules"))$("adpjrules").onclick=()=>{adminMode="pjrules";render()}; // 2026-11-09 Phase 6 v2
+ if($("adpjremind"))$("adpjremind").onclick=()=>{adminMode="pjremind";render()}; // 2026-11-10 Phase 6 v3
  if($("adretire"))$("adretire").onclick=()=>{adminMode="retire";render()}; // 2026-10-03追加
  if($("adcontractreg"))$("adcontractreg").onclick=()=>{adminMode="contractreg";render()}; // 2026-10-17追加
  if($("adstoremis"))$("adstoremis").onclick=()=>{adminMode="storemis";render()};

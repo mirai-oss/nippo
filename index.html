@@ -5215,6 +5215,7 @@ async function adminView(){
  adminUsers.sort((a,b)=>(order[a.role]??9)-(order[b.role]??9)||a.name.localeCompare(b.name,"ja"));
  const sname=id=>{const s=stores.find(x=>x.id===id);return s?s.name:""};
  let h=`<h2>従業員管理</h2>`;
+ if(me.is_master||["HQ","CEO"].includes(me.role))h+=await syncStatusCardHtml(); // 2026-11-10 ステップ 4
  // v2.6.64 通知の名前をタップしたら、その方の詳細が開くようにする（見た目はそのまま、押せる場所を足しただけ）
  (ntfs||[]).forEach(n=>{
   const uid=(n.link&&n.link.user_id)||"";
@@ -7181,6 +7182,43 @@ function bindChangeCard(){
 // ===== 2026-11-10 ステップ 3: 賃金・口座の変更申請と承認（本部の従業員ページ） =====
 //   RPC（hr_pay_change_list / _request / _review / _cancel / hr_bank_change_reschedule）が無い環境（SQL 未適用）ではカードごと出ない。
 //   承認まで賃金・口座は変わらない。確定済みの給与・出力済みの振込データは自動では上書きしない（DB 側で止まる）。
+// ===== 2026-11-10 ステップ 4: 同期・承認の状況（全従業員のうち、対応が必要な人だけ） =====
+//   RPC（hr_sync_status_overview）が無い環境（SQL 未適用）ではカードごと出ない。氏名と項目名だけを出す（金額・口座・住所などの値は出さない）
+const SYNCST_CAT={sync_error:["同期エラー・未反映","#b91c1c"],mismatch:["情報不一致","#b45309"],approval_pending:["承認待ち","#1d4ed8"],commute_recheck:["交通費の再確認待ち","#7c3aed"],unsynced:["未同期","#475569"]};
+const SYNCST_KIND={wage:"賃金",store:"所属店舗",commute:"交通費",tax:"源泉・扶養",name:"氏名",address:"住所",active:"在籍",info_copy:"社内情報の写し"};
+let syncStatusOpen=false;
+async function syncStatusCardHtml(){
+ let d=null;try{const r=await sb.rpc("hr_sync_status_overview");if(r.error||!r.data||!r.data.ok)return "";d=r.data}catch(e){return ""}
+ if(d.task_auto&&d.employee_count){try{await sb.rpc("hr_sync_status_task_sync")}catch(e){}} // 自動連動フラグが ON のときだけ（既定 OFF）
+ const fd=t=>t?new Date(t).toLocaleString("ja-JP",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}):"";
+ const cnt=d.counts||{};
+ const badges=Object.keys(SYNCST_CAT).filter(k=>cnt[k]).map(k=>`<span style="display:inline-block;margin:0 6px 4px 0;padding:2px 8px;border-radius:10px;font-size:11.5px;color:#fff;background:${SYNCST_CAT[k][1]}">${SYNCST_CAT[k][0]} ${cnt[k]}</span>`).join("");
+ const checks=(d.checks||[]).map(k=>`${esc(SYNCST_KIND[k.kind]||k.kind)}${k.scope?`（${esc(typeof smShort==="function"?smShort(k.scope):k.scope)}）`:""}: ${fd(k.checked_at)}・${k.checked_count}人中 不一致 ${k.found_count}人`).join("／");
+ let h=`<div class="card" id="syncst-card"><h3 style="margin-bottom:4px">🔎 同期・承認の状況</h3>`;
+ if(!d.employee_count){
+  h+=`<p class="muted" style="margin:0;font-size:12.5px">✅ 対応が必要な従業員はいません（在職 ${d.normal_count} 人すべて正常）。</p>`;
+ }else{
+  h+=`<p style="margin:0 0 6px;font-size:12.5px"><b>対応が必要: ${d.employee_count} 人</b>　<span class="muted">（正常 ${d.normal_count} 人は表示しません）</span></p><div>${badges}</div>
+   <button class="btn sm ghost" id="syncst-toggle" style="margin:4px 6px 0 0">${syncStatusOpen?"一覧を閉じる":"一覧を開く"}</button><button class="btn sm ghost" id="syncst-task" style="margin-top:4px">📌 本部タスクに反映（要対応だけ）</button>`;
+  if(syncStatusOpen){
+   (d.employees||[]).forEach(e=>{
+    h+=`<div data-au="${esc(e.user_id)}" style="padding:6px 0;border-top:1px solid var(--line);font-size:12.5px;cursor:pointer"><b>${esc(e.user_name||"—")}</b>${e.is_active?"":"（無効）"}${e.stores?` <span class="muted">${esc(e.stores)}</span>`:""}
+     ${(e.issues||[]).map(i=>`<div style="margin-top:2px"><span style="color:${(SYNCST_CAT[i.cat]||["","#475569"])[1]}">●</span> ${esc((SYNCST_CAT[i.cat]||[i.cat])[0])}: ${esc(i.label)}${i.has_task?` <span class="muted">（専用の本部タスクあり）</span>`:""} <span class="muted">${fd(i.since)}〜</span></div>`).join("")}</div>`;
+   });
+  }
+ }
+ h+=`<p class="muted" style="margin:6px 0 0;font-size:11.5px">不一致の照合は読み取りだけです（スマレジも管理システムも書き換えません）。${checks?`最後の照合 — ${checks}`:"賃金の照合は、下の「スマレジの賃金を管理システムへ取り込む」を実行すると記録されます。"}</p></div>`;
+ return h;
+}
+function bindSyncStatusCard(){
+ if($("syncst-toggle"))$("syncst-toggle").onclick=()=>{syncStatusOpen=!syncStatusOpen;render()};
+ if($("syncst-task"))$("syncst-task").onclick=async()=>{
+  if(!confirm("対応が必要なものだけを、本部タスク「従業員情報の同期・承認: 要対応の確認」のチェック項目に反映します。\n（すでに載っているものは増えません。解消したものは自動でチェックが付きます）\nよろしいですか？"))return;
+  const b=$("syncst-task");b.disabled=true;const {data,error}=await sb.rpc("hr_sync_status_task_sync");b.disabled=false;
+  if(error){toast("反映できませんでした: "+error.message,true);return}
+  toast(`本部タスクに反映しました（追加 ${data.added} ／ 解消 ${data.closed} ／ 残り ${data.open}）`);render();
+ };
+}
 const PAYCHG_ST={pending:"承認待ち",approved:"承認済み",rejected:"却下",cancelled:"取り下げ"};
 const PAYCHG_AP={none:"",applied:"反映済み",scheduled:"予約中（決めた支給回から自動で切り替わります）",blocked_exported:"未反映・要対応（その支給回は振込データ出力済み）",blocked_finalized:"未反映（給与確定済みの月）"};
 const PAYCHG_DIV={0:"時給",1:"日給",2:"月給"};
@@ -7188,14 +7226,23 @@ let payChgRowsCache=[];
 let payChgConfig=null; // 2026-11-10 夜: 口座の運用方針（承認時に支給回を確定・出力済みの回は個別承認）。RPC 未作成なら null のまま＝従来どおり
 async function loadPayChangeInfo(uid){
  try{const {data,error}=await sb.rpc("hr_pay_change_list",{p_user:uid,p_only_open:false});if(error)return null;payChgRowsCache=data||[];
-  try{const c=await sb.rpc("hr_pay_change_config");payChgConfig=(!c.error&&c.data&&c.data.ok)?c.data:null}catch(e){payChgConfig=null}
+  try{const c=await sb.rpc("hr_pay_change_config",{p_user:uid});payChgConfig=(!c.error&&c.data&&c.data.ok)?c.data:null}catch(e){payChgConfig=null}
   return {rows:data||[]}}catch(e){return null}
 }
 // 支給回の表示と選択（open=まだ出力していない／exported=振込データ出力済み＝この回から変えるには個別の確認・承認）
 function payRunLabel(r){return `${r.year_month} 月分（${r.pay_date} 支給）${r.state==="exported"?"※振込データ出力済み":""}`}
 function payRunOptions(sel){
- const runs=(payChgConfig&&payChgConfig.runs)||[];const def=sel&&runs.some(r=>r.year_month===sel)?sel:(payChgConfig&&payChgConfig.next_open);
- return runs.map(r=>`<option value="${esc(r.year_month)}"${r.year_month===def?" selected":""}>${esc(payRunLabel(r))}</option>`).join("");
+ const runs=(payChgConfig&&payChgConfig.runs)||[];const def=sel&&runs.some(r=>r.year_month===sel)?sel:"";
+ return `<option value=""${def?"":" selected"}>どの支給回から？（選ぶ）</option>`+runs.map(r=>`<option value="${esc(r.year_month)}"${r.year_month===def?" selected":""}>${esc(payRunLabel(r))}${sel&&r.year_month===sel?"［希望］":""}</option>`).join("");
+}
+// ④ 賃金の直接編集の禁止フラグが ON で、初期登録・入社手続き中でない契約は「申請 → 別の人の承認」に回す
+function payWageNeedsRequest(c){return !!(payChgConfig&&payChgConfig.wage_approval_required&&!((payChgConfig.wage_direct_contracts||[]).includes(c)))}
+async function payWageRequest(uid,payload,date,what){
+ const why=prompt(`賃金の${what}は「申請 → 別の人の承認」が必要です。\n理由を入れてください（例: 2027 年 1 月の昇給）。\n承認されるまで、賃金は変わりません（スマレジにも送りません）。`);
+ if(!why||!why.trim())return false;
+ const {data,error}=await sb.rpc("hr_pay_change_request",{p_user:uid,p_kind:"wage",p_payload:payload,p_effective_date:date,p_reason:why.trim()});
+ if(error){toast("申請できませんでした: "+error.message,true);return false}
+ toast("賃金の変更を申請しました（別の人の承認待ち）"+((data&&data.warnings||[]).length?"\n⚠️ "+data.warnings.join("／"):""));return true;
 }
 function payRunState(ym){const r=((payChgConfig&&payChgConfig.runs)||[]).find(x=>x.year_month===ym);return r?r.state:null}
 function payChangeCardHtml(info,smInfo){
@@ -7207,13 +7254,13 @@ function payChangeCardHtml(info,smInfo){
  (info.rows||[]).slice(0,12).forEach(q=>{
   const isW=q.field==="wage",nv=q.new_value||{},ov=q.old_value||{};
   const body=isW?`${esc(PAYCHG_DIV[nv.division]||"")} ${yen(ov.wage)} → <b>${yen(nv.wage)}</b>（適用開始日 ${esc(q.effective_date||"—")}）`
-   :`${esc(ov.bank_name||"（未登録）")} ${esc(ov.account_number||"")} → <b>${esc(nv.bank_name||"")} ${esc(nv.account_number||"")}</b>（${q.status==="pending"?"希望: ":""}${q.effective_year_month?`${esc(q.effective_year_month)} 月分の給与＝${esc(q.effective_pay_date||"—")} 支給分から`:"次の未出力の支給回から"}）`;
+   :`${esc(ov.bank_name||"（未登録）")} ${esc(ov.account_number||"")} → <b>${esc(nv.bank_name||"")} ${esc(nv.account_number||"")}</b>（${q.status==="pending"?"希望: ":""}${q.effective_year_month?`${esc(q.effective_year_month)} 月分の給与＝${esc(q.effective_pay_date||"—")} 支給分から`:"支給回の希望なし（承認する人が選びます）"}）`;
   const sync=q.sync?`／スマレジ: ${q.sync.sync_status==="synced"?"同期済み（読み戻し一致）":q.sync.sync_status==="pending"?"同期待ち":esc(q.sync.sync_status||"")}${q.sync.sync_error?`（${esc(q.sync.sync_error)}）`:""}`:"";
   h+=`<div style="padding:6px 0;border-top:1px solid var(--line);font-size:12.5px"><b>${isW?"賃金":"銀行口座"}</b>　${body}
    <br><span class="muted">${esc(PAYCHG_ST[q.status]||q.status)}${PAYCHG_AP[q.apply_status]?"・"+esc(PAYCHG_AP[q.apply_status]):""}${sync}／申請 ${esc(q.requested_by_name||"—")} ${fd(q.requested_at)}${q.reviewed_by_name?`／${q.status==="rejected"?"却下":q.status==="cancelled"?"取り下げ":"承認"} ${esc(q.reviewed_by_name)} ${fd(q.reviewed_at)}`:""}${q.request_reason?`／理由: ${esc(q.request_reason)}`:""}</span>
    ${q.apply_note?`<br><span style="color:#b45309;font-size:12px">${esc(q.apply_note)}</span>`:""}${q.reject_reason?`<br><span class="muted">却下の理由: ${esc(q.reject_reason)}</span>`:""}`;
   if(q.status==="pending")h+=`<div style="margin-top:4px">${q.mine&&!me.is_master?`<span class="muted" style="font-size:11.5px">自分の申請は承認できません（別の人が承認）</span> `:`${!isW&&payChgConfig?`<select class="inp" data-paychg-run="${esc(q.id)}" style="width:auto;margin:0 4px 4px 0" title="どの支給回から新しい口座にするか（承認のときに確定）">${payRunOptions(q.effective_year_month)}</select>`:""}<button class="btn sm" data-paychg-ok="${esc(q.id)}">承認する</button> <button class="btn sm ghost" data-paychg-ng="${esc(q.id)}">却下</button> `}<button class="btn sm ghost" data-paychg-cancel="${esc(q.id)}">取り下げ</button></div>`;
-  if(q.status==="approved"&&q.apply_status==="blocked_exported")h+=`<div style="margin-top:4px">${payChgConfig?`<select class="inp" data-paychg-run="${esc(q.id)}" style="width:auto;margin:0 4px 4px 0">${payRunOptions(null)}</select>`:""}<button class="btn sm" data-paychg-resched="${esc(q.id)}">この支給回からにする</button></div>`;
+  if(q.status==="approved"&&(q.apply_status==="blocked_exported"||q.apply_status==="scheduled"))h+=`<div style="margin-top:4px">${payChgConfig?`<select class="inp" data-paychg-run="${esc(q.id)}" style="width:auto;margin:0 4px 4px 0">${payRunOptions(null)}</select>`:""}<button class="btn sm${q.apply_status==="scheduled"?" ghost":""}" data-paychg-resched="${esc(q.id)}">${q.apply_status==="scheduled"?"決めた支給回を変える（例外承認）":"この支給回からにする"}</button></div>`;
   h+=`</div>`;
  });
  const links=((smInfo&&smInfo.links)||[]).filter(x=>!x.effective_to);
@@ -7235,7 +7282,8 @@ function bindPayChangeCard(uid){
  document.querySelectorAll("[data-paychg-ok]").forEach(b=>b.onclick=async()=>{
   const runSel=document.querySelector(`[data-paychg-run="${b.dataset.paychgOk}"]`),ym=runSel?runSel.value:null;
   const args={p_request:b.dataset.paychgOk,p_approve:true};
-  if(ym){ // 口座: どの支給回から新しい口座にするかを、ここで確定する
+  if(runSel&&!ym){toast("どの支給回から新しい口座にするかを選んでから、承認してください",true);return}
+  if(ym){ // 口座: どの支給回から新しい口座にするかを、承認する人がここで確定する（自動では決めない）
    args.p_year_month=ym;
    if(payRunState(ym)==="exported"){
     const why=prompt(`${ym} 月分は振込データを出力済みです。\nこの回から口座を変えるのは例外です（個別の確認・承認）。理由を入れてください。\n※ 出力済みの振込ファイルは自動では変わりません。承認のあと、振込データを出し直してください。\nやめる場合はキャンセル（次の支給回を選び直せます）。`);
@@ -7266,15 +7314,15 @@ function bindPayChangeCard(uid){
  });
  document.querySelectorAll("[data-paychg-resched]").forEach(b=>b.onclick=async()=>{
   const runSel=document.querySelector(`[data-paychg-run="${b.dataset.paychgResched}"]`);
-  const ym=runSel?runSel.value:(prompt("何月分の給与から新しい口座にしますか？（例: 2026-12 ＝ 翌月 15 日支給分）")||"").trim();if(!ym)return;
+  const ym=runSel?runSel.value:(prompt("何月分の給与から新しい口座にしますか？（例: 2026-12 ＝ 翌月 15 日支給分）")||"").trim();
+  if(!ym){toast("支給回を選んでください",true);return}
   if(!/^\d{4}-\d{2}$/.test(ym)){toast("2026-12 の形で入れてください",true);return}
-  const args={p_request:b.dataset.paychgResched,p_year_month:ym};
-  if(payRunState(ym)==="exported"){
-   const why=prompt(`${ym} 月分は振込データを出力済みです。この回から変えるのは例外です（個別の確認・承認）。理由を入れてください。\n※ 承認のあと、振込データを出し直してください。`);
-   if(!why||!why.trim())return;
-   args.p_force_closed=true;args.p_reason=why.trim();
-  }
-  const {data,error}=await sb.rpc("hr_bank_change_reschedule",args);done(error,data,args.p_force_closed?"個別承認で反映しました。振込データを出し直してください":"支給回を変更しました");
+  const exported=payRunState(ym)==="exported";
+  const why=prompt(exported?`${ym} 月分は振込データを出力済みです。この回から変えるのは例外です（確定した振込先の差し替え）。理由を入れてください。\n※ 承認のあと、振込データを出し直してください。`:`一度決めた支給回を ${ym} 月分に変えます（例外承認）。理由を入れてください。\n※ 申請した人・本人とは別の人が行います。`);
+  if(!why||!why.trim())return;
+  const args={p_request:b.dataset.paychgResched,p_year_month:ym,p_reason:why.trim()};
+  if(exported)args.p_force_closed=true;
+  const {data,error}=await sb.rpc("hr_bank_change_reschedule",args);done(error,data,exported?"個別承認で反映しました。振込データを出し直してください":"支給回を変更しました");
  });
  const rq=$("paychg-wage-req");
  if(rq)rq.onclick=async()=>{
@@ -8691,6 +8739,10 @@ function bindWageCard(uid){
   if(!date){toast("適用開始日を選んでください",true);return}
   if(div===2||div===1){if(date.slice(8)!=="01"){date=date.slice(0,8)+"01";toast(`${WAGE_DIV[div]}の適用開始日は月初日です（${date}にします）`)}} // 2026-11-09: 日給も月初日（スマレジ公式仕様）
   const u=(adminUsers||[]).find(x=>x.id===uid)||{name:""};
+  if(payWageNeedsRequest(c)){ // 2026-11-10: 直接編集の禁止フラグ ON → 申請に回す（承認されるまで賃金は変わらない）
+   if(await payWageRequest(uid,{contract_id:c,division:div,store_id:store,wage:amt,holiday_wage:div===0?hol:null},date,"登録・変更"))render();
+   return;
+  }
   if(!confirm(`${u.name}さんの賃金をスマレジ（${smLabel(c)}）に反映します。\n${WAGE_DIV[div]} ${yen(amt)}${hol!=null?`（休日 ${yen(hol)}）`:""} ／ ${store?((stores.find(x=>x.id===store)||{}).name+"だけ"):"全事業所共通"}\n${date}から\n\nよろしいですか？`))return;
   b.disabled=true;
   const {error}=await sb.rpc("hr_save_wage",{p_user:uid,p_contract:c,p_division:div,p_store:store,p_wage:amt,p_holiday:div===0?hol:null,p_date:date});
@@ -8719,6 +8771,11 @@ function bindWageCard(uid){
   if(!date){toast("適用開始日を選んでください",true);return}
   const row=(window.__wageRows||[]).find(x=>x.id===id);
   if(row&&(row.division===2||row.division===1)&&date.slice(8)!=="01"){date=date.slice(0,8)+"01";toast(`${WAGE_DIV[row.division]}の適用開始日は月初日です（${date}にします）`)} // 2026-11-09: 日給も月初日
+  if(payWageNeedsRequest(c)){ // 2026-11-10: 直接編集の禁止フラグ ON → 修正も申請に回す
+   if(!row){toast("対象の賃金設定が見つかりません。画面を開き直してください",true);return}
+   if(await payWageRequest(uid,{contract_id:c,division:row.division,store_id:row.store_id||null,wage:amt,holiday_wage:row.division===0?hol:null},date,"修正")){wageEditId=null;render()}
+   return;
+  }
   if(!confirm(`賃金を修正して、スマレジにも反映します。\n金額 ${yen(amt)}${hol!=null?`（休日 ${yen(hol)}）`:""} ／ ${date}から\nよろしいですか？`))return;
   b.disabled=true;
   const r=await smFn("wage_update",{user_id:uid,contract_id:c,id,wage:amt,holiday_wage:hol,effective_date:date});
@@ -8727,6 +8784,7 @@ function bindWageCard(uid){
  });
  document.querySelectorAll("[data-wagedel]").forEach(b=>b.onclick=async()=>{
   const [id,c,synced]=b.dataset.wagedel.split("|");
+  if(payWageNeedsRequest(c)){toast("賃金の変更は「申請 → 承認」が必要なため、ここでは削除できません。金額や開始日を変える場合は、変更を申請してください",true);return} // 2026-11-10
   if(!confirm(synced==="1"?"この賃金設定を削除します。スマレジの賃金設定も削除されます。よろしいですか？":"この賃金設定を削除します（スマレジには反映されていません）。よろしいですか？"))return;
   b.disabled=true;
   if(synced==="1"){
@@ -12062,19 +12120,22 @@ function bindPage(){
  if($("adretire"))$("adretire").onclick=()=>{adminMode="retire";render()}; // 2026-10-03追加
  if($("adcontractreg"))$("adcontractreg").onclick=()=>{adminMode="contractreg";render()}; // 2026-10-17追加
  if($("adstoremis"))$("adstoremis").onclick=()=>{adminMode="storemis";render()};
+ bindSyncStatusCard(); // 2026-11-10 ステップ 4
  if($("adwagepull"))$("adwagepull").onclick=async()=>{ // 2026-10-23追加: スマレジ→管理システムの賃金の取り込み（読み取りのみ・全契約の在職者）
   if(!confirm("スマレジ・タイムカードに今入っている賃金（時給・月給。現在有効なものと、これから適用のもの）を、全契約の在職者ぶん、管理システムに取り込みます。\n\n・スマレジには何も書き込みません（読み取りだけ）\n・管理システムにまだ無い設定だけを追加します（初期投入）\n・正本は管理システムです。管理システムにある設定は、上書きしません（スマレジと値が違うものは、件数をお知らせし、あとで「管理システムに合わせる」ができます）\n・日給・営業時間帯別・固定残業代は取り込めません\n\n人数が多いと数分かかります。実行中はこの画面を閉じないでください。よろしいですか？"))return;
   const b=$("adwagepull");b.disabled=true;
   const t={imported:0,drift:0,matched:0,conflicts:0,skipped:0,unsupported:0,persons:0,withWage:0,errors:[],driftRows:[]};
   for(const c of smContracts){
-   let off=0,total=null;
+   let off=0,total=null,swept=false,persons=0;const found={};
    for(let guard=0;guard<200;guard++){
     b.textContent=`取り込み中… ${smShort(c.contract_id)} ${off}/${total==null?"?":total}人`;
     const r=await smFn("wage_pull_all",{contract_id:c.contract_id,offset:off,limit:15});
     if(!r.ok){t.errors.push(`${smShort(c.contract_id)}: ${smErr(r)||"失敗"}`);break}
-    total=r.total;t.imported+=r.imported;t.drift+=r.drift;(r.drift_rows||[]).forEach(x=>t.driftRows.push(x));t.matched+=r.matched;t.conflicts+=r.conflicts;t.skipped+=r.skipped_unmapped_store;t.unsupported+=r.unsupported_rows;t.persons+=r.persons;t.withWage+=r.with_wage;(r.errors||[]).forEach(e=>t.errors.push(e));
-    if(r.done)break;off=r.next_offset;
+    total=r.total;t.imported+=r.imported;t.drift+=r.drift;(r.drift_rows||[]).forEach(x=>{t.driftRows.push(x);found[x.user_id]=(found[x.user_id]||0)+1});t.matched+=r.matched;t.conflicts+=r.conflicts;t.skipped+=r.skipped_unmapped_store;t.unsupported+=r.unsupported_rows;t.persons+=r.persons;persons+=r.persons;t.withWage+=r.with_wage;(r.errors||[]).forEach(e=>t.errors.push(e));
+    if(r.done){swept=true;break}off=r.next_offset;
    }
+   // 2026-11-10 ステップ 4: この契約を最後まで読めたときだけ、ズレ（不一致）を「同期・承認の状況」に記録する。RPC が無い環境では何もしない
+   if(swept){try{await sb.rpc("hr_sync_mismatch_report",{p_kind:"wage",p_scope:c.contract_id,p_checked:null,p_found:Object.keys(found).map(u=>({user_id:u,detail:{rows:found[u]}})),p_source:"wage_pull_all",p_checked_count:persons})}catch(e){}}
   }
   b.disabled=false;b.textContent="💴 スマレジの賃金（時給・月給）を管理システムへ取り込む";
   alert(`取り込みが終わりました。\n\n確認した人: ${t.persons}人（賃金設定があった人 ${t.withWage}人）\n追加: ${t.imported}件 ／ 一致: ${t.matched}件\nスマレジと値が違う（管理システムの値を残しました）: ${t.drift}件\n管理システムに未反映の入力があり、確認できなかった: ${t.conflicts}件\n対応する店舗が無く取り込めなかった: ${t.skipped}件\n対象外（日給・営業時間帯別）: ${t.unsupported}件${t.errors.length?`\n\n⚠️エラー ${t.errors.length}件:\n${t.errors.slice(0,8).join("\n")}${t.errors.length>8?"\n…":""}`:""}`);
@@ -12087,7 +12148,7 @@ function bindPage(){
     if(r.ok)ok++;else{ng++;lastErr=smErr(r)||""}
    }
    b.disabled=false;b.textContent="💴 スマレジの賃金（時給・月給）を管理システムへ取り込む";
-   alert(`スマレジを管理システムの値に合わせました。\n成功 ${ok}件${ng?` ／ 失敗 ${ng}件（${lastErr}）`:""}`);
+   alert(`スマレジを管理システムの値に合わせました。\n成功 ${ok}件${ng?` ／ 失敗 ${ng}件（${lastErr}）`:""}\n（「同期・承認の状況」の不一致は、次にこの取り込みを実行したときに更新されます）`);
   }
   render();
  };
@@ -13251,7 +13312,7 @@ function bindPage(){
   }
   const btn=$("eu-banksave");
   // 2026-11-10 夜: 口座の直接編集の禁止フラグが ON で、すでに口座が登録されている人の変更は「申請 → 別の人の承認」に回す（初回の登録は従来どおり）
-  if(payChgConfig&&payChgConfig.bank_approval_required&&adminBankMap&&adminBankMap[adminDetail]){
+  if(payChgConfig&&payChgConfig.bank_approval_required&&payChgConfig.bank_direct_ok===false){
    const why=prompt("登録済みの振込口座の変更は「申請 → 別の人の承認」が必要です。\n変更の理由を入れてください（例: 本人から口座変更の連絡）。\n承認されるまで、いまの口座のまま振り込みます。");
    if(!why||!why.trim())return;
    const payload={payment_method:rec.payment_method,bank_code:rec.bank_code,bank_name:rec.bank_name,branch_code:rec.branch_code,branch_name:rec.branch_name,account_type:rec.account_type,account_number:rec.account_number,account_holder_kana:rec.account_holder_kana};

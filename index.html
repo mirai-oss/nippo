@@ -5235,7 +5235,7 @@ async function adminView(){
   h+=`<button class="btn sub" id="adretire">🚪 退職・移籍・兼務の申請一覧${retPending>0?`（承認待ち ${retPending}件）`:""}</button>`;
   if(smReady){ // 2026-10-17追加
    const misN=await smMismatchCount();
-   h+=`<button class="btn sub" id="adcontractreg">🏢 他法人スマレジへの入社登録（移籍・兼務）</button><button class="btn sub" id="adwagepull">💴 スマレジの賃金（時給・月給）を管理システムへ取り込む</button><button class="btn sub" id="adstoremis">⚠️ 所属のズレ（管理システム↔スマレジ）${misN>0?`<span class="badge" style="background:#d93025;color:#fff;margin-left:6px">${misN}件</span>`:""}</button>`;
+   h+=`<button class="btn sub" id="adcontractreg">🏢 他法人スマレジへの入社登録（移籍・兼務）</button><button class="btn sub" id="adwagepull">💴 スマレジの賃金（時給・月給）を管理システムへ取り込む</button><div class="muted" id="adwagenote" style="font-size:11px;line-height:1.5;margin:2px 0 6px"></div><button class="btn sub" id="adstoremis">⚠️ 所属のズレ（管理システム↔スマレジ）${misN>0?`<span class="badge" style="background:#d93025;color:#fff;margin-left:6px">${misN}件</span>`:""}</button>`;
   }
  }
  if(can("staff_admin")){
@@ -12326,6 +12326,14 @@ function bindPage(){
  if($("adcontractreg"))$("adcontractreg").onclick=()=>{adminMode="contractreg";render()}; // 2026-10-17追加
  if($("adstoremis"))$("adstoremis").onclick=()=>{adminMode="storemis";render()};
  bindSyncStatusCard(); // 2026-11-10 ステップ 4
+ if($("adwagenote")){(async()=>{ // 2026-11-13: 取り込みの保護の説明（スイッチ B が OFF でも、未承認の賃金は正式登録されないことを画面に明記）
+  try{
+   const [{data:cfg},{count:openN}]=await Promise.all([sb.from("app_settings").select("value").eq("key","employee_change").maybeSingle(),sb.from("wage_external_changes").select("id",{count:"exact",head:true}).eq("status","open")]);
+   const v=(cfg&&cfg.value)||{};const on=v.wage_import_precheck===true||v.wage_import_hold===true;
+   const el=$("adwagenote");if(!el)return;
+   if(on||openN>0)el.innerHTML=`🛡 <b>取り込みの保護が有効です。</b>スマレジにだけある賃金の行・金額の違いは、保留のスイッチが OFF でも、正式な賃金として登録されません（未承認の変更として記録されます）。${openN>0?`<br>いま未承認の変更が <b>${Number(openN)}件</b> あります。従業員一覧の「同期・承認の状況」から、本部で 1 件ずつ確認してください。一括での正式登録はできません。`:""}`;
+  }catch(e){}
+ })()}
  if($("adwagepull"))$("adwagepull").onclick=async()=>{ // 2026-10-23追加: スマレジ→管理システムの賃金の取り込み（読み取りのみ・全契約の在職者）
   if(!confirm("スマレジ・タイムカードに今入っている賃金（時給・月給。現在有効なものと、これから適用のもの）を、全契約の在職者ぶん、管理システムに取り込みます。\n\n・スマレジには何も書き込みません（読み取りだけ）\n・先に「取り込み前チェック」をします。スマレジにだけある行・金額の違いが見つかったら、その行は正式な賃金にせず、未承認の変更として記録します\n・正本は管理システムです。管理システムにある設定は、上書きしません（スマレジと値が違うものは、件数をお知らせし、あとで「管理システムに合わせる」ができます）\n・日給・営業時間帯別・固定残業代は取り込めません\n\n人数が多いと数分かかります。実行中はこの画面を閉じないでください。よろしいですか？"))return;
   const b=$("adwagepull");b.disabled=true;

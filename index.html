@@ -6285,17 +6285,33 @@ function recruitDetailView(){
  h+=`</details></div><button class="btn sub" id="rc-del" style="color:var(--red);border-color:var(--red)">この応募者を削除する</button>`;
  return h;
 }
+// 2026-11-13 ［保存する］は、開いたときの値（a）から変えた項目だけを送る。
+//   これまでは、変えていない担当者・面接日時も毎回送っていたため、画面を開いているあいだに
+//   ほかの人（や Slack）が変えた担当者・面接日時を、古い値で上書きしてしまっていた。見た目と操作は変えていない
+// 面接日時の入力欄（datetime-local）に出している文字と同じ形にする（入力欄の初期値と同じ式）
+function rcIvLocal(iso){return iso?new Date(new Date(iso).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):""}
+// a=開いたときの応募者の行／f=いま画面に入っている値。変えた項目だけを入れた入れ物を返す（空の文字と null は同じ扱い）
+function rcApplicantChanges(a,f){
+ const nz=v=>(v==null||v==="")?null:v;
+ const upd={};
+ if(f.name!==a.name)upd.name=f.name;
+ [["phone",f.phone],["email",f.email],["job_type",f.job_type],["form_key",f.form_key],["assignee_id",f.assignee_id],["note",f.note]]
+  .forEach(([k,v])=>{if(nz(v)!==nz(a[k]))upd[k]=nz(v)});
+ if(f.status!==a.status)upd.status=f.status;
+ if((f.interview_local||"")!==rcIvLocal(a.interview_at))upd.interview_at=f.interview_local?new Date(f.interview_local).toISOString():null;
+ return upd;
+}
 async function saveApplicant(){
  const a=rcList.find(x=>x.id===rcDetail);if(!a)return;
  const name=$("rc-ename").value.trim();
  if(!name){toast("氏名を入力してください",true);return}
  const stChip=document.querySelector(".chip[data-rcst].on");
  const st=stChip?stChip.dataset.rcst:a.status;
- const iv=$("rc-interview").value?new Date($("rc-interview").value).toISOString():null;
- const upd={name,phone:$("rc-ephone").value.trim()||null,email:$("rc-eemail").value.trim()||null,
-  job_type:$("rc-ejob").value.trim()||null,form_key:$("rc-eform").value||null,
-  status:st,interview_at:iv,assignee_id:$("rc-assignee").value||null,note:$("rc-note").value.trim()||null,updated_at:new Date().toISOString(),
-  last_actor_id:me.id,last_actor_at:new Date().toISOString()}; // v2.6.31 誰が最後に触ったかを残す
+ const upd=rcApplicantChanges(a,{name,phone:$("rc-ephone").value.trim(),email:$("rc-eemail").value.trim(),
+  job_type:$("rc-ejob").value.trim(),form_key:$("rc-eform").value,
+  status:st,interview_local:$("rc-interview").value,assignee_id:$("rc-assignee").value,note:$("rc-note").value.trim()});
+ upd.updated_at=new Date().toISOString();
+ upd.last_actor_id=me.id;upd.last_actor_at=new Date().toISOString(); // v2.6.31 誰が最後に触ったかを残す
  if(st!==a.status)upd.status_changed_at=new Date().toISOString();
  $("rc-save").disabled=true;
  const {error}=await sb.from("applicants").update(upd).eq("id",a.id);

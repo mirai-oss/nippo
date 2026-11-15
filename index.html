@@ -6237,7 +6237,10 @@ function recruitDetailView(){
   const defRole=a.form_key==="shain"?"SHAIN":"AL";
   h+=`<div class="card" style="background:#f0fff4"><h3>✅ 採用する → 招待リンク発行</h3>
    <p class="muted" style="margin:0">発行すると氏名・電話が入社フォームに自動入力された状態で本人が登録できます</p>
-   <select class="inp" id="rc-hrole">${["AL","SHAIN","TENCHO","TEAM","HQ"].map(r=>`<option value="${r}" ${r===defRole?"selected":""}>${ROLE_NAME[r]}</option>`).join("")}</select>
+   <select class="inp" id="rc-hrole">${(a.status==="hired"?["AL","SHAIN","TENCHO","TEAM","HQ"]:rcHireRoles(a.form_key)).map(r=>`<option value="${r}" ${r===defRole?"selected":""}>${ROLE_NAME[r]}</option>`).join("")}</select>
+   ${a.status==="hired"?"":rcHireClasses(a.form_key).length?`<p class="muted" style="margin:8px 0 0">雇用区分（役割とは別の項目です）</p>
+   <select class="inp" id="rc-hclass">${rcHireClasses(a.form_key).map(c=>`<option value="${c}">${RC_CLASS_NAME[c]}</option>`).join("")}</select>`
+   :`<p class="muted" style="margin:8px 0 0">⚠️ 区分（アルバイト／社員）が未設定です。上の「区分」を選んで保存してから、採用にしてください</p>`}
    <p class="muted" style="margin:8px 0 0">所属店舗（タップで選択）</p>
    <div>${[...stores,...storesHidden].map(s=>`<span class="chip" data-rchst="${s.id}">${esc(s.name)}</span>`).join("")}</div>
    <button class="btn" id="rc-hire" style="background:var(--green)">採用・招待リンクを発行する</button></div>`;
@@ -6301,29 +6304,89 @@ function rcApplicantChanges(a,f){
  if((f.interview_local||"")!==rcIvLocal(a.interview_at))upd.interview_at=f.interview_local?new Date(f.interview_local).toISOString():null;
  return upd;
 }
+// 2026-12-04 採用の決定は、Slack と同じ共通の処理（RPC recruit_hire）を通す。
+//   これまでは、［保存する］や一覧の状態欄で「採用」にすると、招待が作られないまま採用になっていた（入社登録につながらない）。
+//   共通の処理は、権限・雇用区分・「社員採用の最終決定は社長だけ」を確かめてから、今までと同じ採用の処理（hire_applicant）を呼ぶ。
+// 応募の区分（アルバイト・パート／社員／分からない）と、選べる役割・雇用区分（役割とは別の項目）
+const RC_CLASS_NAME={arbeit:"アルバイト",part:"パート",regular:"正社員"};
+const rcKindOf=fk=>fk==="al"?"part":fk==="shain"?"employee":"unknown";
+const rcHireRoles=fk=>rcKindOf(fk)==="part"?["AL"]:rcKindOf(fk)==="employee"?["SHAIN","TENCHO","TEAM","HQ"]:["AL","SHAIN","TENCHO","TEAM","HQ"];
+const rcHireClasses=fk=>rcKindOf(fk)==="part"?["arbeit","part"]:rcKindOf(fk)==="employee"?["regular"]:[];
+// 「採用」への変更を、共通の採用の処理に通すか: 選考中の応募者を、初めて採用にするときだけ。
+//   すでに招待がある・本人の登録が済んでいる・選考中でない（退職や不採用からの付け直し）は、状態の表示の直しなので、今までどおり直接書き換える
+const rcHireVia=(a,st)=>st==="hired"&&a.status!=="hired"&&["new","contacted","interview_set","interviewed"].includes(a.status)&&!a.invite_token&&!a.user_id;
+const rcReqKey=(kind,id)=>"web:"+kind+":"+id+":"+Date.now().toString(36)+Math.random().toString(36).slice(2,10);
+// 採用にする。返り値 {ok:true}／{ok:false,msg}。
+//   すでに採用済みの人（招待の再発行）と、DB に共通の処理がまだ無いとき（SQL 未適用）は、今までどおり hire_applicant を直接呼ぶ
+async function rcHire(a,role,storeIds,cls){
+ const legacy=async()=>{const r=await sb.rpc("hire_applicant",{p_applicant:a.id,p_role:role,p_store_ids:storeIds});return r.error?{ok:false,msg:r.error.message}:{ok:true,legacy:true}};
+ if(a.status==="hired")return legacy();
+ const {data,error}=await sb.rpc("recruit_hire",{p_applicant:a.id,p_role:role,p_store_ids:storeIds,p_request_key:rcReqKey("hire",a.id),p_actor:null,p_via:"web",p_expected:{status:a.status},p_invite_base:null,p_employment_class:cls||null});
+ if(error){
+  if(error.code==="PGRST202"||/Could not find the function|does not exist/i.test(error.message||""))return legacy();
+  return {ok:false,msg:error.message};
+ }
+ if(data&&(data.code==="done"||data.code==="noop"))return {ok:true};
+ return {ok:false,msg:(data&&data.message)||"採用にできませんでした"};
+}
+// 共通の入口（Edge Function recruit-action）が「本番モードで全部開いている」か。
+//   開いているときだけ、画面の面接の確定・変更・取り消しと返信を、Slack と同じ入口に通す（変更・取り消しの案内・面接の重なりの確かめ・二重防止が同じになる）。
+//   閉じているあいだ（いま）は、今までの処理のまま＝画面からの操作は、今までどおり送られる
+const rcCommonLive=()=>{const v=appSettings&&appSettings.recruit_actions;return !!(v&&v.send_enabled===true&&v.line_mode==="live"&&v.calendar_mode==="live")};
+async function rcAction(body){
+ try{
+  const {data:{session}}=await sb.auth.getSession();
+  if(!session)return {ok:false,message:"ログインが切れています。もう一度ログインしてください"};
+  const res=await fetch(SUPA_URL+"/functions/v1/recruit-action",{method:"POST",
+   headers:{Authorization:"Bearer "+session.access_token,apikey:SUPA_KEY,"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const j=await res.json().catch(()=>null);
+  return j||{ok:false,message:"サーバーの応答: "+res.status};
+ }catch(e){return {ok:false,message:"共通の入口（recruit-action）に届きませんでした"}}
+}
+// 共通の入口で面接を確定・取り消したあとの、画面の知らせ
+function rcIvDone(r,cancel){
+ if(!r||!r.ok){toast((cancel?"取り消せませんでした: ":"確定できませんでした: ")+((r&&r.message)||"不明"),true);rcList=null;render();return}
+ const nt=r.notice||{},cal=r.calendar||{};
+ let m=r.code==="noop"?(r.message||"すでにその内容です"):cancel?"面接日時を取り消しました":"面接日時を確定しました";
+ if(cal.ok===false)m+=cancel?"／カレンダーの予定は消せませんでした":"／カレンダーには登録できませんでした";
+ if(nt.status==="sent")m+=cancel?"／LINEで取り消しをお知らせしました":"／LINEでご案内を送りました";
+ else if(nt.status==="skipped_unlinked"&&nt.text){copyText(nt.text);m+="／案内文をコピーしました。Indeedやメールに貼り付けて送ってください"}
+ else if(nt.status==="failed"||nt.status==="unknown")m+="／LINEは送れませんでした";
+ toast(m,!(r.code==="done"||r.code==="noop"));rcList=null;rcSimilar=[];rcPast=[];render();
+}
 async function saveApplicant(){
  const a=rcList.find(x=>x.id===rcDetail);if(!a)return;
  const name=$("rc-ename").value.trim();
  if(!name){toast("氏名を入力してください",true);return}
  const stChip=document.querySelector(".chip[data-rcst].on");
  const st=stChip?stChip.dataset.rcst:a.status;
+ // 2026-12-04 「採用」への変更は、状態を直接書き換えず、保存のあとで共通の採用の処理を通す（招待を作り、入社登録につなぐ）
+ const toHired=rcHireVia(a,st);
+ if(toHired&&!a.store_id){toast("採用にするには、先に所属店舗を選んでください（一覧の店舗の欄から選べます）",true);return}
  const upd=rcApplicantChanges(a,{name,phone:$("rc-ephone").value.trim(),email:$("rc-eemail").value.trim(),
   job_type:$("rc-ejob").value.trim(),form_key:$("rc-eform").value,
-  status:st,interview_local:$("rc-interview").value,assignee_id:$("rc-assignee").value,note:$("rc-note").value.trim()});
+  status:toHired?a.status:st,interview_local:$("rc-interview").value,assignee_id:$("rc-assignee").value,note:$("rc-note").value.trim()});
  upd.updated_at=new Date().toISOString();
  upd.last_actor_id=me.id;upd.last_actor_at=new Date().toISOString(); // v2.6.31 誰が最後に触ったかを残す
- if(st!==a.status)upd.status_changed_at=new Date().toISOString();
+ if(st!==a.status&&!toHired)upd.status_changed_at=new Date().toISOString();
  $("rc-save").disabled=true;
  const {error}=await sb.from("applicants").update(upd).eq("id",a.id);
  if(error){toast("保存エラー: "+error.message,true);$("rc-save").disabled=false;return}
+ if(toHired){
+  const fk=$("rc-eform").value||null;
+  const hr=await rcHire({...a,form_key:fk},fk==="shain"?"SHAIN":"AL",[a.store_id],null);
+  if(!hr.ok){toast("保存しました。ただし、採用にはできませんでした: "+hr.msg,true);rcList=null;rcHiredInfo=null;render();return}
+  toast("保存して、採用にしました（招待リンクを発行しました。「リンクを送る」で本人に送れます）");rcList=null;rcHiredInfo=null;render();return;
+ }
  if(st!==a.status&&RC_EXIT_STATUSES.includes(st)&&!a.exit_reason)rcExitFocus=true; // 2026-11-10 Phase 4
  toast("保存しました");rcList=null;rcHiredInfo=null;render();
 }
 async function hireApplicant(){
  const sel=[...document.querySelectorAll(".chip[data-rchst].on")].map(c=>c.dataset.rchst);
  $("rc-hire").disabled=true;
- const {data:tok,error}=await sb.rpc("hire_applicant",{p_applicant:rcDetail,p_role:$("rc-hrole").value,p_store_ids:sel});
- if(error){toast("発行エラー: "+error.message,true);$("rc-hire").disabled=false;return}
+ const ha=rcList.find(x=>x.id===rcDetail);
+ const hr=await rcHire(ha||{id:rcDetail,status:"hired"},$("rc-hrole").value,sel,$("rc-hclass")?$("rc-hclass").value:null); // 2026-12-04 Slack と同じ共通の採用の処理
+ if(!hr.ok){toast("発行エラー: "+hr.msg,true);$("rc-hire").disabled=false;return}
  const sent=await rcSendInviteLine(rcDetail); // v2.6.21 LINE連携済みなら自動で送る
  toast(sent?"採用にして招待リンクを発行し、LINEで送信しました":"採用にして招待リンクを発行しました");
  rcList=null;rcHiredInfo=null;render();
@@ -7279,10 +7342,13 @@ const PAYCHG_ST={pending:"承認待ち",approved:"承認済み",rejected:"却下
 const PAYCHG_AP={none:"",applied:"反映済み",scheduled:"予約中（決めた支給回から自動で切り替わります）",blocked_exported:"未反映・要対応（その支給回は振込データ出力済み）",blocked_finalized:"未反映（給与確定済みの月）"};
 const PAYCHG_DIV={0:"時給",1:"日給",2:"月給"};
 let payChgRowsCache=[];
+let monthlyWageHoldOn=false; // 2026-11-15: 月給の止め（employee_change.monthly_wage_sync_hold）
 let payChgConfig=null; // 2026-11-10 夜: 口座の運用方針（承認時に支給回を確定・出力済みの回は個別承認）。RPC 未作成なら null のまま＝従来どおり
 async function loadPayChangeInfo(uid){
  try{const {data,error}=await sb.rpc("hr_pay_change_list",{p_user:uid,p_only_open:false});if(error)return null;payChgRowsCache=data||[];
   try{const c=await sb.rpc("hr_pay_change_config",{p_user:uid});payChgConfig=(!c.error&&c.data&&c.data.ok)?c.data:null}catch(e){payChgConfig=null}
+  // 2026-11-15: 社員の月給の止め（確認が終わるまで、月給の行の修正・削除をさせない。サーバー側でも断る）。読めないときは、ボタンは今までどおり（押してもサーバーが断る）
+  try{const h=await sb.from("app_settings").select("value").eq("key","employee_change").maybeSingle();const v=(h&&h.data&&h.data.value)||{};monthlyWageHoldOn=v.monthly_wage_sync_hold===true&&!((v.monthly_wage_sync_hold_exempt||[]).includes(uid))}catch(e){monthlyWageHoldOn=false}
   apvInfo=null; // 2026-11-11 共通承認基盤（RPC 未作成なら null のまま＝従来どおり）
   try{const a=await sb.rpc("hr_approval_overview",{p_user:uid,p_only_open:false});if(!a.error&&a.data&&a.data.ok){apvInfo={routes:a.data.routes||{},bySrc:{}};(a.data.cases||[]).forEach(k=>{apvInfo.bySrc[k.source_id]=k})}}catch(e){apvInfo=null}
   return {rows:data||[]}}catch(e){return null}
@@ -9073,7 +9139,7 @@ function wageCardHtml(info,rows){
      <div style="display:flex;gap:6px;margin-top:6px"><button class="btn sm" data-wageeditsave="${r.id}|${esc(c)}">保存してスマレジに反映</button><button class="btn sm sub" data-wageeditcancel="1">キャンセル</button></div></div>`;
     return;
    }
-   h+=`<div class="row" style="cursor:default;align-items:flex-start"><span><b>${WAGE_DIV[r.division]} ${yen(r.wage)}</b>${r.holiday_wage!=null?`（休日 ${yen(r.holiday_wage)}）`:""} ／ ${target}<br><span class="muted" style="font-size:12px">${esc(r.effective_date)}から ${st}${r.sync_status==="error"&&r.sync_error?` <span style="color:#b3261e">${esc(r.sync_error)}</span>`:""}</span></span><span style="display:flex;gap:6px"><button class="btn sm sub" data-wageedit="${r.id}">修正</button><button class="btn sm sub" data-wagedel="${r.id}|${esc(c)}|${r.smaregi_wage_apply_id?"1":"0"}">削除</button></span></div>`;
+   h+=`<div class="row" style="cursor:default;align-items:flex-start"><span><b>${WAGE_DIV[r.division]} ${yen(r.wage)}</b>${r.holiday_wage!=null?`（休日 ${yen(r.holiday_wage)}）`:""} ／ ${target}<br><span class="muted" style="font-size:12px">${esc(r.effective_date)}から ${st}${r.sync_status==="error"&&r.sync_error?` <span style="color:#b3261e">${esc(r.sync_error)}</span>`:""}</span></span>${(monthlyWageHoldOn&&r.division===2)?`<span class="muted" style="font-size:11px;max-width:150px;text-align:right">🔒 月給は、スマレジとの確認が終わるまで修正・削除できません</span>`:`<span style="display:flex;gap:6px"><button class="btn sm sub" data-wageedit="${r.id}">修正</button><button class="btn sm sub" data-wagedel="${r.id}|${esc(c)}|${r.smaregi_wage_apply_id?"1":"0"}">削除</button></span>`}</div>`;
   });
   h+=`<div style="margin-top:8px;display:grid;gap:6px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
    <select class="inp" data-wdiv="${esc(c)}" style="margin:0"><option value="0">時給</option><option value="1">日給</option><option value="2">月給</option></select>
@@ -12827,6 +12893,12 @@ function bindPage(){
   const place=ivPlaceOf(placeName);
   if(mode==="onsite"&&!placeName){toast("面接場所を選んでください",true);return}
   const manual=field&&field!==(a.interview_url||"")&&mode!=="onsite";
+  // 2026-12-04 共通の入口が本番モードで開いているときは、Slack と同じ処理で確定する。閉じているあいだは、この下の今までの処理のまま
+  if(rcCommonLive()){
+   const r=await rcAction({op:"interview_confirm",applicant_id:a.id,at:iso,mode,place:placeName||null,notify:true,request_key:rcReqKey("iv",a.id),
+    expected:{interview_at:a.interview_at||null,assignee_id:a.assignee_id||null},manual_url:manual?field:undefined});
+   rcIvDone(r);return;
+  }
   // v2.6.64 面接担当（応募者カードの「担当」欄）の名前をカレンダーの予定名の先頭に入れる
   const interviewer=a.assignee_id?taskUserName(a.assignee_id):"";
   const meetOpts={mode,place:placeName,address:(place&&place.address)||"",interviewer};
@@ -12885,6 +12957,11 @@ function bindPage(){
   const a=rcList.find(x=>x.id===rcDetail);if(!a)return;
   if(!confirm(`${a.name}さんの面接日時を取り消します。\nGoogleカレンダーの予定も削除します。よろしいですか？`))return;
   $("rc-ivclear").disabled=true;
+  if(rcCommonLive()){ // 2026-12-04 共通の入口（Slack と同じ処理）: 取り消しも、応募者へ LINE で知らせられる。閉じているあいだは、この下の今までの処理のまま
+   const tell=a.line_user_id?confirm("応募者へ、LINEで取り消しをお知らせしますか？\n（OK＝知らせる／キャンセル＝知らせない）"):true;
+   const r=await rcAction({op:"interview_cancel",applicant_id:a.id,request_key:rcReqKey("ivc",a.id),expected:{interview_at:a.interview_at||null},notify:tell});
+   rcIvDone(r,true);return;
+  }
   // カレンダーの予定も消す（すでに手で消してあっても大丈夫）
   await gasDeleteEvent(a.interview_event_id);
   const {error}=await sb.from("applicants").update({interview_at:null,interview_url:null,
@@ -13003,6 +13080,14 @@ function bindPage(){
   const id=el.dataset.rcst2,st=el.value,a=rcList.find(x=>x.id===id);
   if(!a||st===a.status)return;
   el.disabled=true;
+  if(rcHireVia(a,st)){ // 2026-12-04 「採用」は、状態を直接書き換えず、共通の採用の処理を通す（招待を作り、入社登録につなぐ）
+   if(!a.store_id){el.disabled=false;el.value=a.status;toast("採用にするには、先に所属店舗を選んでください",true);return}
+   const hr=await rcHire(a,a.form_key==="shain"?"SHAIN":"AL",[a.store_id],null);
+   el.disabled=false;
+   if(!hr.ok){el.value=a.status;toast("採用にできませんでした: "+hr.msg,true);return}
+   toast(a.name+"さんを「採用」にしました（招待リンクを発行しました）");
+   rcSeg=rcSegOf(st);rcHiredInfo=null;render();return;
+  }
   const now=new Date().toISOString();
   const {error}=await sb.from("applicants").update({status:st,status_changed_at:now,updated_at:now,last_actor_id:me.id,last_actor_at:now}).eq("id",id);
   el.disabled=false;
@@ -13032,6 +13117,11 @@ function bindPage(){
   const iso=new Date(v).toISOString();
   if(!confirm(`${a.name}さんの面接を ${v.replace("T"," ")} で確定します。\n面接URLを発行し、${a.line_user_id?"LINEでご案内を送ります":"案内文をコピーします"}。よろしいですか？`))return;
   b.disabled=true;b.textContent="発行中...";
+  if(rcCommonLive()){ // 2026-12-04 共通の入口（Slack と同じ処理）。閉じているあいだは、この下の今までの処理のまま
+   const r=await rcAction({op:"interview_confirm",applicant_id:id,at:iso,mode:a.interview_mode||"online",place:a.interview_place||null,notify:true,request_key:rcReqKey("iv",id),
+    expected:{assignee_id:a.assignee_id||null}});
+   rcIvDone(r);return;
+  }
   const m=await makeMeet(a,iso); // v2.6.39 日時が変わっていればカレンダーの予定も直す
   const url=m.url;
   const {error}=await sb.rpc("set_interview",{p_applicant:id,p_at:iso,p_url:url||null});
@@ -13068,9 +13158,9 @@ function bindPage(){
   if(!a)return;
   if(!a.store_id){toast("先に所属店舗を選んでください",true);return}
   b.disabled=true;
-  const {error}=await sb.rpc("hire_applicant",{p_applicant:id,p_role:a.form_key==="shain"?"SHAIN":"AL",p_store_ids:[a.store_id]});
+  const hr=await rcHire(a,a.form_key==="shain"?"SHAIN":"AL",[a.store_id],null); // 2026-12-04 Slack と同じ共通の採用の処理（採用済みの人の再発行は、今までどおり）
   b.disabled=false;
-  if(error){toast("発行エラー: "+error.message,true);return}
+  if(!hr.ok){toast("発行エラー: "+hr.msg,true);return}
   const sent=await rcSendInviteLine(id); // v2.6.21 LINE連携済みなら自動で送る
   toast(sent?"招待リンクを発行し、LINEで送信しました":"招待リンクを発行しました。「リンクを送る」で本人に送れます");
   rcHiredInfo=null;render();
@@ -13204,6 +13294,12 @@ function bindPage(){
   const t=$("rc-linetext").value.trim();
   if(!t){toast("送る内容を入力してください",true);return}
   $("rc-linesend").disabled=true;
+  if(rcCommonLive()){ // 2026-12-04 共通の入口（Slack と同じ送信箱を通す＝二重防止・送った人の記録・失敗の記録が同じ）。閉じているあいだは、この下の今までの処理のまま
+   const cr=await rcAction({op:"message_send",applicant_id:rcDetail,text:t,request_key:rcReqKey("msg",rcDetail)});
+   $("rc-linesend").disabled=false;
+   if(!cr||!cr.ok){toast("送信できませんでした: "+((cr&&cr.message)||"不明"),true);return}
+   toast("LINEを送信しました");render();return;
+  }
   const r=await lineFn({action:"push",applicant_id:rcDetail,text:t});
   $("rc-linesend").disabled=false;
   if(!r.ok){toast("送信できませんでした: "+(r.error||"不明"),true);return}

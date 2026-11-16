@@ -7937,7 +7937,7 @@ async function adminPjRemindView(){
  }else{
   const on=sum.enabled===true;const maxRun=sum.max_per_run!=null?Number(sum.max_per_run):null;const send=sum.will_send||[];const skip=pjExcludedPeople(sum);
   h+=`<div class="card"><h3>いまの設定</h3>
-   <p style="margin:0;font-size:13px">自動送信: <b style="color:${on?"var(--red)":"inherit"}">${sum._settingsUnknown?"（設定を読めません）":on?"ON（有効）":"OFF（送られません）"}</b>${sum.person_notify_enabled===false?`　<span class="muted" style="font-size:11px">本人への送信機能（person_notify_enabled）も OFF</span>`:""}</p>
+   <p style="margin:0;font-size:13px">自動送信: <b style="color:${on?"var(--red)":"inherit"}">${sum._settingsUnknown?"（設定を読めません）":on?"ON（有効）":"OFF（送られません）"}</b>${sum.person_notify_enabled===false?`　<span class="muted" style="font-size:11px">本人への送信機能も OFF</span>`:""}</p>
    <p style="margin:4px 0 0;font-size:13px">1 回の上限: <b>${maxRun!=null?esc(maxRun)+" 人":"（未設定）"}</b> <span class="muted" style="font-size:11px">これを超えると安全のため 1 人にも送らず止まります</span></p>
    <p style="margin:4px 0 0;font-size:13px">新規入社とみなす基準日: <b>${sum.new_hire_from?esc(pjDateJp(sum.new_hire_from))+" 以降の入社登録":"（未設定）"}</b>／入社から <b>${sum.start_days!=null?esc(sum.start_days):"—"}</b> 日たってから送り始める</p>
    <p class="muted" style="margin:6px 0 0;font-size:11px">自動送信の有効化はこの画面ではできません（承認のうえシステム担当が行います）。</p>
@@ -9127,7 +9127,7 @@ function wageCardHtml(info,rows){
  let h=`<div class="card"><h3>💴 賃金設定（スマレジに自動反映）</h3><p class="muted" style="margin:0 0 6px;font-size:12px">時給・月給を入れて保存すると、スマレジ・タイムカードの賃金設定に反映されます。店舗を指定した時給は、その事業所で働くときだけの時給です（ヘルプ先など）。メール・交通費・源泉所得税・個別Web給与明細はスマレジのAPIで書けないため、これまでどおり手作業です。</p>`;
  h+=obWageCardHtml(); // 2026-11-18 入社時の賃金の承認（無効・対象外のときは空文字）
  if(!links.length)return h+`<p class="muted" style="margin:0">スマレジに登録されていません（先にスマレジに登録してください）。</p></div>`;
- links.forEach(l=>{
+ links.forEach((l,li)=>{
   const c=l.contract_id,mine=rows.filter(r=>r.contract_id===c),bad=mine.filter(r=>r.sync_status!=="synced").length;
   h+=`<div style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px"><b>${esc(smLabel(c))}</b> <span class="muted" style="font-size:12px">スタッフID ${esc(l.smaregi_staff_id)}</span>`;
   if(!mine.length)h+=`<div class="muted" style="font-size:12px;margin-top:4px">賃金設定はまだありません。</div>`;
@@ -9145,6 +9145,8 @@ function wageCardHtml(info,rows){
    }
    h+=`<div class="row" style="cursor:default;align-items:flex-start"><span><b>${WAGE_DIV[r.division]} ${yen(r.wage)}</b>${r.holiday_wage!=null?`（休日 ${yen(r.holiday_wage)}）`:""} ／ ${target}<br><span class="muted" style="font-size:12px">${esc(r.effective_date)}から ${st}${r.sync_status==="error"&&r.sync_error?` <span style="color:#b3261e">${esc(r.sync_error)}</span>`:""}</span></span>${(monthlyWageHoldOn&&r.division===2)?`<span class="muted" style="font-size:11px;max-width:150px;text-align:right">🔒 月給は、スマレジとの確認が終わるまで修正・削除できません</span>`:`<span style="display:flex;gap:6px"><button class="btn sm sub" data-wageedit="${r.id}">修正</button><button class="btn sm sub" data-wagedel="${r.id}|${esc(c)}|${r.smaregi_wage_apply_id?"1":"0"}">削除</button></span>`}</div>`;
   });
+  // 2026-11-16: 入社手続き中は、入社時の賃金の入力欄を契約ごとに並べず、最初の1組だけにする（入力欄が2組出て迷う件の直し。登録先の決定はこれまでどおり DB 側）
+  if(obWageActive()&&li>0){h+=`<div class="muted" style="font-size:12px;margin-top:6px">入社時の賃金は、上の入力欄から登録します（この契約の入力欄は出しません）。</div></div>`;return}
   h+=`<div style="margin-top:8px;display:grid;gap:6px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
    <select class="inp" data-wdiv="${esc(c)}" style="margin:0"><option value="0">時給</option><option value="1">日給</option><option value="2">月給</option></select>
    <select class="inp" data-wstore="${esc(c)}" style="margin:0"><option value="">全事業所共通</option>${stores.map(x=>`<option value="${x.id}">${esc(x.name)}だけ</option>`).join("")}</select>

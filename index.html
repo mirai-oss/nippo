@@ -9119,6 +9119,30 @@ async function obWagePendingHtml(){
    <div class="muted" style="margin-top:2px">入力 ${esc(q.requested_by_name||"—")} ${esc(apvFd(q.requested_at))}${q.effective_from?`／${esc(q.effective_from)}から`:""}${q.reason?`／${esc(q.reason)}`:""}</div></div>`).join("")
   +`<p class="muted" style="margin:6px 0 0;font-size:11.5px">名前を押すと、その人のページが開きます。金額を見て、承認か却下を選べます（金額はここには出しません）。社長が承認するまで、スマレジには送られません。</p></div>`;
 }
+/* 2026-11-16 固定残業代の設定（最小版）: 基本給・固定残業代・月額合計を分けて見せる／本部・社長・マスターが「あり（金額・時間数。基本 45 時間）」「なし」を記録する。
+   管理システム内の記録だけ: 給与の計算・割増賃金の計算・スマレジへの送信には使わない（基本給・適用開始日・同期の状態も変えない）。DB の hr_set_fixed_ot が権限と値を検査する */
+let fixedOtEditId=null;
+const FOT_NOTE="※管理システム内の記録だけです。給与の計算・スマレジへの送信には使われません（基本給も変わりません）。45時間分の固定残業代で、法定の割増賃金が満たされるとは限りません。実際の給与計算と差額の支払いは、今までの処理のままです。";
+function fixedOtBlock(r){
+ const st=r.fixed_ot_state||"unknown",hrs=r.fixed_ot_minutes?Math.round(r.fixed_ot_minutes/60*100)/100:45;
+ let h=`<div style="margin:-2px 0 8px 12px;padding:6px 10px;border-left:3px solid var(--line);font-size:13px">`;
+ if(fixedOtEditId===r.id){
+  h+=`<b>固定残業代を設定</b>
+   <div style="display:grid;gap:6px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin-top:6px">
+    <select class="inp" id="fot-state" style="margin:0"><option value="applied"${st!=="none"?" selected":""}>あり</option><option value="none"${st==="none"?" selected":""}>なし</option></select>
+    <input class="inp" type="number" min="1" inputmode="numeric" id="fot-amt" value="${r.fixed_ot_amount||""}" placeholder="固定残業代（円）" style="margin:0">
+    <input class="inp" type="number" min="1" max="200" step="0.5" inputmode="decimal" id="fot-hours" value="${hrs}" placeholder="時間数（基本 45）" style="margin:0"></div>
+   <div class="muted" style="font-size:12px;margin-top:4px">${FOT_NOTE}</div>
+   <div style="display:flex;gap:6px;margin-top:6px"><button class="btn sm" data-fotsave="${r.id}">保存</button><button class="btn sm sub" data-fotcancel="1">キャンセル</button></div>`;
+ }else{
+  const base=Number(r.wage)||0,fot=Number(r.fixed_ot_amount)||0;
+  const lines=st==="applied"?`基本給 ${yen(base)}<br>固定残業代 ${yen(fot)}（${hrs}時間分）<br><b>月額合計 ${yen(base+fot)}</b>`
+   :st==="none"?`基本給 ${yen(base)}<br>固定残業代 なし<br><b>月額合計 ${yen(base)}</b>`
+   :`基本給 ${yen(base)}<br>固定残業代 <span class="muted">未設定（確認中）</span>`;
+  h+=`<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><span>${lines}</span><button class="btn sm sub" data-fotedit="${r.id}">${st==="unknown"?"固定残業代を設定":"固定残業代を変更"}</button></div>`;
+ }
+ return h+`</div>`;
+}
 function wageCardHtml(info,rows){
  if(!info||rows===null)return "";
  window.__wageRows=rows; // 修正ボタンが区分を調べるため
@@ -9144,6 +9168,7 @@ function wageCardHtml(info,rows){
     return;
    }
    h+=`<div class="row" style="cursor:default;align-items:flex-start"><span><b>${WAGE_DIV[r.division]} ${yen(r.wage)}</b>${r.holiday_wage!=null?`（休日 ${yen(r.holiday_wage)}）`:""} ／ ${target}<br><span class="muted" style="font-size:12px">${esc(r.effective_date)}から ${st}${r.sync_status==="error"&&r.sync_error?` <span style="color:#b3261e">${esc(r.sync_error)}</span>`:""}</span></span>${(monthlyWageHoldOn&&r.division===2)?`<span class="muted" style="font-size:11px;max-width:150px;text-align:right">🔒 月給は、スマレジとの確認が終わるまで修正・削除できません</span>`:`<span style="display:flex;gap:6px"><button class="btn sm sub" data-wageedit="${r.id}">修正</button><button class="btn sm sub" data-wagedel="${r.id}|${esc(c)}|${r.smaregi_wage_apply_id?"1":"0"}">削除</button></span>`}</div>`;
+   if(r.division===2)h+=fixedOtBlock(r); // 2026-11-16: 固定残業代の設定（管理システム内の記録だけ。スマレジへは送らない）
   });
   // 2026-11-16: 入社手続き中は、入社時の賃金の入力欄を契約ごとに並べず、最初の1組だけにする（入力欄が2組出て迷う件の直し。登録先の決定はこれまでどおり DB 側）
   if(obWageActive()&&li>0){h+=`<div class="muted" style="font-size:12px;margin-top:6px">入社時の賃金は、上の入力欄から登録します（この契約の入力欄は出しません）。</div></div>`;return}
@@ -9226,6 +9251,20 @@ function bindWageCard(uid){
  });
  document.querySelectorAll("[data-wageedit]").forEach(b=>b.onclick=()=>{if(obWageActive(uid)){toast(OBW_REENTER,true);return}wageEditId=b.dataset.wageedit;render()}); // 2026-11-18: 入社手続き中の人は修正を開かない
  document.querySelectorAll("[data-wageeditcancel]").forEach(b=>b.onclick=()=>{wageEditId=null;render()});
+ document.querySelectorAll("[data-fotedit]").forEach(b=>b.onclick=()=>{fixedOtEditId=b.dataset.fotedit;render()});
+ document.querySelectorAll("[data-fotcancel]").forEach(b=>b.onclick=()=>{fixedOtEditId=null;render()});
+ document.querySelectorAll("[data-fotsave]").forEach(b=>b.onclick=async()=>{ // 2026-11-16 固定残業代の保存（基本給・同期は変えない。スマレジへは送らない）
+  const id=b.dataset.fotsave,state=$("fot-state").value,amt=Math.round(Number($("fot-amt").value)),hours=Number($("fot-hours").value);
+  if(state==="applied"){
+   if(!(amt>=1)){toast("固定残業代の金額（円）を入れてください",true);return}
+   if(!(hours>=1&&hours<=200)){toast("時間数は 1〜200 時間で入れてください",true);return}
+  }
+  if(!confirm(state==="applied"?`固定残業代を ${yen(amt)}（${hours}時間分）として記録します。\n\n・管理システム内の記録だけです（スマレジへは送られません・基本給は変わりません）。\n・45時間分で法定の割増賃金が満たされるとは限りません。給与計算と差額の支払いは今までの処理のままです。\n\nよろしいですか？`:`固定残業代を「なし」として記録します（管理システム内の記録だけ）。よろしいですか？`))return;
+  b.disabled=true;
+  const {error}=await sb.rpc("hr_set_fixed_ot",{p_id:id,p_state:state,p_amount:state==="applied"?amt:null,p_minutes:state==="applied"?Math.round(hours*60):2700});
+  if(error){toast("保存できませんでした: "+error.message,true);b.disabled=false;return}
+  fixedOtEditId=null;toast("固定残業代を記録しました（管理システム内のみ・スマレジへは送っていません）");render();
+ });
  document.querySelectorAll("[data-wageeditsave]").forEach(b=>b.onclick=async()=>{
   const [id,c]=b.dataset.wageeditsave.split("|"),amt=Number($("wedit-amt").value),holEl=$("wedit-hol"),hol=holEl&&holEl.value!==""?Number(holEl.value):null;
   let date=$("wedit-date").value;

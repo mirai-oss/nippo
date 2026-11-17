@@ -39,6 +39,10 @@
   header{position:sticky;top:0;background:var(--blue);color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;z-index:10}
   header b{font-size:15px}
   main{padding:16px}
+  .eugrp{margin:0 0 14px}
+  .eugrp>summary{cursor:pointer;font-weight:700;font-size:15px;padding:10px 12px;background:#eef3f8;border:1px solid var(--line);border-radius:10px;margin-bottom:10px;list-style:none}
+  .eugrp>summary::before{content:"▸ ";color:#456}
+  .eugrp[open]>summary::before{content:"▾ "}
   .card{border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px;background:#fff}
   .card h3{margin:0 0 8px;font-size:14px}
   .btn{display:block;width:100%;background:var(--blue);color:#fff;border:none;border-radius:10px;padding:13px;font-size:15px;text-align:center;cursor:pointer;margin-top:8px}
@@ -7200,6 +7204,9 @@ const CHG_TARGET={smaregi_api:"スマレジ（API）",smaregi_ui:"スマレジ�
 async function loadChangeInfo(uid){
  try{const {data,error}=await sb.rpc("employee_change_list",{p_user:uid,p_limit:30});if(error)return null;return data||null}catch(e){return null}
 }
+const CHG_KEY={bank_code:"金融機関コード",bank_name:"金融機関名",branch_code:"支店コード",branch_name:"支店名",account_type:"預金種別",account_number:"口座番号",payment_method:"支払方法",account_holder_kana:"口座名義",postal_code:"郵便番号",address:"住所",phone:"電話",name_kana:"フリガナ",nearest_station:"最寄り駅",employment_class:"雇用区分",role:"役職",email:"メール"};
+const CHG_VAL={cash:"現金手渡し",bank_transfer:"銀行振込"};
+function chgValJa(k,v){const t=chgVal(v);if(k==="account_type")return {"1":"普通","2":"当座","4":"貯蓄"}[String(v)]||t;return CHG_VAL[t]||t}
 function chgVal(v){
  if(v===null||v===undefined)return "—";
  if(Array.isArray(v))return v.map(x=>{const s=(stores||[]).concat(storesHidden||[]).find(t=>t.id===x);return s?s.name:String(x).slice(0,8)}).join("・")||"（なし）";
@@ -7230,7 +7237,7 @@ function changeCardHtml(info){
    const who=e.source==="request"?`申請 ${esc(e.requested_by_name||"—")} → 承認 ${esc(e.approved_by_name||"—")}`:`${esc(CHG_SRC[e.source]||e.source)}${e.changed_by_name?`（${esc(e.changed_by_name)}）`:""}`;
    const hidden=e.sensitive&&!info.can_see_values;
    const keys=Array.from(new Set([...Object.keys(e.before||{}),...Object.keys(e.after||{})]));
-   const diff=hidden?`<span class="muted">（値はマスター・本部だけが見られます）</span>`:e.field_group==="stores"?`${esc(chgVal((e.before||{}).stores))} → ${esc(chgVal((e.after||{}).stores))}`:keys.map(k=>`${e.field_group==="wage"?"":esc(k)+": "}${esc(chgVal((e.before||{})[k]))} → ${esc(chgVal((e.after||{})[k]))}`).join("<br>");
+   const diff=hidden?`<span class="muted">（値はマスター・本部だけが見られます）</span>`:e.field_group==="stores"?`${esc(chgVal((e.before||{}).stores))} → ${esc(chgVal((e.after||{}).stores))}`:keys.filter(k=>chgVal((e.before||{})[k])!==chgVal((e.after||{})[k])).map(k=>`${e.field_group==="wage"?"":esc(CHG_KEY[k]||k)+": "}${esc(chgValJa(k,(e.before||{})[k]))} → ${esc(chgValJa(k,(e.after||{})[k]))}`).join("<br>")||"（変更なし）";
    h+=`<div style="padding:6px 0;border-top:1px solid var(--line)"><b>${esc(e.label)}</b>${e.status==="no_change"?` <span class="muted">（結果として変更なし）</span>`:""} <span class="muted">${fd(e.created_at)}・${who}</span>
     <div style="margin:2px 0">${diff}</div>
     <span class="muted" style="font-size:11.5px">正本: ${e.source_of_truth==="hub"?"管理システム":e.source_of_truth==="smaregi"?"スマレジ":"書面"}${(e.external_targets||[]).length?`／写し: ${(e.external_targets||[]).map(t=>esc(CHG_TARGET[t]||t)).join("・")}`:""}${e.effective_date?`／適用開始日: ${esc(e.effective_date)}`:""}／変更日: ${e.change_date?esc(e.change_date):"未入力"}</span>
@@ -8148,8 +8155,7 @@ function payMethodBoxHtml(st){
  const months=(Array.isArray(st.months)?st.months:[]).filter(m=>m&&m.year_month).slice(0,6);
  const hist=(Array.isArray(st.history)?st.history.filter(Boolean):[]).sort((a,b)=>String(b.at||"").localeCompare(String(a.at||""))).slice(0,5);
  const td='style="padding:5px 6px;border-bottom:1px solid var(--line)"';
- let h=`<div id="eu-pmbox" style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)">
-  <p style="font-size:12.5px;font-weight:700;margin:0 0 2px">月ごとの支払方法</p>
+ let h=`<details id="eu-pmbox" style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)"><summary style="cursor:pointer;font-size:12.5px;font-weight:700">月ごとの支払方法・変更の履歴（直近6か月）</summary>
   <p class="muted" style="font-size:11px;margin:0 0 4px">給与の「何月分」を、どちらで支払うかの一覧です。「確定」の月は、上で支払方法を変えても変わりません。</p>`;
  if(months.length){
   h+=`<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:12.5px">`+months.map(m=>{
@@ -8166,7 +8172,7 @@ function payMethodBoxHtml(st){
    `<div ${td}>${esc(apvFd(x.at))}／${esc(x.by_name||"（不明）")}／${x.year_month?esc(pmYm(x.year_month)):"（月の指定なし）"}／${x.before==null?"":esc(pmName(x.before))+" → "}${esc(pmName(x.after))}${x.kind?"（"+esc(PM_KIND[x.kind]||x.kind)+"）":""}／理由: ${esc(x.reason||"なし")}</div>`).join("")+`</div>`;
  }
  if(st.has_account&&st.can_correct)h+=`<div style="margin-top:10px"><button class="btn sm ghost" id="eu-bankdel" style="font-size:11.5px">口座の情報を削除する</button></div>`;
- return h+`</div>`;
+ return h+`</details>`;
 }
 // 表のボタン（この月だけ変える・訂正）と、口座の削除
 function bindPayMethodBox(uid){
@@ -8231,6 +8237,7 @@ async function adminEditView(){
  <p class="muted" style="margin-top:-8px">${esc(u.email)}</p>`;
  // 2026-09-05追加: 「LINE連携はどこでやるの？身分証明書の追加は？口座情報は？」というユーザー要望に
  // 対応し、見るだけでなくこの画面から本人に代わって操作できるようにした
+ h+="<!--S:link-->";
  if(!adminSlackMap[u.id])h+=`<div class="card"><h3>💚 LINE連携</h3>
   ${u.line_user_id?`<p style="margin:0">✅ 連携済み${u.line_linked_at?`（${new Date(u.line_linked_at).toLocaleDateString("ja-JP")}）`:""}</p>
    <button class="btn sm sub" id="eu-line-unlink" style="margin-top:8px">連携を解除する（機種変更時など）</button>`
@@ -8245,7 +8252,7 @@ async function adminEditView(){
  </div>`;
  // 2026-11-08追加: Slack 連携（入社後の連絡は Slack へ。メール一致で自動紐づけ／LINE で招待を送る／手で紐づける）
  {const sl=adminSlackMap[u.id];
- h+=`<div class="card"><h3>💬 Slack連携</h3>
+ h+=`<!--S:link--><div class="card"><h3>💬 Slack連携</h3>
   ${sl?`<p style="margin:0">✅ 連携済み：<b>${esc(sl.slack_name||sl.slack_display_name||sl.slack_user_id)}</b>${sl.matched_at?`（${new Date(sl.matched_at).toLocaleDateString("ja-JP")}・${SLACK_MATCH_LABEL[sl.matched_by]||sl.matched_by||""}）`:""}</p>
    <p class="muted" style="font-size:12px;margin:4px 0 0">Slack ID: ${esc(sl.slack_user_id)}。勤怠確認のボタンや承認依頼がこの人の Slack に届きます。</p>
    <button class="btn sm sub" id="eu-slack-unlink" style="margin-top:8px">紐づけを外す（別の人に紐づいていた時など）</button>`
@@ -8261,7 +8268,7 @@ async function adminEditView(){
    ${slackMembers?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><select id="eu-slack-sel" style="flex:1;min-width:220px;margin:0"><option value="">（メールが違う人を手で紐づける）</option>${slackMembers.filter(m=>!m.linked_user_id).map(m=>`<option value="${esc(m.id)}">${esc(m.name)}${m.display_name?"（"+esc(m.display_name)+"）":""} ${esc(m.email_masked)}</option>`).join("")}</select><button class="btn sm" id="eu-slack-link">この人に紐づける</button></div>
    <p class="muted" style="font-size:11px;margin:4px 0 0">まだ誰にも紐づいていない Slack メンバーだけ出しています。</p>`:""}`}
  </div>`;}
- h+=`<div class="card"><h3>📎 提出物</h3>
+ h+=`<!--S:personal--><div class="card"><h3>📎 提出物</h3>
   <p style="font-size:13px;line-height:1.9;margin:0">${(()=>{const items=Object.entries((prof&&prof.extra)||{}).filter(([,v])=>Array.isArray(v)&&v.length);return items.length?items.map(([k,v])=>`${esc(k)}: `+v.map((ph,x)=>`<a data-photo-src="${esc(ph)}" href="#" target="_blank">写真${x+1}</a>`).join(" ")).join("<br>"):'<span class="muted">提出物なし</span>'})()}</p>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
    <input type="text" id="eu-doclabel" placeholder="項目名（例: 身分証明書）" style="flex:1;min-width:140px;margin:0">
@@ -8269,7 +8276,7 @@ async function adminEditView(){
   </div>
   <button class="btn sm sub" id="eu-docupload" style="margin-top:8px">📎 追加でアップロードする</button>
  </div>
- ${bankAllowed?`<div class="card"><h3>🏦 振込口座</h3>${(payChgRowsCache||[]).some(q=>q.field==="bank_account"&&q.status==="pending"&&q.user_id===adminDetail)?`<div class="alert" style="font-size:12.5px">口座変更の申請が<b>承認待ち</b>です。申請が承認・却下されるまで、登録口座はここには表示されず、直接の変更もできません（登録が消えたわけではありません）。下の「💴 賃金・口座の変更申請（承認）」で、いまの口座と申請内容を確認して、承認（支給回を選ぶ）または却下してください。</div>`:""}
+ ${bankAllowed?`<!--S:pay--><div class="card"><h3>🏦 振込口座</h3>${(payChgRowsCache||[]).some(q=>q.field==="bank_account"&&q.status==="pending"&&q.user_id===adminDetail)?`<div class="alert" style="font-size:12.5px">口座変更の申請が<b>承認待ち</b>です。申請が承認・却下されるまで、登録口座はここには表示されず、直接の変更もできません（登録が消えたわけではありません）。下の「💴 賃金・口座の変更申請（承認）」で、いまの口座と申請内容を確認して、承認（支給回を選ぶ）または却下してください。</div>`:""}
   <label class="radio-row"><input type="radio" name="eu-pm" value="bank_transfer" ${(!bank||bank.payment_method!=="cash")?"checked":""}>銀行振込</label>
   <label class="radio-row"><input type="radio" name="eu-pm" value="cash" ${(bank&&bank.payment_method==="cash")?"checked":""}>現金手渡し</label>
   <div id="eu-bankfields" style="${(bank&&bank.payment_method==="cash"&&!(bank.account_number||bank.bank_code))?"display:none":""}">${(bank&&bank.payment_method==="cash"&&(bank.account_number||bank.bank_code))?`<p class="muted" id="eu-bankidle" style="font-size:12px;margin:8px 0 0">${PM_IDLE_NOTE}</p>`:""}
@@ -8291,7 +8298,7 @@ async function adminEditView(){
  </div>`:""}`;
  if(prof){
   const smaregi=prof.smaregi_sync_status==="synced"?"✅ 登録済み":prof.smaregi_sync_status==="error"?"⚠️ エラー（"+esc(prof.smaregi_error||"")+"）":"未連携";
-  h+=`<div class="card"><h3>入社情報（本人入力）</h3><p style="font-size:13px;line-height:1.9;margin:0">
+  h+=`<!--S:personal--><div class="card"><h3>入社情報（本人入力）</h3><p style="font-size:13px;line-height:1.9;margin:0">
    フリガナ: ${esc(prof.name_kana||"—")}<br>性別: ${{male:"男性",female:"女性",none:"回答しない"}[prof.gender]||"—"}<br>社員番号: ${esc(prof.staff_code||"—")}<br>生年月日: ${prof.birth_date||"—"}<br>電話: ${esc(prof.phone||"—")}<br>
    住所: ${esc([prof.postal_code,prof.address].filter(Boolean).join(" ")||"—")}<br>
    緊急連絡先: ${esc(prof.emergency_name||"—")}${prof.emergency_relation?`（${esc(prof.emergency_relation)}）`:""} ${esc(prof.emergency_phone||"")}<br>
@@ -8302,11 +8309,15 @@ async function adminEditView(){
   h+=fareCardHtml(u,prof); // v2.6.66 交通費の自動計算（表示専用）
   h+=profileEditCard(prof,"ep"); // v2.6.45 入社情報を直せるようにする
  }
+ h+="<!--S:personal-->";
  if(cmInfo)h+=commuteCardHtml(cmInfo,{uid:u.id,self:false}); // 2026-11-10 Phase 2
+ h+="<!--S:pay-->";
  if(payChgInfo)h+=payChangeCardHtml(payChgInfo,smInfo); // 2026-11-10 ステップ 3
+ h+="<!--S:hist-->";
  if(chgInfo)h+=changeCardHtml(chgInfo); // 2026-11-10 情報変更の履歴と連動
+ h+="<!--S:personal-->";
  if(pjInfo)h+=postJoinHqCardHtml(pjInfo,u,pjHist); // 2026-11-09 Phase 6（v2: 方針・個別設定・履歴つき）
- h+=`<div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
+ h+=`<!--S:base--><div class="card"><h3>役職</h3>${Object.keys(ROLE_NAME).map(r=>`<span class="chip eurole ${euRole===r?"on":""}" data-r="${r}">${ROLE_NAME[r]}</span>`).join("")}</div>
  <div class="card"><h3>所属チーム</h3><span class="chip euteam ${!euTeam?"on":""}" data-t="">なし</span>${teams.map(t=>`<span class="chip euteam ${euTeam===t.id?"on":""}" data-t="${t.id}">${esc(t.name)}</span>`).join("")}
   <p class="muted" style="margin:6px 0 0">チームを設定すると、日報のLark通知をチーム単位で振り分けられます</p></div>
  <div class="card"><h3>所属店舗（複数可）</h3>${[...stores,...storesHidden].map(s=>`<span class="chip eustore ${euStores.includes(s.id)?"on":""}" data-s="${s.id}">${esc(s.name)}</span>`).join("")}${euRole==="TEAM"?`<p class="muted" style="margin:6px 0 0">チーム長はここで選んだ店舗が「担当店舗」になります（現金手渡し・売上等、チーム単位の画面すべてに反映されます）。${euTeam?"":"※先に上の「所属チーム」でチームを選んでください"}</p>`:""}</div>
@@ -8314,10 +8325,11 @@ async function adminEditView(){
  <div class="card" style="margin-top:16px"><h3>パスワード再設定</h3>
   <input type="text" id="eu-pw" placeholder="新しいパスワード（8文字以上）">
   <button class="btn sm" id="eu-setpw">再設定する</button></div>`;
+ h+="<!--S:pay-->";
  if(smInfo!==undefined)h+=smCardHtml(smInfo);
  if(smInfo!==undefined&&wageRows!==undefined)h+=wageCardHtml(smInfo,wageRows);
  if(me.is_master||["HQ","CEO"].includes(me.role)){
-  h+=`<div class="card"><h3>📄 配布した書類（源泉徴収票など）</h3>`;
+  h+=`<!--S:personal--><div class="card"><h3>📄 配布した書類（源泉徴収票など）</h3>`;
   if(!hrDocs.length)h+=`<p class="muted" style="margin:0">まだ配布した書類はありません。退職手続きの本部タスクで源泉徴収票をアップロードすると、ここに保管されます（本人のマイページ「📄 書類」にも表示されます）。</p>`;
   hrDocs.forEach(d=>{h+=`<div class="row" data-mydoc="${esc(d.path)}"><span><b>${esc(HR_DOC_KIND_LABEL[d.kind]||d.kind)}${d.year?`（${d.year}年分）`:""}</b><br><span class="muted">登録 ${new Date(d.uploaded_at).toLocaleDateString("ja-JP")}${d.line_notified_at?" ／ 本人へLINE案内済み":" ／ LINE案内なし"}</span></span><span class="muted">開く ›</span></div>`});
   const yNow=new Date().getFullYear();
@@ -8332,7 +8344,7 @@ async function adminEditView(){
   h+=`</div>`;
  }
  if(u.id!==me.id){
-  h+=`<div class="card"><h3>🗓 退職日</h3>
+  h+=`<!--S:end--><div class="card"><h3>🗓 退職日</h3>
    <p class="muted" style="margin:0">退職日を入れると、<b>退職日の翌日の朝以降</b>に、アカウントが使えなくなり打刻もできなくなります（スマレジ・タイムカードへの退職日の反映もそのとき）。ただし、退職手続きの本部タスクの<b>源泉徴収票の工程が終わる（または下の「配布した書類」から源泉徴収票を登録する）まで</b>は止まりません。応募者管理に記録がある方は、状況が自動で「退職」になります。</p>
    <input type="date" id="eu-term" value="${(prof&&prof.termination_date)||""}">
    <button class="btn sm" id="eu-termsave">退職日を保存する</button>
@@ -8343,7 +8355,20 @@ async function adminEditView(){
    退職した方は「無効化」で十分です（記録が残り、離職率の集計にも使えます）。<b>誤って登録した方だけ</b>この操作をお使いください。</p>
    <button class="btn sm sub" id="eu-del" style="color:var(--red);border-color:var(--red);margin-top:8px">完全に削除する</button></div>`;
  }
- return h;
+ return euGroupHtml(h);
+}
+// 2026-11-18 従業員編集の画面の整理: 目印（<!--S:グループ-->）ごとに集めて、折りたたみのグループにまとめる（中身の部品・ボタン・保存の動きは変えない）
+const EU_GROUPS=[["base","👤 役職・所属（変更を保存）",true],["personal","📋 本人情報・提出物・書類",false],["pay","💴 給与・口座・賃金",false],["hist","🔁 情報変更の履歴",false],["link","🔗 LINE・Slack 連携",false],["end","🗓 退職・アカウント",false]];
+function euGroupHtml(h){
+ const parts=String(h).split(/<!--S:(\w+)-->/);
+ let out=parts[0];const m={};
+ for(let i=1;i<parts.length;i+=2)m[parts[i]]=(m[parts[i]]||"")+parts[i+1];
+ EU_GROUPS.forEach(([k,t,op])=>{
+  const body=m[k];if(!body||!body.trim())return;
+  const open=op||/承認待ち|再確認|class="alert"/.test(body);
+  out+=`<details class="eugrp" ${open?"open":""}><summary>${t}</summary>${body}</details>`;
+ });
+ return out;
 }
 async function adminSave(){
  const u=adminUsers.find(x=>x.id===adminDetail);

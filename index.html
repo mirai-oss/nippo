@@ -1060,6 +1060,17 @@ async function renderApply(){
  document.querySelectorAll("input[data-apr]").forEach(el=>el.onchange=()=>toggleOther("apother",el.dataset.apr,el.value));
  bindPhone("ap-phone"); // v2.6.45 打ちながらハイフンが入る
  $("ap-submit").onclick=doApply;
+ // 2026-11-20 その人専用のリンク（?p=印）で開いたとき、氏名を入れて固定する（Indeed の応募に確実にまとまる）。印が合わない・関数が未適用なら、何もしない（ふつうのフォームのまま）
+ const pTok=new URLSearchParams(location.search).get("p");
+ if(pTok&&/^[0-9a-f]{64}$/.test(pTok)){
+  try{
+   const {data:pf}=await sb.rpc("apply_prefill",{p_token:pTok});
+   if(pf&&pf.ok&&pf.name){
+    const nm=$("ap-name");nm.value=pf.name;nm.readOnly=true;nm.style.background="#f2f4f7";
+    nm.insertAdjacentHTML("afterend",'<p class="muted" style="margin:4px 0 0;font-size:12px">お名前は入力済みです。違う場合は、お手数ですが担当者へご連絡ください。</p>');
+   }
+  }catch(e){}
+ }
 }
 async function doApply(){
  const name=$("ap-name").value.trim(),phone=$("ap-phone").value.trim(),email=$("ap-email").value.trim();
@@ -6187,7 +6198,9 @@ function recruitDetailView(){
    <p style="font-size:22px;font-weight:700;letter-spacing:4px;margin:6px 0 0">${esc(a.line_code)}</p>
    ${lurl?`<p class="muted" style="margin:4px 0 0;font-size:11px">下のボタンで送ると、本人はリンクを開いて送信するだけで済みます</p>
    <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" id="rc-lineshare" style="background:#06c755">📤 連携リンクを送る</button>
-   <button class="btn sm sub" data-rccopy="${esc(lurl)}">📋 リンクをコピー</button></div>`
+   <button class="btn sm sub" data-rccopy="${esc(lurl)}">📋 リンクをコピー</button>
+   <button class="btn sm" id="rc-invitecopy" style="background:#1f5fbf">📋 LINE案内文をコピー（専用フォーム付き）</button></div>
+   <textarea id="rc-invitetext" readonly rows="10" style="display:none;margin-top:8px;font-size:12px" onclick="this.select()"></textarea>`
    :`<p class="muted" style="margin:6px 0 0">設定 → 求人用LINEの連携 で「つながるか確認する」を押すと、この合言葉を1タップで送れるリンクが作れます</p>`}`;
  }
  h+=`</div>`;
@@ -13368,6 +13381,24 @@ function bindPage(){
   const text=a.name+"さん\n\nLINEでのご連絡をさせていただきたく、下のリンクを開いて、そのまま送信ボタンを押してください。\n（合言葉「"+a.line_code+"」が入力された状態で開きます）\n\n"+url;
   if(navigator.share){try{await navigator.share({title:"LINE連携のお願い",text})}catch(e){}return}
   copyText(text);toast("この端末では共有メニューが使えないため、文面をコピーしました");
+ };
+ // 2026-11-20 LINE案内文（その人専用の応募フォームのリンク＋LINEの登録リンク）。Indeed のメッセージに貼り付けて送る（ここからは送らない）。Slack の［LINE 案内文］と同じ文面
+ if($("rc-invitecopy"))$("rc-invitecopy").onclick=async()=>{
+  const a=rcList.find(x=>x.id===rcDetail);
+  if(!a||!a.line_code||!lineOa)return;
+  let formUrl="";
+  try{
+   const {data:tk,error:te}=await sb.rpc("applicant_form_token",{p_applicant:rcDetail});
+   if(!te&&typeof tk==="string"&&tk.length===64)formUrl=location.origin+location.pathname+"?apply="+encodeURIComponent(a.form_key||"al")+"&p="+tk;
+  }catch(e){}
+  const lurl="https://line.me/R/oaMessage/"+encodeURIComponent(lineOa)+"/?"+encodeURIComponent(a.line_code);
+  const head=(a.name?a.name+" 様\n\n":"")+"ご応募ありがとうございます。\n";
+  const text=formUrl
+   ?head+"面接のご連絡は LINE で行っております。お手数ですが、次の 2 つをお願いします。\n\n① LINE の登録（1 分ほどです）\n下のリンクを押すと LINE が開き、文字が入った状態になります。そのまま送信してください。\n"+lurl+"\n（開けない場合は、公式 LINE（"+lineOa+"）に、次の合言葉を送ってください。合言葉："+a.line_code+"）\n\n② 応募フォームのご入力（面接のご希望日時など）\n"+formUrl+"\n※ お名前は入力済みです。電話番号・メールアドレスなどをご入力ください。\n\nご不明な点があれば、このメッセージにご返信ください。"
+   :head+"面接のご連絡は LINE で行っております。\nお手数ですが、下のリンクを押すと LINE が開きます。文字が入った状態になりますので、そのまま送信してください。\n\n"+lurl+"\n\nリンクが開けない場合は、公式 LINE（"+lineOa+"）に、次の合言葉を送ってください。\n合言葉："+a.line_code+"\n\nご不明な点があれば、このメッセージにご返信ください。";
+  const ta=$("rc-invitetext");ta.value=text;ta.style.display="";ta.select();
+  if(!formUrl)toast("専用フォームのリンクは作れませんでした（LINEの案内だけの文面です）",true);
+  copyText(text);
  };
  if($("rc-linesend"))$("rc-linesend").onclick=async()=>{
   const t=$("rc-linetext").value.trim();

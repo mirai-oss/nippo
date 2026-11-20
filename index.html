@@ -7075,7 +7075,7 @@ function commuteEditFormHtml(c,prefix,{saveBtn=true}={}){
   <div id="${prefix}-transit" style="${noFare?"display:none":""}">
    <p class="muted" style="margin:8px 0 2px">経路（駅名や路線。例: 田町→新橋 JR山手線）</p>
    <input type="text" id="${prefix}-route" value="${esc((c&&c.route_text)||"")}" placeholder="例: 田町→新橋 JR山手線">
-   <p class="muted" style="margin:8px 0 2px">（参考）ご自身が把握している片道の運賃（円・数字だけ。例: 160。分からなければ空欄で OK）</p>
+   <p class="muted" style="margin:8px 0 2px">（参考）<b>片道</b>の運賃（円・数字だけ。<b style="color:#c0392b">往復の金額ではありません</b>。例: 160。分からなければ空欄で OK）</p>
    <input type="number" inputmode="numeric" min="0" step="1" id="${prefix}-fare" value="${c&&c.claimed_oneway_fare!=null?c.claimed_oneway_fare:""}" placeholder="例: 160" style="width:100%;border:1px solid #bbb;border-radius:8px;padding:10px;font-size:16px;box-sizing:border-box">
    <label style="display:flex;gap:6px;align-items:center;margin-top:6px;font-size:14px"><input type="checkbox" id="${prefix}-bus" style="width:auto;margin:0"${c&&c.uses_bus?" checked":""}>バスを使う（バスは原則対象外です。必要な事情があるときだけチェック）</label>
    <div id="${prefix}-busreason-wrap" style="${c&&c.uses_bus?"":"display:none"}"><p class="muted" style="margin:6px 0 2px">バスが必要な理由（必須。本部が確認して認めるか決めます）</p>
